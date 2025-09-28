@@ -1,134 +1,166 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
-import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, List, Optional
+
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, text
+from sqlalchemy.orm import Mapped, Session, declarative_base, mapped_column, relationship, sessionmaker
+
+from server.config import get_settings
+
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "runs" / "history.db"
+Base = declarative_base()
 
 
-def get_connection() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+class RunRecord(Base):
+    __tablename__ = "runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    timestamp_utc: Mapped[dt.datetime] = mapped_column(DateTime(timezone=False), nullable=False)
+    model_id: Mapped[str] = mapped_column(String, nullable=False)
+    tasks: Mapped[str] = mapped_column(Text, nullable=False)
+    samples: Mapped[int] = mapped_column(Integer, nullable=False)
+    accuracy: Mapped[Optional[float]] = mapped_column(Float)
+    total_cost: Mapped[Optional[float]] = mapped_column(Float)
+    total_duration: Mapped[Optional[float]] = mapped_column(Float)
+    summary_path: Mapped[str] = mapped_column(Text, nullable=False)
+    summary_json: Mapped[str] = mapped_column(Text, nullable=False)
+
+    attempts: Mapped[List["AttemptRecord"]] = relationship(
+        "AttemptRecord",
+        back_populates="run",
+        cascade="all, delete-orphan",
+    )
+
+
+class AttemptRecord(Base):
+    __tablename__ = "attempts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
+    task_id: Mapped[str] = mapped_column(String, nullable=False)
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    duration: Mapped[Optional[float]] = mapped_column(Float)
+    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer)
+    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer)
+    cost: Mapped[Optional[float]] = mapped_column(Float)
+    error: Mapped[Optional[str]] = mapped_column(Text)
+
+    run: Mapped[RunRecord] = relationship("RunRecord", back_populates="attempts")
+
+
+settings = get_settings()
+
+engine = create_engine(
+    settings.database.url,
+    pool_size=settings.database.pool_size,
+    max_overflow=settings.database.max_overflow,
+    echo=settings.database.echo,
+)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)
 
 
 def init_db() -> None:
-    conn = get_connection()
-    with conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS runs (
-                id TEXT PRIMARY KEY,
-                timestamp_utc TEXT NOT NULL,
-                model_id TEXT NOT NULL,
-                tasks TEXT NOT NULL,
-                samples INTEGER NOT NULL,
-                accuracy REAL,
-                total_cost REAL,
-                total_duration REAL,
-                summary_path TEXT NOT NULL,
-                summary_json TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS attempts (
-                run_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                duration REAL,
-                prompt_tokens INTEGER,
-                completion_tokens INTEGER,
-                cost REAL,
-                error TEXT,
-                FOREIGN KEY(run_id) REFERENCES runs(id) ON DELETE CASCADE
-            )
-            """
-        )
-    conn.close()
+    ROOT.joinpath("runs").mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(bind=engine)
+
+
+@contextmanager
+def get_session() -> Session:
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 
 def save_run(summary: Dict) -> str:
     run_dir = Path(summary["run_dir"]).resolve()
     run_id = run_dir.name
-    conn = get_connection()
     attempts = summary.get("attempts", [])
     accuracy = summary.get("metrics", {}).get("overall", {}).get("macro_model_accuracy")
     total_cost = summary.get("token_usage", {}).get("total_cost_usd")
     total_duration = summary.get("timing", {}).get("total_duration_seconds")
-    with conn:
-        conn.execute("DELETE FROM attempts WHERE run_id = ?", (run_id,))
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO runs (
-                id, timestamp_utc, model_id, tasks, samples, accuracy,
-                total_cost, total_duration, summary_path, summary_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                run_id,
-                summary.get("timestamp_utc"),
-                ",".join(summary.get("models", [])),
-                json.dumps(summary.get("tasks", [])),
-                summary.get("samples", 1),
-                accuracy,
-                total_cost,
-                total_duration,
-                str(run_dir / "summary.json"),
-                json.dumps(summary),
-            ),
-        )
+    timestamp_raw = summary.get("timestamp_utc")
+    timestamp = dt.datetime.fromisoformat(timestamp_raw) if timestamp_raw else dt.datetime.utcnow()
+
+    with get_session() as session:
+        record = session.get(RunRecord, run_id)
+        if record is None:
+            record = RunRecord(id=run_id)
+        record.timestamp_utc = timestamp
+        record.model_id = ",".join(summary.get("models", []))
+        record.tasks = json.dumps(summary.get("tasks", []))
+        record.samples = summary.get("samples", 1)
+        record.accuracy = accuracy
+        record.total_cost = total_cost
+        record.total_duration = total_duration
+        record.summary_path = str(run_dir / "summary.json")
+        record.summary_json = json.dumps(summary)
+        record.attempts.clear()
         for attempt in attempts:
             usage = attempt.get("usage") or {}
-            conn.execute(
-                """
-                INSERT INTO attempts (
-                    run_id, task_id, status, duration, prompt_tokens,
-                    completion_tokens, cost, error
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    run_id,
-                    attempt.get("task_id"),
-                    attempt.get("status"),
-                    attempt.get("duration_seconds"),
-                    usage.get("prompt_tokens") or usage.get("input_tokens"),
-                    usage.get("completion_tokens") or usage.get("output_tokens"),
-                    attempt.get("cost_usd"),
-                    attempt.get("error"),
-                ),
+            record.attempts.append(
+                AttemptRecord(
+                    task_id=attempt.get("task_id"),
+                    status=attempt.get("status"),
+                    duration=attempt.get("duration_seconds"),
+                    prompt_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
+                    completion_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                    cost=attempt.get("cost_usd"),
+                    error=attempt.get("error"),
+                )
             )
-    conn.close()
+        session.add(record)
     return run_id
 
 
-def list_runs(limit: int = 50) -> Iterable[sqlite3.Row]:
-    conn = get_connection()
-    rows = conn.execute(
-        "SELECT id, timestamp_utc, model_id, accuracy, total_cost, total_duration FROM runs ORDER BY timestamp_utc DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    conn.close()
-    return rows
+def list_runs(limit: int = 50) -> List[Dict[str, Optional[float]]]:
+    stmt = (
+        select(
+            RunRecord.id,
+            RunRecord.timestamp_utc,
+            RunRecord.model_id,
+            RunRecord.accuracy,
+            RunRecord.total_cost,
+            RunRecord.total_duration,
+        )
+        .order_by(RunRecord.timestamp_utc.desc())
+        .limit(limit)
+    )
+    with get_session() as session:
+        rows = session.execute(stmt).all()
+    return [
+        {
+            "id": row.id,
+            "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
+            "model_id": row.model_id,
+            "accuracy": row.accuracy,
+            "total_cost": row.total_cost,
+            "total_duration": row.total_duration,
+        }
+        for row in rows
+    ]
 
 
 def get_run(run_id: str) -> Dict | None:
-    conn = get_connection()
-    row = conn.execute("SELECT summary_json FROM runs WHERE id = ?", (run_id,)).fetchone()
-    conn.close()
-    if not row:
-        return None
-    return json.loads(row[0])
+    with get_session() as session:
+        record = session.get(RunRecord, run_id)
+        if record is None:
+            return None
+        return json.loads(record.summary_json)
 
 
-def leaderboard() -> Iterable[sqlite3.Row]:
-    conn = get_connection()
-    rows = conn.execute(
+def leaderboard() -> List[Dict[str, Optional[float]]]:
+    leaderboard_query = text(
         """
         WITH ranked AS (
             SELECT
@@ -170,6 +202,16 @@ def leaderboard() -> Iterable[sqlite3.Row]:
             CASE WHEN ranked.total_cost IS NULL THEN 1 ELSE 0 END,
             ranked.total_cost ASC
         """
-    ).fetchall()
-    conn.close()
-    return rows
+    )
+    with get_session() as session:
+        rows = session.execute(leaderboard_query).all()
+    return [
+        {
+            "model_id": row.model_id,
+            "best_accuracy": row.best_accuracy,
+            "cost_at_best": row.cost_at_best,
+            "duration_at_best": row.duration_at_best,
+            "runs": row.runs,
+        }
+        for row in rows
+    ]

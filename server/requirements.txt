@@ -1,2 +1,6 @@
 fastapi==0.112.0
 uvicorn[standard]==0.30.5
+sqlalchemy==2.0.32
+alembic==1.13.2
+pydantic-settings==2.4.0
+structlog==24.4.0

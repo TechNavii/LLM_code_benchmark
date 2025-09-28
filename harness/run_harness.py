@@ -7,16 +7,16 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
-import uuid
-import re
 import time
+import uuid
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Callable
+from typing import Callable, Dict, Iterable, List, Optional
 
 try:
     import requests
@@ -26,28 +26,16 @@ except ImportError:  # pragma: no cover - optional for offline dry runs
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
-def load_env(path: Path) -> None:
-    """Populate os.environ with keys from a dotenv file if missing."""
-    if not path.exists():
-        return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith('#'):
-            continue
-        if '=' not in line:
-            continue
-        key, value = line.split('=', 1)
-        key = key.strip()
-        if key and key not in os.environ:
-            os.environ[key] = value.strip()
+from harness.config import get_settings
+from harness.exceptions import HarnessError
+from harness.secure_execution import secure_run
 
 
-load_env(ROOT / ".env")
+SETTINGS = get_settings()
 
-TASKS_ROOT = ROOT / "tasks"
-RUN_ARTIFACTS = ROOT / "runs"
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "openrouter/google/gemini-pro")
+TASKS_ROOT = SETTINGS.tasks_root
+RUN_ARTIFACTS = SETTINGS.runs_root
+DEFAULT_MODEL = SETTINGS.default_model
 SUPPORTED_EXTENSIONS = {
     ".py",
     ".js",
@@ -61,11 +49,7 @@ SUPPORTED_EXTENSIONS = {
     ".yaml",
     ".yml",
 }
-MAX_LOG_CHARS = 20000
-
-
-class HarnessError(RuntimeError):
-    """Custom harness error for clearer exception handling."""
+MAX_LOG_CHARS = SETTINGS.max_log_chars
 
 
 def fetch_model_pricing(models: List[str]) -> Dict[str, Dict[str, float]]:
@@ -73,10 +57,14 @@ def fetch_model_pricing(models: List[str]) -> Dict[str, Dict[str, float]]:
         return {}
 
     try:
-        response = requests.get("https://openrouter.ai/api/v1/models", headers={
-            "Authorization": f"Bearer {os.getenv('OPENROUTER_API_KEY', '')}",
-            "HTTP-Referer": "benchmark-harness",
-        }, timeout=60)
+        response = requests.get(
+            "https://openrouter.ai/api/v1/models",
+            headers={
+                "Authorization": f"Bearer {SETTINGS.openrouter_api_key}",
+                "HTTP-Referer": "benchmark-harness",
+            },
+            timeout=60,
+        )
         response.raise_for_status()
     except Exception:
         return {}
@@ -179,14 +167,16 @@ def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> s
 
     return prompt
 
-
-def call_openrouter(prompt: str, model: str, temperature: float, max_tokens: int) -> str:
+def call_openrouter(
+    prompt: str,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+) -> tuple[str, Dict, float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        raise HarnessError("OPENROUTER_API_KEY environment variable is not set.")
+    api_key = SETTINGS.openrouter_api_key
 
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
@@ -304,22 +294,26 @@ def apply_patch(patch_text: str, workspace_path: Path) -> None:
         )
 
 
-def run_evaluation(command: List[str], workspace_path: Path, timeout: int, env_updates: Optional[Dict[str, str]] = None, working_dir: Optional[str] = None) -> subprocess.CompletedProcess:
+def run_evaluation(
+    command: List[str],
+    workspace_path: Path,
+    timeout: int,
+    env_updates: Optional[Dict[str, str]] = None,
+    working_dir: Optional[str] = None,
+) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.setdefault("PYTHONPATH", ".")
     if env_updates:
         env.update(env_updates)
     workdir = workspace_path if working_dir is None else workspace_path / working_dir
-    process = subprocess.run(
+
+    return secure_run(
         command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        cwd=str(workdir),
+        workspace_path=workspace_path,
         timeout=timeout,
-        check=False,
         env=env,
+        cwd=workdir,
     )
-    return process
 
 
 def truncate_log(text: str) -> str:
@@ -376,7 +370,12 @@ def evaluate_attempt(
             response_meta = None
             api_latency = None
         else:
-            raw_response, response_meta, api_latency = call_openrouter(prompt, model, temperature, max_tokens)
+            raw_response, response_meta, api_latency = call_openrouter(
+                prompt,
+                model,
+                temperature,
+                max_tokens,
+            )
     except HarnessError as exc:
         attempt_summary.update({"error": str(exc)})
         store_text(attempt_dir / "error.log", str(exc))
