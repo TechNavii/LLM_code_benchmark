@@ -8,7 +8,7 @@ from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-MODEL_PATTERN = re.compile(r"^[a-zA-Z0-9_\-/]+$")
+MODEL_PATTERN = re.compile(r"^[a-zA-Z0-9_\-/\.]+$")
 TASK_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")
 
 

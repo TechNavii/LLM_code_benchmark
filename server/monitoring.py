@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 from contextvars import ContextVar
 from functools import wraps
@@ -25,6 +26,7 @@ def with_correlation_id(func: FuncType) -> FuncType:
         finally:
             correlation_id.reset(token)
 
+    wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
     return wrapper  # type: ignore[return-value]
 
 
@@ -48,4 +50,5 @@ def timed(func: FuncType) -> FuncType:
             )
             raise
 
+    wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
     return wrapper  # type: ignore[return-value]

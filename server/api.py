@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from server.api.router import router
+from server.routes.router import router
 from server.config import get_settings
 from server.database import init_db
 from server.logging import configure_logging
