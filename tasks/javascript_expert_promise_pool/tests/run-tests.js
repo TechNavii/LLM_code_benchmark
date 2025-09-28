@@ -2,7 +2,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { promisePool } = require('../pool');
+const { promisePool } = require('../workspace/pool');
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

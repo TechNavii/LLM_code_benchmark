@@ -1,6 +1,11 @@
+import sys
+from pathlib import Path
+
 import pytest
 
-from workspace.workflow import compute_schedule
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workspace"))
+
+from workflow import compute_schedule
 
 
 def build_tasks(defs):

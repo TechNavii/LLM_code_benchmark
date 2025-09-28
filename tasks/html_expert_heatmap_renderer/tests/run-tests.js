@@ -2,7 +2,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { renderHeatmap } = require('../heatmap.js');
+const { renderHeatmap } = require('../workspace/heatmap.js');
 
 function normalize(html) {
   return html.replace(/\s+/g, ' ').trim();
