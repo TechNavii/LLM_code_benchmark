@@ -1,0 +1,23 @@
+{
+  "task_id": "rust_feature_chunk_iter",
+  "language": "rust",
+  "type": "feature_implementation",
+  "difficulty": "medium",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "eval": {
+    "command": [
+      "cargo",
+      "test"
+    ],
+    "timeout_seconds": 180
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "rust",
+    "feature",
+    "collections"
+  ]
+}

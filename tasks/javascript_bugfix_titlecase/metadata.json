@@ -1,0 +1,24 @@
+{
+  "task_id": "javascript_bugfix_titlecase",
+  "language": "javascript",
+  "type": "bug_fix",
+  "difficulty": "easy",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": [
+      "node",
+      "tests/run-tests.js"
+    ],
+    "timeout_seconds": 120
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "javascript",
+    "bug_fix",
+    "strings"
+  ]
+}

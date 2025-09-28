@@ -1,0 +1,58 @@
+```diff
+--- moving_average.py
++++ moving_average.py
+@@ -1,19 +1,43 @@
+ """Utility functions for computing moving averages."""
+ 
+ from collections import deque
+-from typing import Deque, Iterable, List
++from typing import Deque, Iterable, List, Optional
+ 
+ 
+-def simple_moving_average(series: Iterable[float], window: int) -> List[float]:
+-    """Return the simple moving average over ``series`` with the given window size.
++def simple_moving_average(series: Iterable[float], window: int) -> List[Optional[float]]:
++    """Return the simple moving average over ``series`` with the given window size."""
+ 
+-    The function should return a list of averages aligned with the original
+-    sequence (i.e. the first (window-1) entries are ``None``). The current
+-    placeholder implementation is wrong and needs to be implemented.
+-    """
+-    # TODO: implement simple moving average while keeping the API intact.
+-    del series, window
+-    return []
++    if not isinstance(window, int):
++        raise TypeError("window must be an integer")
+ 
++    data = list(series)
++    if window <= 0:
++        raise ValueError("window must be greater than zero")
++    if not data:
++        raise ValueError("series must not be empty")
++    if window > len(data):
++        raise ValueError("window must not exceed series length")
+ 
++    window_values: Deque[float] = deque()
++    running_sum = 0.0
++    result: List[Optional[float]] = []
++
++    for value in data:
++        if not isinstance(value, (int, float)):
++            raise TypeError("series must contain numeric values")
++
++        numeric = float(value)
++        if len(window_values) == window:
++            running_sum -= window_values.popleft()
++        window_values.append(numeric)
++        running_sum += numeric
++
++        if len(window_values) == window:
++            result.append(running_sum / window)
++        else:
++            result.append(None)
++
++    return result
++
++
+ __all__ = ["simple_moving_average"]
+```

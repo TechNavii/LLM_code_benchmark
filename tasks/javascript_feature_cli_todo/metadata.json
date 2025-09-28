@@ -1,0 +1,17 @@
+{
+  "task_id": "javascript_feature_cli_todo",
+  "language": "javascript",
+  "type": "feature_implementation",
+  "difficulty": "medium",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": ["node", "tests/run-tests.js"],
+    "timeout_seconds": 120
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": ["javascript", "feature", "cli", "productivity"]
+}

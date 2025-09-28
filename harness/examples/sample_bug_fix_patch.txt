@@ -1,0 +1,16 @@
+```diff
+--- calculator.py
+
++++ calculator.py
+
+@@ -11,7 +11,7 @@
+
+     BUG: currently returns absolute difference instead of signed difference.
+     """
+     # Incorrect implementation kept here for LLM to fix.
+-    return abs(a - b)
++    return a - b
+ 
+ 
+ __all__ = ["add", "subtract"]
+```

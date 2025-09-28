@@ -1,0 +1,82 @@
+```diff
+--- asyncUtils.js
+
++++ asyncUtils.js
+
+@@ -9,7 +9,73 @@
+
+   if (typeof conditionFn !== 'function') {
+     throw new TypeError('conditionFn must be a function');
+   }
+-  return conditionFn();
++
++  const { interval = 50, timeout = 1000 } = options ?? {};
++
++  const validate = (value, name) => {
++    if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
++      throw new TypeError(`${name} must be a finite number`);
++    }
++    if (value <= 0) {
++      throw new RangeError(`${name} must be greater than zero`);
++    }
++  };
++
++  validate(interval, 'interval');
++  validate(timeout, 'timeout');
++
++  return new Promise((resolve, reject) => {
++    let settled = false;
++    let pollTimer = null;
++
++    const clearTimers = () => {
++      if (pollTimer !== null) {
++        clearTimeout(pollTimer);
++        pollTimer = null;
++      }
++    };
++
++    const timeoutTimer = setTimeout(() => {
++      if (settled) {
++        return;
++      }
++      settled = true;
++      clearTimers();
++      reject(new Error(`waitFor timeout after ${timeout}ms`));
++    }, timeout);
++
++    const finish = (cb) => {
++      if (settled) {
++        return;
++      }
++      settled = true;
++      clearTimeout(timeoutTimer);
++      clearTimers();
++      cb();
++    };
++
++    const attempt = () => {
++      if (settled) {
++        return;
++      }
++      let result;
++      try {
++        result = conditionFn();
++      } catch (error) {
++        finish(() => reject(error));
++        return;
++      }
++
++      if (result) {
++        finish(() => resolve(result));
++        return;
++      }
++
++      pollTimer = setTimeout(attempt, interval);
++    };
++
++    attempt();
++  });
+ }
+ 
+ module.exports = {
+```

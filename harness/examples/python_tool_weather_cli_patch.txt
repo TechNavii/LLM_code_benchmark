@@ -1,0 +1,52 @@
+```diff
+--- weather_service.py
+
++++ weather_service.py
+
+@@ -1,9 +1,42 @@
+
+ """Service layer fetching weather data via local tool."""
+ 
++from __future__ import annotations
++
++import json
++import subprocess
++from pathlib import Path
+ from typing import Any, Dict
+ 
++_TOOL_PATH = Path(__file__).resolve().parent / "tools" / "weather_tool.py"
+ 
+-def get_weather(_city: str) -> Dict[str, Any]:
++
++def get_weather(city: str) -> Dict[str, Any]:
+     """Return weather info for the given city by invoking the tool."""
+ 
+-    return {}
++    normalized = city.strip()
++    if not normalized:
++        raise RuntimeError("city name must be provided")
++
++    try:
++        result = subprocess.run(
++            [str(_TOOL_PATH), normalized],
++            capture_output=True,
++            text=True,
++            check=False,
++        )
++    except OSError as exc:  # pragma: no cover - defensive for missing interpreter
++        raise RuntimeError("failed to execute weather tool") from exc
++
++    if result.returncode != 0:
++        stderr = result.stderr.strip()
++        raise RuntimeError(f"weather tool failed: {stderr or 'unknown error'}")
++
++    try:
++        payload: Dict[str, Any] = json.loads(result.stdout)
++    except json.JSONDecodeError as exc:
++        raise RuntimeError("invalid response from weather tool") from exc
++
++    if not isinstance(payload, dict):
++        raise RuntimeError("unexpected payload type from weather tool")
++
++    return payload
+```

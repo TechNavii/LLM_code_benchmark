@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Run Details • Benchmark Harness</title>
+  <link rel="stylesheet" href="/ui/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Run Details</h1>
+    <p class="tagline">Dive into per-task performance, logs, and neon traces from the latest benchmark.</p>
+  </header>
+
+  <main>
+    <section class="card summary-card">
+      <a class="back-link" href="/ui/index.html">← Back to dashboard</a>
+      <h2 id="run-title"></h2>
+      <p id="run-subtitle"></p>
+      <div id="run-message" class="status" role="status"></div>
+      <div class="metrics" id="run-metrics"></div>
+      <div class="meta-grid" id="run-meta"></div>
+    </section>
+
+    <div class="run-layout">
+      <section class="card run-attempts">
+        <h2>Attempts</h2>
+        <div class="attempts-pane">
+          <div class="table-wrapper">
+            <table class="attempts-table">
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Status</th>
+                  <th>Duration (s)</th>
+                  <th>Prompt Tokens</th>
+                  <th>Completion Tokens</th>
+                  <th>Cost (USD)</th>
+                </tr>
+              </thead>
+              <tbody id="attempt-body"></tbody>
+            </table>
+          </div>
+          <div class="empty-state" id="attempt-empty" hidden>No attempts recorded for this run.</div>
+        </div>
+      </section>
+
+      <section class="card attempt-detail" id="attempt-detail" hidden>
+        <h2 id="detail-title">Attempt Details</h2>
+        <div id="detail-description"></div>
+        <div class="meta-grid" id="detail-meta"></div>
+        <div id="detail-logs"></div>
+      </section>
+    </div>
+  </main>
+
+  <script src="/ui/run.js" type="module"></script>
+</body>
+</html>

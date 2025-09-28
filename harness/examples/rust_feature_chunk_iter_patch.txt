@@ -1,0 +1,50 @@
+```diff
+--- src/lib.rs
++++ src/lib.rs
+@@ -1,23 +1,32 @@
++use std::mem;
++
+ /// Collect elements from the iterator into fixed-size chunks.
+-///
+-/// Requirements:
+-/// - `size` must be greater than zero, otherwise return an error.
+-/// - Consume the iterator exactly once.
+-/// - Return a `Vec<Vec<T>>` preserving the original order.
+-/// - When `strict` is true, return an error if the final chunk would be undersized.
+-/// - When `strict` is false, include the final partial chunk.
+-///
+-/// The current placeholder implementation is intentionally incorrect.
+ pub fn chunk<T, I>(iter: I, size: usize, strict: bool) -> Result<Vec<Vec<T>>, String>
+ where
+     I: IntoIterator<Item = T>,
+ {
+-    if size > 1000 {
+-        return Err(format!("size too large: {}", size));
++    if size == 0 {
++        return Err("size must be greater than zero".into());
+     }
+ 
+-    let items: Vec<T> = iter.into_iter().take(size).collect();
+-    Ok(vec![items])
++    let mut result: Vec<Vec<T>> = Vec::new();
++    let mut current: Vec<T> = Vec::with_capacity(size);
++
++    for item in iter.into_iter() {
++        current.push(item);
++        if current.len() == size {
++            result.push(mem::take(&mut current));
++        }
++    }
++
++    if !current.is_empty() {
++        if strict {
++            return Err("strict mode requires complete chunks".into());
++        }
++        result.push(current);
++    }
++
++    Ok(result)
+ }
+ 
+ #[cfg(test)]
+```

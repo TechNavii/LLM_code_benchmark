@@ -1,0 +1,340 @@
+[
+  {
+    "task_id": "cpp_expert_thread_pool",
+    "language": "cpp",
+    "type": "bug_fix",
+    "difficulty": "expert",
+    "tags": [
+      "cpp",
+      "expert",
+      "concurrency"
+    ],
+    "path": "tasks/cpp_expert_thread_pool"
+  },
+  {
+    "task_id": "go_bugfix_interval_overlap",
+    "language": "go",
+    "type": "bug_fix",
+    "difficulty": "easy",
+    "tags": [
+      "go",
+      "bug_fix",
+      "geometry"
+    ],
+    "path": "tasks/go_bugfix_interval_overlap"
+  },
+  {
+    "task_id": "go_expert_scheduler",
+    "language": "go",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": [
+      "go",
+      "expert",
+      "concurrency"
+    ],
+    "path": "tasks/go_expert_scheduler"
+  },
+  {
+    "task_id": "go_feature_todo_service",
+    "language": "go",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "go",
+      "feature",
+      "service",
+      "cli"
+    ],
+    "path": "tasks/go_feature_todo_service"
+  },
+  {
+    "task_id": "go_feature_wordcount",
+    "language": "go",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "go",
+      "feature",
+      "strings"
+    ],
+    "path": "tasks/go_feature_wordcount"
+  },
+  {
+    "task_id": "html_expert_form_validator",
+    "language": "html",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": [
+      "html",
+      "javascript",
+      "expert",
+      "tool_call"
+    ],
+    "path": "tasks/html_expert_form_validator"
+  },
+  {
+    "task_id": "javascript_bugfix_titlecase",
+    "language": "javascript",
+    "type": "bug_fix",
+    "difficulty": "easy",
+    "tags": [
+      "javascript",
+      "bug_fix",
+      "strings"
+    ],
+    "path": "tasks/javascript_bugfix_titlecase"
+  },
+  {
+    "task_id": "javascript_expert_worker_scheduler",
+    "language": "javascript",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": [
+      "javascript",
+      "expert",
+      "concurrency"
+    ],
+    "path": "tasks/javascript_expert_worker_scheduler"
+  },
+  {
+    "task_id": "javascript_feature_cli_todo",
+    "language": "javascript",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "javascript",
+      "feature",
+      "cli",
+      "productivity"
+    ],
+    "path": "tasks/javascript_feature_cli_todo"
+  },
+  {
+    "task_id": "javascript_feature_wait_for",
+    "language": "javascript",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "javascript",
+      "feature",
+      "async"
+    ],
+    "path": "tasks/javascript_feature_wait_for"
+  },
+  {
+    "task_id": "python_bugfix_interval_overlap",
+    "language": "python",
+    "type": "bug_fix",
+    "difficulty": "easy",
+    "tags": [
+      "python",
+      "bug_fix",
+      "geometry"
+    ],
+    "path": "tasks/python_bugfix_interval_overlap"
+  },
+  {
+    "task_id": "python_bugfix_prime_checker",
+    "language": "python",
+    "type": "bug_fix",
+    "difficulty": "medium",
+    "tags": [
+      "python",
+      "bug_fix",
+      "number_theory"
+    ],
+    "path": "tasks/python_bugfix_prime_checker"
+  },
+  {
+    "task_id": "python_expert_async_cache",
+    "language": "python",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": [
+      "python",
+      "async",
+      "expert"
+    ],
+    "path": "tasks/python_expert_async_cache"
+  },
+  {
+    "task_id": "python_feature_batched_iterator",
+    "language": "python",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "python",
+      "feature",
+      "collections"
+    ],
+    "path": "tasks/python_feature_batched_iterator"
+  },
+  {
+    "task_id": "python_feature_cli_reporter",
+    "language": "python",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "python",
+      "feature",
+      "cli",
+      "reporting"
+    ],
+    "path": "tasks/python_feature_cli_reporter"
+  },
+  {
+    "task_id": "python_feature_moving_average",
+    "language": "python",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "python",
+      "feature",
+      "numeric"
+    ],
+    "path": "tasks/python_feature_moving_average"
+  },
+  {
+    "task_id": "python_tool_weather_cli",
+    "language": "python",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "python",
+      "feature",
+      "tool_call",
+      "cli"
+    ],
+    "path": "tasks/python_tool_weather_cli"
+  },
+  {
+    "task_id": "rust_bugfix_prime_checker",
+    "language": "rust",
+    "type": "bug_fix",
+    "difficulty": "easy",
+    "tags": [
+      "rust",
+      "bug_fix",
+      "number_theory"
+    ],
+    "path": "tasks/rust_bugfix_prime_checker"
+  },
+  {
+    "task_id": "rust_expert_async_rate_limiter",
+    "language": "rust",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": [
+      "rust",
+      "expert",
+      "async"
+    ],
+    "path": "tasks/rust_expert_async_rate_limiter"
+  },
+  {
+    "task_id": "rust_feature_chunk_iter",
+    "language": "rust",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "rust",
+      "feature",
+      "collections"
+    ],
+    "path": "tasks/rust_feature_chunk_iter"
+  },
+  {
+    "task_id": "rust_feature_config_parser",
+    "language": "rust",
+    "type": "feature_implementation",
+    "difficulty": "medium",
+    "tags": [
+      "rust",
+      "feature",
+      "parser",
+      "configuration"
+    ],
+    "path": "tasks/rust_feature_config_parser"
+  },
+  {
+    "task_id": "python_expert_workflow_scheduler",
+    "language": "python",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["python", "expert", "scheduling", "dag"],
+    "path": "tasks/python_expert_workflow_scheduler"
+  },
+  {
+    "task_id": "python_expert_time_series_interpolator",
+    "language": "python",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["python", "expert", "time_series", "interpolation"],
+    "path": "tasks/python_expert_time_series_interpolator"
+  },
+  {
+    "task_id": "go_expert_token_bucket",
+    "language": "go",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["go", "expert", "rate_limiter"],
+    "path": "tasks/go_expert_token_bucket"
+  },
+  {
+    "task_id": "go_expert_lru_cache",
+    "language": "go",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["go", "expert", "cache"],
+    "path": "tasks/go_expert_lru_cache"
+  },
+  {
+    "task_id": "rust_expert_lru_cache",
+    "language": "rust",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["rust", "expert", "cache"],
+    "path": "tasks/rust_expert_lru_cache"
+  },
+  {
+    "task_id": "rust_expert_time_bucketer",
+    "language": "rust",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["rust", "expert", "time_series"],
+    "path": "tasks/rust_expert_time_bucketer"
+  },
+  {
+    "task_id": "javascript_expert_promise_pool",
+    "language": "javascript",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["javascript", "expert", "concurrency"],
+    "path": "tasks/javascript_expert_promise_pool"
+  },
+  {
+    "task_id": "javascript_expert_markdown_toc",
+    "language": "javascript",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["javascript", "expert", "parsing"],
+    "path": "tasks/javascript_expert_markdown_toc"
+  },
+  {
+    "task_id": "cpp_expert_sparse_matrix",
+    "language": "cpp",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["cpp", "expert", "matrix"],
+    "path": "tasks/cpp_expert_sparse_matrix"
+  },
+  {
+    "task_id": "html_expert_heatmap_renderer",
+    "language": "html",
+    "type": "feature_implementation",
+    "difficulty": "expert",
+    "tags": ["html", "expert", "rendering"],
+    "path": "tasks/html_expert_heatmap_renderer"
+  }
+]

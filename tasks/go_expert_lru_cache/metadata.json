@@ -1,0 +1,20 @@
+{
+  "task_id": "go_expert_lru_cache",
+  "language": "go",
+  "type": "feature_implementation",
+  "difficulty": "expert",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "eval": {
+    "command": ["go", "test", "./..."],
+    "timeout_seconds": 180
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "go",
+    "expert",
+    "cache"
+  ]
+}

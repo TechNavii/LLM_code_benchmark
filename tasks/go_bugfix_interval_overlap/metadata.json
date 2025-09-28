@@ -1,0 +1,24 @@
+{
+  "task_id": "go_bugfix_interval_overlap",
+  "language": "go",
+  "type": "bug_fix",
+  "difficulty": "easy",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "eval": {
+    "command": [
+      "go",
+      "test",
+      "./..."
+    ],
+    "timeout_seconds": 120
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "go",
+    "bug_fix",
+    "geometry"
+  ]
+}

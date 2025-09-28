@@ -1,0 +1,25 @@
+```diff
+--- src/lib.rs
++++ src/lib.rs
+@@ -1,8 +1,7 @@
+ /// Check if `n` is a prime number.
+ pub fn is_prime(n: i64) -> bool {
+-    let mut n = n.abs();
+     if n <= 1 {
+-        return true;
++        return false;
+     }
+     if n == 2 {
+         return true;
+@@ -11,8 +10,9 @@
+         return false;
+     }
+ 
++    let limit = (n as f64).sqrt() as i64;
+     let mut divisor = 3;
+-    while divisor * divisor < n {
++    while divisor <= limit {
+         if n % divisor == 0 {
+             return false;
+         }
+```

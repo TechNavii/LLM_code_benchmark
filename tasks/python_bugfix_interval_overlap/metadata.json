@@ -1,0 +1,24 @@
+{
+  "task_id": "python_bugfix_interval_overlap",
+  "language": "python",
+  "type": "bug_fix",
+  "difficulty": "easy",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": [
+      "pytest",
+      "-q"
+    ],
+    "timeout_seconds": 120
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "python",
+    "bug_fix",
+    "geometry"
+  ]
+}

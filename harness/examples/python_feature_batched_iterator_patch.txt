@@ -1,0 +1,46 @@
+```diff
+--- batching.py
++++ batching.py
+@@ -1,6 +1,6 @@
+ """Helpers for splitting iterables into fixed-size batches."""
+ 
+-from typing import Iterable, Iterator, List, Sequence, Tuple, TypeVar
++from typing import Iterable, List, Sequence, TypeVar
+ 
+ T = TypeVar("T")
+ 
+@@ -22,8 +22,30 @@
+ 
+     The current placeholder implementation is intentionally incorrect.
+     """
+ 
+-    del source, size, as_tuple, strict
+-    return []
++    if not isinstance(size, int):
++        raise TypeError("size must be an integer")
++    if size <= 0:
++        raise ValueError("size must be greater than zero")
++
++    iterator = iter(source)
++    batches: List[Sequence[T]] = []
++    current: List[T] = []
++
++    def finalize(batch: List[T]) -> Sequence[T]:
++        return tuple(batch) if as_tuple else list(batch)
++
++    for item in iterator:
++        current.append(item)
++        if len(current) == size:
++            batches.append(finalize(current))
++            current = []
++
++    if current:
++        if strict:
++            raise ValueError("incomplete batch with strict=True")
++        batches.append(finalize(current))
++
++    return batches
+ 
+ 
+ __all__ = ["batched"]
+```

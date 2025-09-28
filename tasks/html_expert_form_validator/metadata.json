@@ -1,0 +1,17 @@
+{
+  "task_id": "html_expert_form_validator",
+  "language": "html",
+  "type": "feature_implementation",
+  "difficulty": "expert",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": ["node", "tests/run-tests.js"],
+    "timeout_seconds": 180
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": ["html", "javascript", "expert", "tool_call"]
+}

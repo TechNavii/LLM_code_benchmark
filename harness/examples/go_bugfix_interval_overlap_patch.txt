@@ -1,0 +1,30 @@
+```diff
+--- intervals.go
++++ intervals.go
+@@ -7,16 +7,20 @@
+ }
+ 
+ // HasOverlap returns true when the two intervals share any interior points.
+-//
+-// BUG: the current implementation mishandles touching boundaries.
+ func HasOverlap(a, b Interval) bool {
+ 	if a.Start >= a.End || b.Start >= b.End {
+ 		panic("invalid interval")
+ 	}
+ 
+-	if a.Start > b.Start {
+-		a, b = b, a
++	overlapStart := a.Start
++	if b.Start > overlapStart {
++		overlapStart = b.Start
+ 	}
+ 
+-	return a.End >= b.Start
++	overlapEnd := a.End
++	if b.End < overlapEnd {
++		overlapEnd = b.End
++	}
++
++	return overlapStart < overlapEnd
+ }
+```

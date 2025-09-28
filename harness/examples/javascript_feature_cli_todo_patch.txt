@@ -1,0 +1,79 @@
+```diff
+--- lib/parseArgs.js
+
++++ lib/parseArgs.js
+
+@@ -2,13 +2,30 @@
+
+ 
+ /**
+  * Parse CLI arguments to extract task definitions.
+- * Expected usage: node index.js --tasks "Title | status; Another | status"
+- *
+- * The placeholder implementation is intentionally incorrect.
+  */
+ function parseArgs(argv) {
+-  void argv;
+-  return [];
++  const index = argv.indexOf('--tasks');
++  if (index === -1 || index === argv.length - 1) {
++    return [];
++  }
++
++  const raw = argv[index + 1];
++  return raw
++    .split(';')
++    .map((chunk) => chunk.trim())
++    .filter(Boolean)
++    .map((chunk) => {
++      const parts = chunk.split('|');
++      if (parts.length !== 2) {
++        throw new Error(`Invalid task entry: ${chunk}`);
++      }
++      const title = parts[0].trim();
++      const status = parts[1].trim().toLowerCase();
++      if (!title) {
++        throw new Error('Task title cannot be empty');
++      }
++      return { title, status };
++    });
+ }
+ 
+ module.exports = {
+--- lib/summary.js
+
++++ lib/summary.js
+
+@@ -2,13 +2,25 @@
+
+ 
+ /**
+  * Produce a textual summary from parsed tasks.
+- * Tasks are objects of the form { title, status }.
+- *
+- * The placeholder implementation is intentionally incorrect.
+  */
+ function summarizeTasks(tasks) {
+-  void tasks;
+-  return '';
++  if (!tasks || tasks.length === 0) {
++    return 'total_tasks: 0';
++  }
++
++  const counts = new Map();
++  for (const task of tasks) {
++    const status = String(task.status || '').toLowerCase();
++    counts.set(status, (counts.get(status) || 0) + 1);
++  }
++
++  const lines = [`total_tasks: ${tasks.length}`];
++  const statuses = Array.from(counts.keys()).sort();
++  for (const status of statuses) {
++    lines.push(`${status}: ${counts.get(status)}`);
++  }
++  return lines.join('
++');
+ }
+ 
+ module.exports = {
+```

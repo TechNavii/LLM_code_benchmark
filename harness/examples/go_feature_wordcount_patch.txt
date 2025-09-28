@@ -1,0 +1,68 @@
+```diff
+--- textutil.go
++++ textutil.go
+@@ -1,15 +1,52 @@
+ package textutil
+ 
+-// WordCount should normalize words and return a frequency map.
+-//
+-// Requirements:
+-//   * Case-insensitive comparisons.
+-//   * Hyphenated words should remain intact ("state-of-the-art").
+-//   * Apostrophes within words ("can't") should be kept.
+-//   * All other punctuation should be treated as delimiters.
+-//   * Multiple whitespace characters should be treated as single separators.
+-//
+-// The current placeholder implementation is intentionally incorrect.
++import (
++    "strings"
++    "unicode"
++)
++
++// WordCount normalizes words and returns a frequency map.
+ func WordCount(input string) map[string]int {
+-	return map[string]int{"TODO": len(input)}
++    counts := make(map[string]int)
++    if input == "" {
++        return counts
++    }
++
++    runes := []rune(input)
++    var builder strings.Builder
++
++    flush := func() {
++        if builder.Len() == 0 {
++            return
++        }
++        word := builder.String()
++        counts[word]++
++        builder.Reset()
++    }
++
++    isAlnum := func(r rune) bool {
++        return unicode.IsLetter(r) || unicode.IsDigit(r)
++    }
++
++    for i, r := range runes {
++        switch {
++        case isAlnum(r):
++            builder.WriteRune(unicode.ToLower(r))
++        case (r == '-' || r == ''') && builder.Len() > 0:
++            var next rune
++            if i+1 < len(runes) {
++                next = runes[i+1]
++            }
++            if isAlnum(next) {
++                builder.WriteRune(r)
++            } else {
++                flush()
++            }
++        default:
++            flush()
++        }
++    }
++
++    flush()
++    return counts
+ }
+```

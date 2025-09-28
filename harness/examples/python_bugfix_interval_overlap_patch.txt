@@ -1,0 +1,19 @@
+```diff
+--- intervals.py
+
++++ intervals.py
+
+@@ -19,7 +19,10 @@
+
+     if start_a >= end_a or start_b >= end_b:
+         raise ValueError("Invalid interval: start must be less than end")
+ 
+-    return max(start_a, start_b) <= min(end_a, end_b)
++    overlap_start = max(start_a, start_b)
++    overlap_end = min(end_a, end_b)
++
++    return overlap_start < overlap_end
+ 
+ 
+ __all__ = ["Interval", "has_overlap"]
+```

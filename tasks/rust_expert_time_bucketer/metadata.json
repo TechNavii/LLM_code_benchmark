@@ -1,0 +1,20 @@
+{
+  "task_id": "rust_expert_time_bucketer",
+  "language": "rust",
+  "type": "feature_implementation",
+  "difficulty": "expert",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "eval": {
+    "command": ["cargo", "test"],
+    "timeout_seconds": 240
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "rust",
+    "expert",
+    "time_series"
+  ]
+}

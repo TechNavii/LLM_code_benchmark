@@ -1,0 +1,16 @@
+{
+  "task_id": "go_feature_todo_service",
+  "language": "go",
+  "type": "feature_implementation",
+  "difficulty": "medium",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "eval": {
+    "command": ["go", "test", "./..."],
+    "timeout_seconds": 120
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": ["go", "feature", "service", "cli"]
+}

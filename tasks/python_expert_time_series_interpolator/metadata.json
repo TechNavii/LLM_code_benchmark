@@ -1,0 +1,22 @@
+{
+  "task_id": "python_expert_time_series_interpolator",
+  "language": "python",
+  "type": "feature_implementation",
+  "difficulty": "expert",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": ["pytest", "-q"],
+    "timeout_seconds": 180
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "python",
+    "expert",
+    "time_series",
+    "interpolation"
+  ]
+}

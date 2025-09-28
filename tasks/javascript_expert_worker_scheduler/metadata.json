@@ -1,0 +1,17 @@
+{
+  "task_id": "javascript_expert_worker_scheduler",
+  "language": "javascript",
+  "type": "feature_implementation",
+  "difficulty": "expert",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": ["node", "tests/test_scheduler.js"],
+    "timeout_seconds": 180
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": ["javascript", "expert", "concurrency"]
+}

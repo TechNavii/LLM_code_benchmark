@@ -1,0 +1,26 @@
+```diff
+--- prime.py
++++ prime.py
+@@ -3,11 +3,18 @@
+ 
+ def is_prime(n: int) -> bool:
+     """Return True when ``n`` is a prime number."""
+-    if n < 0:
+-        n = abs(n)
++
++    if not isinstance(n, int):
++        raise TypeError("n must be an integer")
+     if n <= 1:
++        return False
++    if n == 2:
+         return True
+-    for divisor in range(2, int(n ** 0.5)):
++    if n % 2 == 0:
++        return False
++
++    limit = int(n ** 0.5) + 1
++    for divisor in range(3, limit, 2):
+         if n % divisor == 0:
+             return False
+     return True
+```

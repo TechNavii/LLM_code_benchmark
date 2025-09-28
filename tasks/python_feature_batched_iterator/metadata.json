@@ -1,0 +1,24 @@
+{
+  "task_id": "python_feature_batched_iterator",
+  "language": "python",
+  "type": "feature_implementation",
+  "difficulty": "medium",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": [
+      "pytest",
+      "-q"
+    ],
+    "timeout_seconds": 120
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": [
+    "python",
+    "feature",
+    "collections"
+  ]
+}

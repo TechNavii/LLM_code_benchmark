@@ -1,0 +1,75 @@
+```diff
+--- pkg/todo/service.go
++++ pkg/todo/service.go
+@@ -1,34 +1,58 @@
+ package todo
+ 
+-import "strings"
++import (
++    "fmt"
++    "sort"
++    "strings"
++)
+ 
+ // Service provides task management operations.
+ type Service struct {
+-	repo *Repository
++    repo *Repository
+ }
+ 
+ // NewService returns a Service backed by the provided repository.
+ func NewService(repo *Repository) *Service {
+-	return &Service{repo: repo}
++    return &Service{repo: repo}
+ }
+ 
+ // AddTask creates a new task with the given title and pending status.
+ func (s *Service) AddTask(title string) Task {
+-	return Task{Title: title, Status: "pending"}
++    trimmed := strings.TrimSpace(title)
++    task := Task{Title: trimmed, Status: "pending"}
++    return s.repo.Save(task)
+ }
+ 
+ // CompleteTask marks a task as completed.
+ func (s *Service) CompleteTask(id int) bool {
+-	_ = id
+-	return false
++    if id <= 0 {
++        return false
++    }
++    return s.repo.UpdateStatus(id, "completed")
+ }
+ 
+ // Summary returns counts by status in alphabetical order.
+ func (s *Service) Summary() []string {
+-	tasks := s.repo.All()
+-	result := make([]string, len(tasks))
+-	for i, task := range tasks {
+-		result[i] = strings.ToLower(task.Title)
+-	}
+-	return result
++    tasks := s.repo.All()
++    if len(tasks) == 0 {
++        return nil
++    }
++
++    counts := make(map[string]int)
++    for _, task := range tasks {
++        status := strings.ToLower(strings.TrimSpace(task.Status))
++        counts[status]++
++    }
++
++    statuses := make([]string, 0, len(counts))
++    for status := range counts {
++        statuses = append(statuses, status)
++    }
++    sort.Strings(statuses)
++
++    summary := make([]string, 0, len(statuses))
++    for _, status := range statuses {
++        summary = append(summary, fmt.Sprintf("%s: %d", status, counts[status]))
++    }
++    return summary
+ }
+```

@@ -1,0 +1,95 @@
+```diff
+--- reporting/loader.py
+
++++ reporting/loader.py
+
+@@ -10,13 +10,34 @@
+
+ 
+ 
+ def load_entries(raw: str) -> List[Entry]:
+-    """Parse CSV-like text into entry dictionaries.
++    """Parse CSV-like text into entry dictionaries."""
+ 
+-    The expected format is one record per line, with comma-separated fields:
+-        name, stage, duration_minutes
++    entries: List[Entry] = []
++    if not raw:
++        return entries
+ 
+-    The placeholder implementation is intentionally incorrect.
+-    """
++    for line in raw.splitlines():
++        stripped = line.strip()
++        if not stripped or stripped.startswith('#'):
++            continue
+ 
+-    del raw
+-    return []
++        parts = [part.strip() for part in stripped.split(',')]
++        if len(parts) != 3:
++            raise ValueError(f"Invalid record: {line!r}")
++
++        assignee, stage, duration_text = parts
++        try:
++            duration = int(duration_text)
++        except ValueError as exc:  # pragma: no cover - defensive
++            raise ValueError(f"Invalid duration: {duration_text!r}") from exc
++        if duration < 0:
++            raise ValueError("duration must be non-negative")
++
++        entry: Entry = {
++            'assignee': assignee,
++            'stage': stage.lower(),
++            'duration_minutes': duration,
++        }
++        entries.append(entry)
++
++    return entries
+--- reporting/formatting.py
+
++++ reporting/formatting.py
+
+@@ -1,18 +1,30 @@
+
+ """Formatting helpers for task summaries."""
+ 
++from collections import Counter
+ from typing import Iterable, Mapping
+ 
+ 
+ def summarize_entries(entries: Iterable[Mapping[str, object]]) -> str:
+-    """Return a human-readable summary string.
++    """Return a human-readable summary string."""
+ 
+-    The output should contain:
+-    - total task count
+-    - counts per stage
+-    - average duration (rounded to one decimal place)
++    materialized = list(entries)
++    total = len(materialized)
++    if total == 0:
++        return "total_tasks: 0
++avg_duration_minutes: 0.0"
+ 
+-    The placeholder implementation is intentionally incorrect.
+-    """
++    counter = Counter()
++    duration_sum = 0
++    for entry in materialized:
++        stage = str(entry['stage']).lower()
++        counter[stage] += 1
++        duration_sum += int(entry['duration_minutes'])
+ 
+-    del entries
+-    return ""
++    lines = [f"total_tasks: {total}"]
++    for stage in sorted(counter):
++        lines.append(f"{stage}: {counter[stage]}")
++
++    average = duration_sum / total
++    lines.append(f"avg_duration_minutes: {average:.1f}")
++    return "
++".join(lines)
+
+```

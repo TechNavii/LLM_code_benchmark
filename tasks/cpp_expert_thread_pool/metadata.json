@@ -1,0 +1,17 @@
+{
+  "task_id": "cpp_expert_thread_pool",
+  "language": "cpp",
+  "type": "bug_fix",
+  "difficulty": "expert",
+  "instructions_file": "instructions.md",
+  "workspace_dir": "workspace",
+  "tests_dir": "tests",
+  "eval": {
+    "command": ["bash", "tests/run-tests.sh"],
+    "timeout_seconds": 180
+  },
+  "scoring": {
+    "tests_passed": 1.0
+  },
+  "tags": ["cpp", "expert", "concurrency"]
+}

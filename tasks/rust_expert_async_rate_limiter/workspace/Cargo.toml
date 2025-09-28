@@ -1,0 +1,11 @@
+[package]
+name = "rust_expert_async_rate_limiter"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rate_limiter"
+path = "src/lib.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["time", "sync", "rt-multi-thread" ] }

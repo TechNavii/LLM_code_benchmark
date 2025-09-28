@@ -1,0 +1,29 @@
+```diff
+--- stringUtils.js
++++ stringUtils.js
+@@ -15,7 +15,23 @@
+   if (typeof input !== 'string') {
+     throw new TypeError('input must be a string');
+   }
+-  return input.toUpperCase();
++  const trimmed = input.trim();
++  if (trimmed.length === 0) {
++    return '';
++  }
++
++  const words = trimmed.split(/\s+/);
++  const transformed = words.map((word) => {
++    const lower = word.toLowerCase();
++    if (lower.length === 0) {
++      return lower;
++    }
++    const first = lower.charAt(0).toUpperCase();
++    const rest = lower.slice(1);
++    return `${first}${rest}`;
++  });
++
++  return transformed.join(' ');
+ }
+ 
+ module.exports = {
+```

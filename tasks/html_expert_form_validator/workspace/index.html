@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Registration</title>
+  <link rel="stylesheet" href="static/styles.css">
+  <script type="module" src="static/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <h1>Join Our Community</h1>
+    <form id="registration-form" novalidate>
+      <label>
+        Email
+        <input type="email" name="email" id="email" required>
+      </label>
+      <label>
+        Password
+        <input type="password" name="password" id="password" required>
+      </label>
+      <label>
+        Confirm Password
+        <input type="password" name="confirm" id="confirm" required>
+      </label>
+      <label>
+        Interests
+        <textarea name="interests" id="interests" rows="4" cols="40"></textarea>
+      </label>
+      <button type="submit">Sign up</button>
+    </form>
+    <section aria-live="polite" id="form-status"></section>
+  </main>
+</body>
+</html>

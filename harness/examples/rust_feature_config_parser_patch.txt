@@ -1,0 +1,67 @@
+```diff
+--- src/parser.rs
++++ src/parser.rs
+@@ -7,11 +7,28 @@
+ }
+ 
+ pub fn parse_config(input: &str) -> Result<Vec<ConfigEntry>, ConfigError> {
+-    if input.is_empty() {
+-        return Ok(Vec::new());
++    let mut entries = Vec::new();
++    for line in input.lines() {
++        let trimmed = line.trim();
++        if trimmed.is_empty() || trimmed.starts_with('#') {
++            continue;
++        }
++
++        let mut parts = trimmed.splitn(2, '=');
++        let key = parts.next().unwrap().trim();
++        let value = parts.next().ok_or_else(|| ConfigError::InvalidLine(trimmed.to_string()))?.trim();
++
++        if key.is_empty() {
++            return Err(ConfigError::EmptyKey);
++        }
++
++        entries.push(ConfigEntry {
++            key: key.to_string(),
++            value: value.to_string(),
++        });
+     }
+ 
+-    Err(ConfigError::InvalidLine(input.to_string()))
++    Ok(entries)
+ }
+ 
+ #[cfg(test)]
+@@ -20,7 +37,8 @@
+ 
+     #[test]
+     fn parses_basic_entries() {
+-        let entries = parse_config("app.port=8080\nlog.level=INFO").unwrap();
++        let entries = parse_config("app.port=8080
++log.level=INFO").unwrap();
+         assert_eq!(entries.len(), 2);
+         assert_eq!(entries[0].key, "app.port");
+         assert_eq!(entries[0].value, "8080");
+@@ -28,7 +46,9 @@
+ 
+     #[test]
+     fn trims_whitespace_and_comments() {
+-        let raw = "  app.name = Demo  \n# comment\nlog.level=info";
++        let raw = "  app.name = Demo  
++# comment
++log.level=info";
+         let entries = parse_config(raw).unwrap();
+         assert_eq!(entries.len(), 2);
+         assert_eq!(entries[0].value, "Demo");
+@@ -46,6 +66,8 @@
+ 
+     #[test]
+     fn handles_empty_input() {
+-        assert!(parse_config("\n  \n").unwrap().is_empty());
++        assert!(parse_config("
++  
++").unwrap().is_empty());
+     }
+ }
+```

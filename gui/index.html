@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Benchmark Harness Dashboard</title>
+  <link rel="stylesheet" href="/ui/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Benchmark Harness Dashboard</h1>
+    <p class="tagline">Monitor model performance with live runs, rich metrics, and neon-fast insights.</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>Launch Run</h2>
+      <form id="run-form">
+        <label>
+          Model ID(s)
+          <input type="text" id="model-input" placeholder="google/gemini-2.5-flash-lite" required />
+        </label>
+        <label>
+          Tasks (optional, comma separated)
+          <input type="text" id="task-input" placeholder="python_tool_weather_cli,go_feature_wordcount" />
+        </label>
+        <label>
+          Samples
+          <input type="number" id="sample-input" min="1" value="1" />
+        </label>
+        <label class="inline">
+          <input type="checkbox" id="include-tests" /> Include tests in prompt
+        </label>
+        <label class="inline">
+          <input type="checkbox" id="install-deps" /> Install requirements per task
+        </label>
+        <button type="submit" id="run-button">Start Run</button>
+      </form>
+      <div id="run-status" class="status"></div>
+    </section>
+
+    <section class="card" id="results-card" hidden>
+      <h2>Latest Run Results (<span id="run-id"></span>)</h2>
+      <div class="metrics" id="aggregate-metrics"></div>
+      <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Status</th>
+            <th>Duration (s)</th>
+            <th>Prompt Tokens</th>
+            <th>Completion Tokens</th>
+            <th>Cost (USD)</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Leaderboard</h2>
+      <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>Best Accuracy</th>
+            <th>Cost @ Best Accuracy (USD)</th>
+            <th>Duration @ Best Accuracy (s)</th>
+            <th>Runs</th>
+          </tr>
+        </thead>
+        <tbody id="leaderboard-body"></tbody>
+      </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Recent Runs</h2>
+      <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Run ID</th>
+            <th>Timestamp</th>
+            <th>Model(s)</th>
+            <th>Accuracy</th>
+            <th>Total Cost (USD)</th>
+            <th>Duration (s)</th>
+          </tr>
+        </thead>
+        <tbody id="history-body"></tbody>
+      </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/ui/main.js" type="module"></script>
+</body>
+</html>
