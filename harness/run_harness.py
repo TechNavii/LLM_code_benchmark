@@ -36,6 +36,7 @@ SETTINGS = get_settings()
 TASKS_ROOT = SETTINGS.tasks_root
 RUN_ARTIFACTS = SETTINGS.runs_root
 DEFAULT_MODEL = SETTINGS.default_model
+DEFAULT_MAX_TOKENS = SETTINGS.default_max_tokens
 SUPPORTED_EXTENSIONS = {
     ".py",
     ".js",
@@ -50,6 +51,101 @@ SUPPORTED_EXTENSIONS = {
     ".yml",
 }
 MAX_LOG_CHARS = SETTINGS.max_log_chars
+DEFAULT_ALLOW_INCOMPLETE_DIFFS = SETTINGS.allow_incomplete_diffs
+DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK = SETTINGS.allow_diff_rewrite_fallback
+
+TASK_HINTS: Dict[str, str] = {
+    "cpp_expert_sparse_matrix": textwrap.dedent(
+        """
+        Update the existing SparseMatrix class in-place. Do not introduce a second class definition or duplicate the declarations already present in sparse_matrix.{h,cpp}. Edit the current methods to use CSR storage and keep header/implementation aligned. Tests require: set(…,0) removes entries, get throws std::out_of_range for invalid indices, multiply enforces shape compatibility, transpose returns a new matrix, and nnz reflects stored entries.
+        """
+    ).strip(),
+    "cpp_expert_thread_pool": textwrap.dedent(
+        """
+        Maintain the existing ThreadPool class definition and member names (e.g., `condition_`, `stop_`, `workers_`). Update behaviour by reusing those members instead of introducing alternative fields, renaming them, or duplicating the class in the header/source. Tests expect the destructor to join workers, enqueue to throw once stop_ is set, and condition_.wait to use a predicate preventing lost tasks.
+        """
+    ).strip(),
+    "go_expert_lru_cache": textwrap.dedent(
+        """
+        Implement the LRU cache without relying on package-level variables. Define helper structs with `type` declarations and keep the public API identical. Avoid importing fmt unless you actually need formatted errors; prefer returning errors or panicking only when capacity <= 0. Tests check eviction order, Len(), and concurrent Set/Get behaviour.
+        """
+    ).strip(),
+    "go_expert_scheduler": textwrap.dedent(
+        """
+        Preserve the existing Scheduler type and its fields. Change only the coordination logic so priority and concurrency constraints hold; avoid renaming fields or introducing new exported types. Tests assert high-priority tasks run before lower ones and that the concurrency limit is never exceeded.
+        """
+    ).strip(),
+    "go_expert_token_bucket": textwrap.dedent(
+        """
+        Keep all executable code inside functions/methods—Go does not permit statements at the top level. Ensure the bucket's fields are stored on the struct and guard state with mutexes so concurrent callers compile and pass go test. Tests cover fractional refill, burst allowance, rejecting non-positive tokens, and concurrency safety.
+        """
+    ).strip(),
+    "python_bugfix_prime_checker": "Non-positive integers (<= 1) must always return False from is_prime.",
+    "html_expert_form_validator": "Always call event.preventDefault() in the submit handler before performing validation feedback.",
+    "javascript_bugfix_titlecase": "Ensure punctuation and spacing from the original string are preserved when converting words to title case.",
+    "javascript_expert_worker_scheduler": "Keep the existing module exports intact—modify the current scheduler implementation without renaming the exported function or moving the file.",
+    "python_feature_batched_iterator": "The iterator must yield batches lazily without loading the entire input. Preserve input order and batch sizes per the tests.",
+    "python_feature_cli_reporter": "Tests expect grouped reports sorted by project name with exact formatting; match the fixture strings precisely.",
+    "python_feature_moving_average": "Emit None until the window is full, then produce averages using the latest window; tests check float precision and sliding behaviour.",
+    "python_tool_weather_cli": "Parse arguments as tests expect (city, optional units flag) and render output using the provided template so snapshots match.",
+    "rust_expert_time_bucketer": "Reuse the existing module structure; only adjust logic for bucketing without renaming modules or removing public functions. Tests validate bucket boundaries and cumulative totals.",
+    "rust_bugfix_prime_checker": "Treat 0 and 1 as non-prime while confirming known primes remain true; avoid integer overflow when checking upper bounds.",
+}
+
+_PATCH_LINE_PREFIXES = (
+    "diff --git",
+    "index ",
+    "---",
+    "+++",
+    "@@",
+    "+",
+    "-",
+    " ",
+    "new file mode",
+    "deleted file mode",
+    "rename from",
+    "rename to",
+    "similarity index",
+    "dissimilarity index",
+    "Binary files",
+    "\\ No newline at end of file",
+)
+
+
+def _is_probably_valid_patch(patch: str) -> bool:
+    lines = patch.splitlines()
+    if not lines:
+        return False
+
+    add_lines = sum(1 for line in lines if line.startswith("+") and not line.startswith("+++"))
+    remove_lines = sum(1 for line in lines if line.startswith("-") and not line.startswith("---"))
+    hunk_lines = sum(1 for line in lines if line.startswith("@@"))
+    header_lines = sum(1 for line in lines if line.startswith("diff --git") or line.startswith("--- ") or line.startswith("+++ "))
+
+    if header_lines >= 2 and (add_lines or remove_lines or hunk_lines):
+        return True
+    if hunk_lines and (add_lines or remove_lines):
+        return True
+    if add_lines + remove_lines >= 2:
+        return True
+    return False
+
+
+def _extract_incomplete_patch(candidate: str) -> str:
+    lines = []
+    for raw_line in candidate.splitlines():
+        line = raw_line.rstrip("\r")
+        if not line:
+            lines.append("")
+            continue
+        if any(line.startswith(prefix) for prefix in _PATCH_LINE_PREFIXES):
+            lines.append(line)
+            continue
+        break
+    patch = "\n".join(lines).strip()
+    if patch and not patch.endswith("\n"):
+        patch += "\n"
+    return patch
 
 
 def fetch_model_pricing(models: List[str]) -> Dict[str, Dict[str, float]]:
@@ -151,12 +247,44 @@ def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> s
                         ).strip()
                     )
 
+    diff_guide = textwrap.dedent(
+        """
+        Diff requirements:
+        - Emit a unified diff that cleanly applies with `patch`.
+        - Use the existing file paths exactly as shown in the repository (no leading `workspace/`, absolute paths, or new files).
+        - Preserve existing identifiers and members unless the instructions say otherwise—avoid renaming fields, functions, or types when a targeted fix will do.
+        - When you keep a line unchanged, include it as a leading space context line; when you remove a line, include it with a leading `-` so the hunk still shows what was removed.
+        - Only touch the regions you need to change. Do not reformat or reorder unrelated code.
+        - Prefer updating the existing definitions instead of rewriting whole files.
+
+        Example unified diff:
+        ```diff
+        --- foo.py
+        +++ foo.py
+        @@ -1,4 +1,4 @@
+         def add(a, b):
+-            return a - b
++            return a + b
+ 
+         def subtract(a, b):
+             return a - b
+        ```
+        """
+    ).strip()
+
+    task_hint = TASK_HINTS.get(task_id)
+    hint_block = f"\n\nTask-specific guidance:\n{task_hint}" if task_hint else ""
+
     prompt = textwrap.dedent(
         f"""
         You are an autonomous software developer. Apply a minimal fix to satisfy the task instructions and existing tests.
 
         Task instructions:
         {instructions}
+
+        {diff_guide}
+
+        {hint_block}
 
         Return a unified diff patch enclosed in a single ```diff fenced code block and nothing else.
 
@@ -210,7 +338,7 @@ def call_openrouter(
     return content, data, duration
 
 
-def extract_patch(raw_response: str) -> str:
+def extract_patch(raw_response: str, allow_incomplete_diffs: bool = False) -> str:
     fence = "```diff"
     if fence not in raw_response:
         raise HarnessError("Model response does not contain a ```diff fenced block.")
@@ -218,7 +346,14 @@ def extract_patch(raw_response: str) -> str:
     try:
         end = raw_response.index("```", start)
     except ValueError as exc:
-        raise HarnessError("Model response does not contain closing ``` fence.") from exc
+        if not allow_incomplete_diffs:
+            raise HarnessError("Model response does not contain closing ``` fence.") from exc
+        fallback_patch = _extract_incomplete_patch(raw_response[start:])
+        if not fallback_patch or not _is_probably_valid_patch(fallback_patch):
+            raise HarnessError(
+                "Model response diff block is incomplete or untrustworthy (missing closing ``` fence)."
+            ) from exc
+        return fallback_patch
     patch = raw_response[start:end]
     return patch.strip() + "\n"
 
@@ -242,6 +377,13 @@ def prepare_run_directory(task_id: str, metadata: Dict) -> Path:
     shutil.copytree(workspace_dir, run_workspace)
     if tests_dir.exists():
         shutil.copytree(tests_dir, run_workspace / "tests")
+
+    nested_workspace = run_workspace / "workspace"
+    if not nested_workspace.exists():
+        try:
+            nested_workspace.symlink_to(".")
+        except OSError:
+            pass
 
     requirements = task_dir / "requirements.txt"
     if requirements.exists():
@@ -269,28 +411,266 @@ def install_requirements(workspace_path: Path) -> None:
         )
 
 
-def apply_patch(patch_text: str, workspace_path: Path) -> None:
-    cleaned_patch, git_style = clean_patch_text(patch_text)
-    patch_args = ["patch", "--force"]
-    patch_args.append("-p0" if not git_style else "-p1")
+def _run_patch_command(args: List[str], patch_bytes: bytes, workspace_path: Path, timeout: int = 60):
     try:
-        process = subprocess.run(
-            patch_args,
-            input=cleaned_patch.encode("utf-8"),
+        return subprocess.run(
+            args,
+            input=patch_bytes,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=str(workspace_path),
             check=False,
-            timeout=60,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         raise HarnessError("Failed to apply patch: patch command timed out")
 
-    if process.returncode != 0:
+
+def _normalize_patch_path(path: str) -> Optional[str]:
+    path = path.strip()
+    if not path or path in {"/dev/null", "dev/null"}:
+        return None
+    if path.startswith("a/") or path.startswith("b/"):
+        path = path[2:]
+    path = path.lstrip("./")
+    if path.startswith("workspace/"):
+        path = path[len("workspace/"):]
+    return path.lstrip("./")
+
+
+def _extract_full_file_rewrites(cleaned_patch: str) -> Optional[Dict[str, str]]:
+    lines = cleaned_patch.splitlines()
+    rewrites: Dict[str, str] = {}
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith('diff --git'):
+            i += 1
+            continue
+        if not line.startswith('--- '):
+            i += 1
+            continue
+        old_path = line[4:].strip()
+        i += 1
+        if i >= len(lines) or not lines[i].startswith('+++ '):
+            return None
+        new_path = lines[i][4:].strip()
+        i += 1
+        content_lines: List[str] = []
+        has_minus = False
+        while i < len(lines):
+            current = lines[i]
+            if current.startswith('diff --git') or current.startswith('--- '):
+                break
+            if current.startswith('@@'):
+                i += 1
+                continue
+            if current.startswith('-') and not current.startswith('---'):
+                has_minus = True
+                i += 1
+                continue
+            if current.startswith('+') and not current.startswith('+++'):
+                content_lines.append(current[1:])
+                i += 1
+                continue
+            if current.startswith(' '):
+                content_lines.append(current[1:])
+                i += 1
+                continue
+            if current.startswith('\\'):
+                i += 1
+                continue
+            i += 1
+        if has_minus:
+            return None
+        target_path = _normalize_patch_path(new_path)
+        if target_path is None:
+            return None
+        content = '\n'.join(content_lines)
+        if content_lines:
+            content += '\n'
+        rewrites[target_path] = content
+    return rewrites or None
+
+
+HUNK_HEADER_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,(?P<old_len>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_len>\d+))? @@')
+
+
+def _parse_unified_diff(cleaned_patch: str):
+    lines = cleaned_patch.splitlines()
+    files = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith('diff --git'):
+            i += 1
+            continue
+        if not line.startswith('--- '):
+            i += 1
+            continue
+        old_path = line[4:].strip()
+        i += 1
+        if i >= len(lines) or not lines[i].startswith('+++ '):
+            return None
+        new_path = lines[i][4:].strip()
+        i += 1
+        hunks = []
+        while i < len(lines):
+            current = lines[i]
+            if current.startswith('diff --git') or current.startswith('--- '):
+                break
+            if current.startswith('@@'):
+                match = HUNK_HEADER_RE.match(current)
+                if not match:
+                    return None
+                start_old = int(match.group('old_start'))
+                len_old = int(match.group('old_len') or '1')
+                start_new = int(match.group('new_start'))
+                len_new = int(match.group('new_len') or '1')
+                i += 1
+                hunk_lines: List[str] = []
+                while i < len(lines):
+                    candidate = lines[i]
+                    if candidate.startswith('diff --git') or candidate.startswith('--- ') or candidate.startswith('@@'):
+                        break
+                    hunk_lines.append(candidate)
+                    i += 1
+                hunks.append((start_old, len_old, start_new, len_new, hunk_lines))
+            else:
+                i += 1
+        files.append((old_path, new_path, hunks))
+    return files or None
+
+
+def _apply_parsed_unified_diff(file_diffs, workspace_path: Path) -> Optional[List[str]]:
+    rewritten: List[str] = []
+    for old_path, new_path, hunks in file_diffs:
+        target_rel = _normalize_patch_path(new_path)
+        if target_rel is None:
+            return None
+        source_rel = _normalize_patch_path(old_path)
+        if source_rel is None:
+            original_lines: List[str] = []
+        else:
+            source_file = workspace_path / source_rel
+            if source_file.exists():
+                original_lines = source_file.read_text(encoding="utf-8").splitlines()
+            else:
+                original_lines = []
+        result_lines: List[str] = []
+        orig_index = 0
+        for start_old, len_old, start_new, len_new, hunk_lines in hunks:
+            zero_based = max(start_old - 1, 0)
+            zero_based = min(zero_based, len(original_lines))
+            if zero_based > orig_index:
+                result_lines.extend(original_lines[orig_index:zero_based])
+                orig_index = zero_based
+            for line in hunk_lines:
+                if not line:
+                    result_lines.append('')
+                    continue
+                tag = line[0]
+                text = line[1:] if len(line) > 1 else ''
+                if tag == ' ':
+                    result_lines.append(text)
+                    if orig_index < len(original_lines):
+                        orig_index += 1
+                elif tag == '-':
+                    if orig_index < len(original_lines):
+                        orig_index += 1
+                elif tag == '+':
+                    result_lines.append(text)
+                elif tag == '\\':
+                    continue
+                else:
+                    continue
+        result_lines.extend(original_lines[orig_index:])
+        content = "\n".join(result_lines)
+        if result_lines:
+            content += "\n"
+        target_file = workspace_path / target_rel
+        target_file.parent.mkdir(parents=True, exist_ok=True)
+        target_file.write_text(content, encoding="utf-8")
+        rewritten.append(target_rel)
+    return rewritten
+
+
+def _apply_diff_rewrite_fallback(
+    cleaned_patch: str,
+    workspace_path: Path,
+) -> Optional[List[str]]:
+    rewrites = _extract_full_file_rewrites(cleaned_patch)
+    if rewrites:
+        rewritten_files: List[str] = []
+        for rel_path, content in rewrites.items():
+            target_path = workspace_path / rel_path
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(content, encoding="utf-8")
+            rewritten_files.append(rel_path)
+        return rewritten_files
+
+    parsed = _parse_unified_diff(cleaned_patch)
+    if not parsed:
+        return None
+    return _apply_parsed_unified_diff(parsed, workspace_path)
+
+
+def _should_attempt_diff_rewrite(diagnostic: str) -> bool:
+    lowered = diagnostic.lower()
+    return any(
+        keyword in lowered
+        for keyword in (
+            "malformed patch",
+            "unexpected end of file",
+            "hunks ignored",
+            "no file to patch",
+            "hunk failed",
+            "out of 1 hunks failed",
+        )
+    )
+
+
+def apply_patch(
+    patch_text: str,
+    workspace_path: Path,
+    *,
+    allow_diff_rewrite_fallback: bool,
+    attempt_summary: Dict,
+    attempt_dir: Path,
+) -> None:
+    cleaned_patch, git_style = clean_patch_text(patch_text)
+    patch_bytes = cleaned_patch.encode("utf-8")
+
+    patch_args = ["patch", "--force", "-p1" if git_style else "-p0"]
+    dry_run_args = ["patch", "--dry-run", "--force", "-p1" if git_style else "-p0"]
+
+    dry_run = _run_patch_command(dry_run_args, patch_bytes, workspace_path)
+    if dry_run.returncode != 0:
+        stdout_text = dry_run.stdout.decode()
+        stderr_text = dry_run.stderr.decode()
+        diagnostic = f"{stdout_text}\n{stderr_text}" if stdout_text or stderr_text else ""
+        if allow_diff_rewrite_fallback and _should_attempt_diff_rewrite(diagnostic):
+            rewritten_files = _apply_diff_rewrite_fallback(cleaned_patch, workspace_path)
+            if rewritten_files:
+                attempt_summary['diff_rewrite_fallback_used'] = True
+                attempt_summary['diff_rewrite_files'] = sorted(rewritten_files)
+                store_text(
+                    attempt_dir / "diff_rewrite_fallback.log",
+                    "Applied diff rewrite fallback to:\n" + "\n".join(sorted(rewritten_files)),
+                )
+                return
+        raise HarnessError(
+            "Patch failed dry-run validation:\n"
+            f"STDOUT:\n{stdout_text}\n"
+            f"STDERR:\n{stderr_text}"
+        )
+
+    apply_process = _run_patch_command(patch_args, patch_bytes, workspace_path)
+    if apply_process.returncode != 0:
         raise HarnessError(
             "Failed to apply patch:\n"
-            f"STDOUT:\n{process.stdout.decode()}\n"
-            f"STDERR:\n{process.stderr.decode()}"
+            f"STDOUT:\n{apply_process.stdout.decode()}\n"
+            f"STDERR:\n{apply_process.stderr.decode()}"
         )
 
 
@@ -305,6 +685,13 @@ def run_evaluation(
     env.setdefault("PYTHONPATH", ".")
     if env_updates:
         env.update(env_updates)
+    if command[:2] == ["go", "test"]:
+        go_root = workspace_path
+        if working_dir:
+            go_root = workspace_path / working_dir
+        go_root = go_root.resolve()
+        if not any((go_root / candidate).exists() for candidate in ("go.mod", "go.work")):
+            env.setdefault("GO111MODULE", "off")
     workdir = workspace_path if working_dir is None else workspace_path / working_dir
 
     return secure_run(
@@ -344,6 +731,8 @@ def evaluate_attempt(
     include_tests: bool,
     install_deps_flag: bool,
     response_override: Optional[str],
+    allow_incomplete_diffs: bool,
+    allow_diff_rewrite_fallback: bool,
     run_dir: Path,
 ) -> Dict:
     prompt = build_prompt(task_id, metadata, include_tests=include_tests)
@@ -388,13 +777,19 @@ def evaluate_attempt(
 
     workspace_path: Optional[Path] = None
     try:
-        patch_text = extract_patch(raw_response)
+        patch_text = extract_patch(raw_response, allow_incomplete_diffs=allow_incomplete_diffs)
         store_text(attempt_dir / "patch.diff", patch_text)
 
         workspace_path = prepare_run_directory(task_id, metadata)
         if install_deps_flag:
             install_requirements(workspace_path)
-        apply_patch(patch_text, workspace_path)
+        apply_patch(
+            patch_text,
+            workspace_path,
+            allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
+            attempt_summary=attempt_summary,
+            attempt_dir=attempt_dir,
+        )
 
         eval_config = metadata.get("eval", {})
         timeout = eval_config.get("timeout_seconds", 300)
@@ -516,12 +911,37 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--models", nargs="+", default=[DEFAULT_MODEL], help="List of OpenRouter model identifiers")
     parser.add_argument("--samples", type=int, default=1, help="Number of samples per task/model")
     parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--max-tokens", type=int, default=800)
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
     parser.add_argument("--response-file", type=Path, help="Replay a stored model response (single-task runs only)")
     parser.add_argument("--dry-run", action="store_true", help="Print prompts only, skip model calls and evaluation")
     parser.add_argument("--include-tests", action="store_true", help="Include test files in the model prompt context")
     parser.add_argument("--install-deps", action="store_true", help="Install requirements.txt inside each attempt workspace")
     parser.add_argument("--output-dir", type=Path, default=RUN_ARTIFACTS, help="Directory to write run artifacts")
+    parser.add_argument(
+        "--allow-incomplete-diffs",
+        dest="allow_incomplete_diffs",
+        action="store_true",
+        help="Allow truncated diff fences when the heuristic and dry-run validation succeed",
+    )
+    parser.add_argument(
+        "--no-allow-incomplete-diffs",
+        dest="allow_incomplete_diffs",
+        action="store_false",
+        help="Disallow truncated diff fences regardless of configuration",
+    )
+    parser.add_argument(
+        "--allow-diff-rewrite-fallback",
+        dest="allow_diff_rewrite_fallback",
+        action="store_true",
+        help="Allow rewrite fallback for malformed diffs emitted by the model",
+    )
+    parser.add_argument(
+        "--no-allow-diff-rewrite-fallback",
+        dest="allow_diff_rewrite_fallback",
+        action="store_false",
+        help="Disable rewrite fallback for malformed diffs",
+    )
+    parser.set_defaults(allow_incomplete_diffs=None, allow_diff_rewrite_fallback=None)
     return parser.parse_args(argv)
 
 
@@ -547,12 +967,14 @@ def run_tasks(
     models: List[str],
     samples: int = 1,
     temperature: float = 0.0,
-    max_tokens: int = 800,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
     include_tests: bool = False,
     install_deps: bool = False,
     output_dir: Path = RUN_ARTIFACTS,
     response_file: Optional[Path] = None,
     response_text: Optional[str] = None,
+    allow_incomplete_diffs: Optional[bool] = None,
+    allow_diff_rewrite_fallback: Optional[bool] = None,
     progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
     run_id: Optional[str] = None,
 ) -> Dict:
@@ -576,6 +998,11 @@ def run_tasks(
     elif response_text is not None:
         response_override = response_text
 
+    if allow_incomplete_diffs is None:
+        allow_incomplete_diffs = DEFAULT_ALLOW_INCOMPLETE_DIFFS
+    if allow_diff_rewrite_fallback is None:
+        allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
+
     attempts: List[Dict] = []
 
     for model in models:
@@ -592,6 +1019,8 @@ def run_tasks(
                     include_tests=include_tests,
                     install_deps_flag=install_deps,
                     response_override=response_override,
+                    allow_incomplete_diffs=allow_incomplete_diffs,
+                    allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
                     run_dir=run_dir,
                 )
                 attempts.append(attempt_summary)
@@ -655,6 +1084,8 @@ def run_tasks(
         "max_tokens": max_tokens,
         "include_tests": include_tests,
         "install_deps": install_deps,
+        "allow_incomplete_diffs": allow_incomplete_diffs,
+        "allow_diff_rewrite_fallback": allow_diff_rewrite_fallback,
         "attempts": attempts,
         "metrics": compute_metrics(attempts, models, tasks, samples),
         "timing": {
@@ -684,6 +1115,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     tasks = resolve_task_list(args)
     models = args.models
     samples = max(1, args.samples)
+    allow_incomplete_diffs = (
+        DEFAULT_ALLOW_INCOMPLETE_DIFFS
+        if args.allow_incomplete_diffs is None
+        else args.allow_incomplete_diffs
+    )
+    allow_diff_rewrite_fallback = (
+        DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
+        if args.allow_diff_rewrite_fallback is None
+        else args.allow_diff_rewrite_fallback
+    )
 
     if args.response_file and (len(tasks) != 1 or len(models) != 1 or samples != 1):
         raise HarnessError("--response-file is only supported for single-task, single-model, single-sample runs.")
@@ -709,6 +1150,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         install_deps=args.install_deps,
         output_dir=args.output_dir,
         response_file=args.response_file,
+        allow_incomplete_diffs=allow_incomplete_diffs,
+        allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
         progress_callback=progress_callback,
     )
     print(f"Run artifacts stored in {summary['run_dir']}")

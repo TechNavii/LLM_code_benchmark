@@ -16,11 +16,13 @@ class HarnessSettings(BaseSettings):
     openrouter_api_key: str = Field(validation_alias="OPENROUTER_API_KEY")
     default_model: str = "openrouter/google/gemini-pro"
     default_temperature: float = 0.0
-    default_max_tokens: int = 800
+    default_max_tokens: int = 32000
     include_tests_by_default: bool = False
     install_deps_by_default: bool = False
     timeout_seconds: int = 300
     max_log_chars: int = 20000
+    allow_incomplete_diffs: bool = True
+    allow_diff_rewrite_fallback: bool = True
     tasks_root: Path = ROOT / "tasks"
     runs_root: Path = ROOT / "runs"
 

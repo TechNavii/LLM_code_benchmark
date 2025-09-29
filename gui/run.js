@@ -1,3 +1,15 @@
+import { TASK_LANGUAGE } from './task-language.js';
+
+const LANGUAGE_LABELS = {
+  javascript: 'JS',
+  python: 'PY',
+  go: 'GO',
+  cpp: 'C++',
+  html: 'HTML',
+  rust: 'RS',
+  default: '??',
+};
+
 const params = new URLSearchParams(window.location.search);
 const runId = params.get('run_id');
 
@@ -84,6 +96,8 @@ function renderRunSummary(summary) {
     { label: 'Max Tokens', value: summary.max_tokens },
     { label: 'Include Tests', value: summary.include_tests ? 'Yes' : 'No' },
     { label: 'Install Dependencies', value: summary.install_deps ? 'Yes' : 'No' },
+    { label: 'Allow Incomplete Diffs', value: summary.allow_incomplete_diffs ? 'Yes' : 'No' },
+    { label: 'Allow Diff Rewrite', value: summary.allow_diff_rewrite_fallback ? 'Yes' : 'No' },
   ];
   metaItems.forEach(({ label, value }) => {
     const span = document.createElement('span');
@@ -107,8 +121,10 @@ function renderAttempts(summary) {
     const row = document.createElement('tr');
     row.style.animationDelay = `${index * 30}ms`;
     const { label, className, chip } = mapStatus(attempt.status);
+    const language = (TASK_LANGUAGE && TASK_LANGUAGE[attempt.task_id]) || 'default';
+    const languageLabel = LANGUAGE_LABELS[language] || LANGUAGE_LABELS.default;
     row.innerHTML = `
-      <td>${attempt.task_id}</td>
+      <td><span class="task-name"><span class="task-icon ${language}">${languageLabel}</span><span>${attempt.task_id}</span></span></td>
       <td class="status-cell ${className}"><span class="status-chip ${chip}">${label}</span></td>
       <td>${formatNumber(attempt.duration_seconds)}</td>
       <td>${extractTokens(attempt.usage, 'prompt')}</td>

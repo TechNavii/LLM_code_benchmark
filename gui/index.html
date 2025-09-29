@@ -12,8 +12,8 @@
     <p class="tagline">Monitor model performance with live runs, rich metrics, and neon-fast insights.</p>
   </header>
 
-  <main>
-    <section class="card">
+  <main class="dashboard-grid">
+    <section class="card launch-card">
       <h2>Launch Run</h2>
       <form id="run-form">
         <label>
@@ -28,39 +28,47 @@
           Samples
           <input type="number" id="sample-input" min="1" value="1" />
         </label>
-        <label class="inline">
-          <input type="checkbox" id="include-tests" /> Include tests in prompt
-        </label>
-        <label class="inline">
-          <input type="checkbox" id="install-deps" /> Install requirements per task
-        </label>
+        <details class="advanced-options" open>
+          <summary>Advanced options</summary>
+          <div class="advanced-grid">
+            <label>
+              Temperature
+              <input type="number" id="temperature-input" min="0" max="2" step="0.1" value="0" />
+            </label>
+            <label>
+              Max tokens
+              <input type="number" id="max-tokens-input" min="1" max="100000" value="32000" />
+            </label>
+            <label>
+              Response override (optional)
+              <textarea id="response-text" rows="3" placeholder="Paste a stored model response to replay"></textarea>
+            </label>
+            <div class="advanced-flags">
+              <label class="inline">
+                <input type="checkbox" id="include-tests" /> Include tests in prompt
+              </label>
+              <label class="inline">
+                <input type="checkbox" id="install-deps" /> Install requirements per task
+              </label>
+              <label class="inline">
+                <input type="checkbox" id="allow-incomplete-diffs" checked /> Allow incomplete diff heuristic
+              </label>
+              <label class="inline">
+                <input type="checkbox" id="allow-diff-rewrite" checked /> Allow diff rewrite fallback
+              </label>
+            </div>
+          </div>
+        </details>
         <button type="submit" id="run-button">Start Run</button>
+            <div class="launch-info" id="launch-info">
+        <span>Latest run ID:</span> <span id="latest-run-id">—</span>
+      </div>
+
       </form>
       <div id="run-status" class="status"></div>
     </section>
 
-    <section class="card" id="results-card" hidden>
-      <h2>Latest Run Results (<span id="run-id"></span>)</h2>
-      <div class="metrics" id="aggregate-metrics"></div>
-      <div class="table-wrapper">
-      <table>
-        <thead>
-          <tr>
-            <th>Task</th>
-            <th>Status</th>
-            <th>Duration (s)</th>
-            <th>Prompt Tokens</th>
-            <th>Completion Tokens</th>
-            <th>Cost (USD)</th>
-            <th>Error</th>
-          </tr>
-        </thead>
-        <tbody id="results-body"></tbody>
-      </table>
-      </div>
-    </section>
-
-    <section class="card">
+    <section class="card accent-card leaderboard-card">
       <h2>Leaderboard</h2>
       <div class="table-wrapper">
       <table>
@@ -78,7 +86,30 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card accent-card results-card results-empty" id="results-card" hidden>
+      <h2>Latest Run Results (<span id="run-id"></span>)</h2>
+      <div class="results-placeholder" id="results-placeholder">
+        <p>Start a run to see live attempt results here.</p>
+      </div>
+      <div class="metrics" id="aggregate-metrics"></div>
+      <div class="table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th class="task-header">Task</th>
+            <th>Status</th>
+            <th>Duration (s)</th>
+            <th>Prompt Tokens</th>
+            <th>Completion Tokens</th>
+            <th>Cost (USD)</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody id="results-body"></tbody>
+      </table>
+      </div>
+    </section>
+    <section class="card recent-card">
       <h2>Recent Runs</h2>
       <div class="table-wrapper">
       <table>

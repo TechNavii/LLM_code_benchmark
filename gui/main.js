@@ -1,3 +1,15 @@
+import { TASK_LANGUAGE } from './task-language.js';
+
+const LANGUAGE_LABELS = {
+  javascript: 'JS',
+  python: 'PY',
+  go: 'GO',
+  cpp: 'C++',
+  html: 'HTML',
+  rust: 'RS',
+  default: '??',
+};
+
 const runForm = document.querySelector('#run-form');
 const runButton = document.querySelector('#run-button');
 const runStatus = document.querySelector('#run-status');
@@ -7,6 +19,14 @@ const resultsBody = document.querySelector('#results-body');
 const aggregateMetrics = document.querySelector('#aggregate-metrics');
 const leaderboardBody = document.querySelector('#leaderboard-body');
 const historyBody = document.querySelector('#history-body');
+const dashboardGrid = document.querySelector('main.dashboard-grid');
+const resultsPlaceholder = document.querySelector('#results-placeholder');
+const latestRunIdLabel = document.querySelector('#latest-run-id');
+const temperatureInput = runForm.querySelector('#temperature-input');
+const maxTokensInput = runForm.querySelector('#max-tokens-input');
+const responseTextInput = runForm.querySelector('#response-text');
+const allowIncompleteDiffsInput = runForm.querySelector('#allow-incomplete-diffs');
+const allowDiffRewriteInput = runForm.querySelector('#allow-diff-rewrite');
 
 let currentSocket = null;
 let currentRun = null;
@@ -14,6 +34,56 @@ let currentRun = null;
 runForm.addEventListener('submit', startRun);
 refreshLeaderboard();
 refreshHistory();
+resetResultsLayout();
+
+
+function setResultsPlaceholder(message) {
+  if (!resultsPlaceholder) return;
+  const holder = resultsPlaceholder.querySelector('p') || resultsPlaceholder;
+  holder.textContent = message;
+}
+
+function setLatestRunId(runId) {
+  if (!latestRunIdLabel) return;
+  if (!runId) {
+    latestRunIdLabel.textContent = '—';
+    latestRunIdLabel.removeAttribute('title');
+    return;
+  }
+  const displayId = formatRunId(runId);
+  latestRunIdLabel.textContent = displayId;
+  latestRunIdLabel.title = runId;
+}
+
+function showResultsPlaceholder(message, runId) {
+  if (!resultsCard) return;
+  if (message) setResultsPlaceholder(message);
+  if (runId && runIdSpan) {
+    runIdSpan.textContent = runId;
+  }
+  resultsCard.hidden = false;
+  resultsCard.classList.add('results-empty');
+  dashboardGrid?.classList.add('show-results');
+}
+
+function hideResultsPlaceholder() {
+  if (!resultsCard) return;
+  resultsCard.classList.remove('results-empty');
+  resultsCard.hidden = false;
+}
+
+function resetResultsLayout(message = 'Start a run to see live attempt results here.') {
+  dashboardGrid?.classList.remove('show-results');
+  if (resultsCard) {
+    resultsCard.classList.add('results-empty');
+    resultsCard.hidden = true;
+    setResultsPlaceholder(message);
+  }
+  if (runIdSpan) {
+    runIdSpan.textContent = '—';
+  }
+  setLatestRunId(null);
+}
 
 function mapStatus(status) {
   const normalized = (status || '').toString().trim().toLowerCase();
@@ -38,6 +108,13 @@ function applyStatus(cell, status) {
   cell.innerHTML = `<span class="status-chip ${chip}">${label}</span>`;
 }
 
+function renderTaskName(taskId) {
+  const language = (TASK_LANGUAGE && TASK_LANGUAGE[taskId]) || 'default';
+  const label = LANGUAGE_LABELS[language] || LANGUAGE_LABELS.default;
+  const iconClass = LANGUAGE_LABELS[language] ? language : 'default';
+  return `<span class="task-name"><span class="task-icon ${iconClass}">${label}</span><span>${taskId}</span></span>`;
+}
+
 async function startRun(event) {
   event.preventDefault();
   const models = getInputArray('#model-input');
@@ -53,6 +130,30 @@ async function startRun(event) {
     include_tests: runForm.querySelector('#include-tests').checked,
     install_deps: runForm.querySelector('#install-deps').checked,
   };
+  if (temperatureInput) {
+    const value = Number(temperatureInput.value);
+    if (!Number.isNaN(value)) {
+      payload.temperature = value;
+    }
+  }
+  if (maxTokensInput) {
+    const value = parseInt(maxTokensInput.value, 10);
+    if (!Number.isNaN(value) && value > 0) {
+      payload.max_tokens = value;
+    }
+  }
+  if (responseTextInput) {
+    const responseText = responseTextInput.value.trim();
+    if (responseText) {
+      payload.response_text = responseText;
+    }
+  }
+  if (allowIncompleteDiffsInput) {
+    payload.allow_incomplete_diffs = allowIncompleteDiffsInput.checked;
+  }
+  if (allowDiffRewriteInput) {
+    payload.allow_diff_rewrite_fallback = allowDiffRewriteInput.checked;
+  }
   if (tasks.length) {
     payload.tasks = tasks;
   }
@@ -60,7 +161,6 @@ async function startRun(event) {
   abortCurrentSocket();
   runButton.disabled = true;
   renderStatus('Launching run…', 'info');
-  resultsCard.hidden = true;
 
   try {
     const response = await fetch('/runs', {
@@ -74,11 +174,14 @@ async function startRun(event) {
     }
     const data = await response.json();
     renderStatus(`Run ${data.run_id} started…`, 'info');
+    setLatestRunId(data.run_id);
+    showResultsPlaceholder('Waiting for live attempt updates…', data.run_id);
     listenToRun(data.run_id);
   } catch (error) {
     console.error(error);
     renderStatus(`Run failed to launch: ${error.message}`, 'error');
     runButton.disabled = false;
+    resetResultsLayout('Start a run to see live attempt results here.');
   }
 }
 
@@ -115,6 +218,9 @@ function listenToRun(runId) {
         renderStatus(`Run ${runId} failed: ${data.message}`, 'error');
         runButton.disabled = false;
         refreshHistory();
+        if (!currentRun.rows.size) {
+          showResultsPlaceholder('Run halted before attempts could start.', runId);
+        }
         break;
       default:
         break;
@@ -130,13 +236,19 @@ function listenToRun(runId) {
     if (!currentRun?.completed) {
       renderStatus('Connection closed before completion', 'error');
       runButton.disabled = false;
+      if (!currentRun?.rows?.size) {
+        showResultsPlaceholder('Connection closed before run results were available.', currentRun?.runId);
+      }
     }
   };
 }
 
 function setupRunView(metadata, runId) {
   const { models = [], tasks = [] } = metadata || {};
+  hideResultsPlaceholder();
   resultsCard.hidden = false;
+  dashboardGrid?.classList.add('show-results');
+  setLatestRunId(runId);
   resultsCard.classList.remove('card-pop');
   requestAnimationFrame(() => resultsCard.classList.add('card-pop'));
 
@@ -163,7 +275,7 @@ function setupRunView(metadata, runId) {
     row.style.animationDelay = `${index * 30}ms`;
     row.dataset.taskId = task;
     row.innerHTML = `
-      <td>${task}</td>
+      <td>${renderTaskName(task)}</td>
       <td class="status-cell"></td>
       <td>-</td>
       <td>-</td>
@@ -194,8 +306,10 @@ function updateAttemptRow(event) {
 }
 
 function renderRun(summary) {
+  hideResultsPlaceholder();
   resultsCard.hidden = false;
   runIdSpan.textContent = summary.run_id || summary.run_dir?.split('/').pop();
+  setLatestRunId(summary.run_id || summary.run_dir);
 
   aggregateMetrics.innerHTML = '';
   const accuracy = summary.metrics?.overall?.macro_model_accuracy ?? 0;
@@ -230,7 +344,7 @@ function renderRun(summary) {
     const cost = attempt.cost_usd != null ? `$${attempt.cost_usd.toFixed(6)}` : '-';
     const duration = attempt.duration_seconds != null ? attempt.duration_seconds.toFixed(2) : '-';
     row.innerHTML = `
-      <td>${attempt.task_id}</td>
+      <td>${renderTaskName(attempt.task_id)}</td>
       <td class="status-cell"></td>
       <td>${duration}</td>
       <td>${prompt ?? '-'}</td>

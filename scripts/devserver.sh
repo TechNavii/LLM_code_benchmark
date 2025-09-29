@@ -22,6 +22,64 @@ if ! python -c "import requests" >/dev/null 2>&1; then
   python -m pip install --disable-pip-version-check -q requests
 fi
 
-exec uvicorn server.api:app --reload \
-  --reload-exclude '.venv/*' \
+UVICORN_ARGS=(
+  uvicorn
+  server.api:app
+  --reload
+  --reload-exclude '.venv/*'
   --reload-exclude 'runs/*'
+)
+
+CACHE_BUSTER="$(date +%s)"
+
+cleanup() {
+  if [ -n "${UVICORN_PID:-}" ] && kill -0 "$UVICORN_PID" >/dev/null 2>&1; then
+    kill "$UVICORN_PID" >/dev/null 2>&1 || true
+    wait "$UVICORN_PID" 2>/dev/null || true
+  fi
+}
+
+trap cleanup EXIT
+trap 'cleanup; exit 0' INT TERM
+
+"${UVICORN_ARGS[@]}" &
+UVICORN_PID=$!
+
+# Poll until uvicorn is answering before opening the browser
+python <<'PY'
+import socket
+import time
+import os
+
+host = os.environ.get('DEVSERVER_HOST', '127.0.0.1')
+port = int(os.environ.get('DEVSERVER_PORT', '8000'))
+
+for _ in range(50):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        try:
+            sock.connect((host, port))
+        except OSError:
+            time.sleep(0.2)
+        else:
+            break
+PY
+
+if [ -z "${DEVSERVER_NO_REFRESH:-}" ]; then
+  python <<PY || true
+import os
+import webbrowser
+
+host = os.environ.get('DEVSERVER_HOST', '127.0.0.1')
+port = int(os.environ.get('DEVSERVER_PORT', '8000'))
+cache_buster = os.environ.get('DEVSERVER_CACHE_BUSTER', '${CACHE_BUSTER}')
+url = f"http://{host}:{port}/ui/index.html?devrefresh={cache_buster}"
+
+try:
+    webbrowser.open(url, new=0, autoraise=True)
+except Exception as exc:  # pragma: no cover - desktop environment issues
+    print(f"[devserver] Failed to open browser automatically: {exc}")
+PY
+fi
+
+wait "$UVICORN_PID"

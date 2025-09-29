@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
+from harness.config import get_settings as get_harness_settings
 from harness.run_harness import run_tasks
 from server import database
 from server.config import get_settings
@@ -21,6 +22,10 @@ from server.validators import ValidatedRunRequest
 router = APIRouter()
 settings = get_settings()
 logger = structlog.get_logger(__name__)
+HARNESS_SETTINGS = get_harness_settings()
+DEFAULT_ALLOW_INCOMPLETE_DIFFS = HARNESS_SETTINGS.allow_incomplete_diffs
+DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK = HARNESS_SETTINGS.allow_diff_rewrite_fallback
+DEFAULT_MAX_TOKENS = HARNESS_SETTINGS.default_max_tokens
 
 
 class RunLaunchResponse(BaseModel):
@@ -49,9 +54,11 @@ class RunRequestPayload(BaseModel):
     tasks: Optional[List[str]] = None
     samples: int = 1
     temperature: float = 0.0
-    max_tokens: int = 800
+    max_tokens: int = DEFAULT_MAX_TOKENS
     include_tests: bool = False
     install_deps: bool = False
+    allow_incomplete_diffs: bool = DEFAULT_ALLOW_INCOMPLETE_DIFFS
+    allow_diff_rewrite_fallback: bool = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
     response_text: Optional[str] = None
 
 
@@ -127,6 +134,13 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
             "models": validated.models,
             "tasks": tasks,
             "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "samples": validated.samples,
+            "temperature": validated.temperature,
+            "max_tokens": validated.max_tokens,
+            "include_tests": validated.include_tests,
+            "install_deps": validated.install_deps,
+            "allow_incomplete_diffs": validated.allow_incomplete_diffs,
+            "allow_diff_rewrite_fallback": validated.allow_diff_rewrite_fallback,
         },
     )
 
@@ -143,6 +157,7 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
             "completion_tokens": (summary.get("usage") or {}).get("completion_tokens"),
             "cost_usd": summary.get("cost_usd"),
             "error": summary.get("error"),
+            "diff_rewrite_fallback_used": summary.get("diff_rewrite_fallback_used"),
         }
         progress_manager.publish_attempt(run_id, payload)
 
@@ -157,6 +172,8 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
                 max_tokens=validated.max_tokens,
                 include_tests=validated.include_tests,
                 install_deps=validated.install_deps,
+                allow_incomplete_diffs=validated.allow_incomplete_diffs,
+                allow_diff_rewrite_fallback=validated.allow_diff_rewrite_fallback,
                 output_dir=output_dir,
                 response_text=validated.response_text,
                 progress_callback=progress_proxy,
