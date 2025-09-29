@@ -11,6 +11,9 @@ fi
 
 source "$VENV_DIR/bin/activate"
 
+# uvicorn expects to import the server package from the repo root
+cd "$ROOT_DIR"
+
 if ! python -c "import requests" >/dev/null 2>&1; then
   echo "[devserver] Installing Python dependencies"
   python -m pip install --disable-pip-version-check -q --upgrade pip
