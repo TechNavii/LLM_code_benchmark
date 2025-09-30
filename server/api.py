@@ -8,8 +8,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from server.routes.router import router
+from server.routes.qa_router import router as qa_router
 from server.config import get_settings
 from server.database import init_db
+from server.qa_database import init_db as init_qa_db
 from server.logging import configure_logging
 
 
@@ -58,7 +60,9 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    app.include_router(qa_router)
     init_db()
+    init_qa_db()
     return app
 
 

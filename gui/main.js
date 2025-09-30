@@ -27,11 +27,17 @@ const maxTokensInput = runForm.querySelector('#max-tokens-input');
 const responseTextInput = runForm.querySelector('#response-text');
 const allowIncompleteDiffsInput = runForm.querySelector('#allow-incomplete-diffs');
 const allowDiffRewriteInput = runForm.querySelector('#allow-diff-rewrite');
+const openQaButton = document.querySelector('#open-qa-button');
 
 let currentSocket = null;
 let currentRun = null;
 
 runForm.addEventListener('submit', startRun);
+if (openQaButton) {
+  openQaButton.addEventListener('click', () => {
+    window.location.href = '/ui/qa/index.html';
+  });
+}
 refreshLeaderboard();
 refreshHistory();
 resetResultsLayout();

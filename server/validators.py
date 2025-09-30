@@ -13,6 +13,7 @@ _HARNESS_SETTINGS = get_settings()
 _DEFAULT_ALLOW_INCOMPLETE_DIFFS = _HARNESS_SETTINGS.allow_incomplete_diffs
 _DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK = _HARNESS_SETTINGS.allow_diff_rewrite_fallback
 _DEFAULT_MAX_TOKENS = _HARNESS_SETTINGS.default_max_tokens
+_DEFAULT_TEMPERATURE = _HARNESS_SETTINGS.default_temperature
 
 
 MODEL_PATTERN = re.compile(r"^[a-zA-Z0-9_\-/\.]+$")
@@ -23,8 +24,8 @@ class ValidatedRunRequest(BaseModel):
     models: List[str] = Field(..., min_length=1)
     tasks: Optional[List[str]] = Field(default=None)
     samples: int = Field(default=1, ge=1, le=10)
-    temperature: float = Field(default=0.0, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=_DEFAULT_MAX_TOKENS, ge=1, le=100_000)
+    temperature: float = Field(default=_DEFAULT_TEMPERATURE, ge=0.0, le=2.0)
+    max_tokens: int = Field(default=_DEFAULT_MAX_TOKENS, ge=1, le=200_000)
     include_tests: bool = False
     install_deps: bool = False
     allow_incomplete_diffs: bool = Field(default=_DEFAULT_ALLOW_INCOMPLETE_DIFFS)

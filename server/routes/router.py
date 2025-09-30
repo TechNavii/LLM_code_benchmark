@@ -26,6 +26,7 @@ HARNESS_SETTINGS = get_harness_settings()
 DEFAULT_ALLOW_INCOMPLETE_DIFFS = HARNESS_SETTINGS.allow_incomplete_diffs
 DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK = HARNESS_SETTINGS.allow_diff_rewrite_fallback
 DEFAULT_MAX_TOKENS = HARNESS_SETTINGS.default_max_tokens
+DEFAULT_TEMPERATURE = HARNESS_SETTINGS.default_temperature
 
 
 class RunLaunchResponse(BaseModel):
@@ -53,7 +54,7 @@ class RunRequestPayload(BaseModel):
     models: List[str]
     tasks: Optional[List[str]] = None
     samples: int = 1
-    temperature: float = 0.0
+    temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
     include_tests: bool = False
     install_deps: bool = False

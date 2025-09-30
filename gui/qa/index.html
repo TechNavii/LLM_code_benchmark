@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Expert QA Benchmark</title>
+  <link rel="stylesheet" href="/ui/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Expert QA Benchmark</h1>
+    <p class="tagline">Evaluate models on 100 expert-level questions with instant verdicts.</p>
+  </header>
+
+  <main class="dashboard-grid qa-grid">
+    <section class="card launch-card">
+      <h2>Launch Question Run</h2>
+      <form id="qa-run-form">
+        <label>
+          Model ID(s)
+          <input type="text" id="qa-model-input" placeholder="openrouter/google/gemini-pro" required />
+        </label>
+        <label>
+          Samples
+          <input type="number" id="qa-sample-input" min="1" value="1" />
+        </label>
+        <div class="grid-split">
+          <label>
+            Temperature
+            <input type="number" id="qa-temperature-input" min="0" max="2" step="0.1" value="0.5" />
+          </label>
+          <label>
+            Max tokens
+            <input type="number" id="qa-max-tokens-input" min="1" max="200000" value="200000" />
+          </label>
+        </div>
+        <button type="submit" id="qa-run-button">Start Question Benchmark</button>
+        <button type="button" class="secondary" id="qa-back-button">Back to Coding Tasks</button>
+        <div class="launch-info" id="qa-launch-info">
+          <span>Latest run ID:</span> <span id="qa-latest-run-id">—</span>
+        </div>
+      </form>
+      <div id="qa-run-status" class="status"></div>
+    </section>
+
+    <section class="card accent-card leaderboard-card">
+      <h2>Question Leaderboard</h2>
+      <div id="qa-leaderboard-status" class="status"></div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Best Accuracy</th>
+              <th>Cost @ Best (USD)</th>
+              <th>Duration @ Best (s)</th>
+              <th>Runs</th>
+              <th class="actions-header">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="qa-leaderboard-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card accent-card results-card results-empty" id="qa-results-card" hidden>
+      <h2>Latest Question Run (<span id="qa-run-id">—</span>)</h2>
+      <div class="results-placeholder" id="qa-results-placeholder">
+        <p>Start a question run to see live answers and grading.</p>
+      </div>
+      <div class="metrics" id="qa-aggregate-metrics"></div>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Model</th>
+              <th>Status</th>
+              <th>Duration (s)</th>
+              <th>Prompt Tokens</th>
+              <th>Completion Tokens</th>
+              <th>Cost (USD)</th>
+              <th>Model Answer</th>
+              <th>Expected</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody id="qa-results-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card recent-card">
+      <h2>Recent Question Runs</h2>
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>Run ID</th>
+              <th>Timestamp</th>
+              <th>Model(s)</th>
+              <th>Accuracy</th>
+              <th>Total Cost (USD)</th>
+              <th>Duration (s)</th>
+            </tr>
+          </thead>
+          <tbody id="qa-history-body"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="/ui/qa/main.js" type="module"></script>
+</body>
+</html>

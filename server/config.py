@@ -42,7 +42,7 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = Field(validation_alias="OPENROUTER_API_KEY")
     default_model: str = "openrouter/google/gemini-pro"
-    default_temperature: float = 0.0
+    default_temperature: float = 0.5
 
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     api: APISettings = Field(default_factory=APISettings)
