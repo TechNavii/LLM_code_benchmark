@@ -16,7 +16,7 @@ import textwrap
 import time
 import uuid
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 try:
     import requests
@@ -148,10 +148,30 @@ def _extract_incomplete_patch(candidate: str) -> str:
     return patch
 
 
-def fetch_model_pricing(models: List[str]) -> Dict[str, Dict[str, float]]:
+def _normalize_model_id(model: str) -> str:
+    if model.startswith("openrouter/"):
+        return model.split("openrouter/", 1)[1]
+    return model
+
+
+def _store_model_metadata(
+    registry: Dict[str, Dict[str, Any]],
+    model_id: str,
+    metadata: Dict[str, Any],
+) -> None:
+    existing = registry.get(model_id, {})
+    if existing:
+        merged = {**existing, **metadata}
+    else:
+        merged = metadata
+    registry[model_id] = merged
+
+
+def fetch_model_metadata(models: List[str]) -> Dict[str, Dict[str, Any]]:
     if requests is None:
         return {}
 
+    requested = {_normalize_model_id(model) for model in models}
     try:
         response = requests.get(
             "https://openrouter.ai/api/v1/models",
@@ -166,20 +186,101 @@ def fetch_model_pricing(models: List[str]) -> Dict[str, Dict[str, float]]:
         return {}
 
     data = response.json()
-    pricing: Dict[str, Dict[str, float]] = {}
+    registry: Dict[str, Dict[str, Any]] = {}
     for entry in data.get('data', []):
         model_id = entry.get('id')
-        if model_id not in models and f"openrouter/{model_id}" not in models:
+        if not model_id:
             continue
+        is_thinking_variant = model_id.endswith(":thinking")
+        base_id = model_id.rsplit(":thinking", 1)[0] if is_thinking_variant else None
+        should_include = model_id in requested
+        if base_id and base_id in requested:
+            should_include = True
+        if not should_include:
+            continue
+
         model_pricing = entry.get('pricing') or {}
         try:
             prompt_rate = float(model_pricing.get('prompt', 0))
             completion_rate = float(model_pricing.get('completion', 0))
         except (TypeError, ValueError):
+            prompt_rate = 0.0
+            completion_rate = 0.0
+
+        metadata = {
+            "prompt": prompt_rate,
+            "completion": completion_rate,
+            "supported_parameters": entry.get("supported_parameters") or [],
+            "default_parameters": entry.get("default_parameters") or {},
+        }
+
+        _store_model_metadata(registry, model_id, metadata)
+        _store_model_metadata(registry, f"openrouter/{model_id}", metadata)
+        if is_thinking_variant and base_id:
+            _store_model_metadata(
+                registry,
+                base_id,
+                {"thinking_variant": model_id},
+            )
+            _store_model_metadata(
+                registry,
+                f"openrouter/{base_id}",
+                {"thinking_variant": model_id},
+            )
+    return registry
+
+
+# Backwards compatibility for any external imports relying on the old helper name.
+fetch_model_pricing = fetch_model_metadata
+
+
+def expand_models_with_thinking_variants(
+    models: List[str],
+    metadata: Dict[str, Dict[str, Any]],
+) -> List[str]:
+    """Return a model list expanded with thinking variants where available."""
+    expanded: List[str] = []
+    seen: set[str] = set()
+
+    for model in models:
+        if model not in seen:
+            expanded.append(model)
+            seen.add(model)
+
+        info = metadata.get(model)
+        thinking_variant = (info or {}).get("thinking_variant")
+        if not thinking_variant:
             continue
-        pricing[model_id] = {"prompt": prompt_rate, "completion": completion_rate}
-        pricing[f"openrouter/{model_id}"] = {"prompt": prompt_rate, "completion": completion_rate}
-    return pricing
+        variant_id = f"openrouter/{thinking_variant}" if model.startswith("openrouter/") else thinking_variant
+        if variant_id not in seen:
+            expanded.append(variant_id)
+            seen.add(variant_id)
+
+    return expanded
+
+
+def _compose_reasoning_payload(level: str) -> Dict[str, Any]:
+    """Translate CLI input into the OpenRouter reasoning payload."""
+    value = (level or "").strip()
+    if not value:
+        return {}
+
+    if "=" in value:
+        key, raw = value.split("=", 1)
+        key = key.strip().lower()
+        raw_value = raw.strip()
+        if key in {"budget_tokens", "tokens"}:
+            try:
+                return {"budget_tokens": int(raw_value)}
+            except ValueError:
+                pass
+        if key in {"budget_seconds", "seconds"}:
+            try:
+                return {"budget_seconds": int(raw_value)}
+            except ValueError:
+                pass
+
+    return {"effort": value}
 
 
 def discover_tasks() -> List[str]:
@@ -300,6 +401,10 @@ def call_openrouter(
     model: str,
     temperature: float,
     max_tokens: int,
+    preferred_provider: Optional[str] = None,
+    *,
+    thinking_level: Optional[str] = None,
+    model_info: Optional[Dict[str, Any]] = None,
 ) -> tuple[str, Dict, float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
@@ -325,11 +430,57 @@ def call_openrouter(
         "max_tokens": max_tokens,
     }
 
+    if preferred_provider:
+        payload["provider"] = {
+            "order": [preferred_provider],
+        }
+
+    supported_params: set[str] = set()
+    if model_info:
+        supported_params = {
+            param.lower()
+            for param in model_info.get("supported_parameters", [])
+            if isinstance(param, str)
+        }
+    if thinking_level and "reasoning" in supported_params:
+        reasoning_payload = _compose_reasoning_payload(thinking_level)
+        if reasoning_payload:
+            payload["reasoning"] = reasoning_payload
+            if "include_reasoning" in supported_params:
+                payload["include_reasoning"] = True
+
     start_time = time.perf_counter()
     response = requests.post(url, headers=headers, json=payload, timeout=120)
     duration = time.perf_counter() - start_time
-    response.raise_for_status()
-    data = response.json()
+
+    if response.status_code >= 400:
+        error_message = response.text.strip()
+        try:
+            error_payload = response.json()
+        except ValueError:
+            error_payload = None
+        if isinstance(error_payload, dict):
+            error_message = (
+                error_payload.get("error", {}).get("message")
+                or error_payload.get("message")
+                or error_payload.get("detail")
+                or error_message
+            )
+        raise HarnessError(
+            f"OpenRouter request failed ({response.status_code}): {error_message}"
+        )
+
+    try:
+        data = response.json()
+    except (requests.exceptions.JSONDecodeError, ValueError) as exc:
+        content_type = response.headers.get("content-type", "unknown")
+        body_preview = response.text.strip()
+        if len(body_preview) > 512:
+            body_preview = f"{body_preview[:512]}..."
+        raise HarnessError(
+            "OpenRouter returned a non-JSON response payload. "
+            f"status={response.status_code} content-type={content_type} preview={body_preview!r}"
+        ) from exc
     try:
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:  # pragma: no cover - API schema issues
@@ -626,6 +777,8 @@ def _should_attempt_diff_rewrite(diagnostic: str) -> bool:
             "no file to patch",
             "hunk failed",
             "out of 1 hunks failed",
+            "can't seem to find a patch",
+            "cannot find a patch",
         )
     )
 
@@ -728,6 +881,9 @@ def evaluate_attempt(
     sample_index: int,
     temperature: float,
     max_tokens: int,
+    preferred_provider: Optional[str],
+    thinking_level: Optional[str],
+    model_metadata: Dict[str, Dict[str, Any]],
     include_tests: bool,
     install_deps_flag: bool,
     response_override: Optional[str],
@@ -746,12 +902,25 @@ def evaluate_attempt(
     attempt_summary = {
         "task_id": task_id,
         "model": model,
+        "provider": preferred_provider,
         "sample_index": sample_index,
         "status": "error",
         "return_code": None,
         "error": None,
         "attempt_dir": str(attempt_dir.relative_to(run_dir)),
     }
+
+    model_info = model_metadata.get(model) or {}
+    supported_params = {
+        param.lower()
+        for param in model_info.get("supported_parameters", [])
+        if isinstance(param, str)
+    }
+    if thinking_level:
+        attempt_summary["thinking_level_requested"] = thinking_level
+        attempt_summary["thinking_level_supported"] = "reasoning" in supported_params
+        if "reasoning" in supported_params:
+            attempt_summary["thinking_level_applied"] = thinking_level
 
     try:
         if response_override is not None:
@@ -764,6 +933,9 @@ def evaluate_attempt(
                 model,
                 temperature,
                 max_tokens,
+                preferred_provider,
+                thinking_level=thinking_level if "reasoning" in supported_params else None,
+                model_info=model_info,
             )
     except HarnessError as exc:
         attempt_summary.update({"error": str(exc)})
@@ -911,7 +1083,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--models", nargs="+", default=[DEFAULT_MODEL], help="List of OpenRouter model identifiers")
     parser.add_argument("--samples", type=int, default=1, help="Number of samples per task/model")
     parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--provider", help="Prefer a specific OpenRouter provider (e.g., Groq)")
     parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument(
+        "--thinking-level",
+        dest="thinking_level",
+        help="Optional reasoning effort (e.g., low, medium, high) for thinking-capable models",
+    )
+    parser.add_argument(
+        "--include-thinking-variants",
+        action="store_true",
+        help="Also evaluate :thinking variants for models that support them.",
+    )
     parser.add_argument("--response-file", type=Path, help="Replay a stored model response (single-task runs only)")
     parser.add_argument("--dry-run", action="store_true", help="Print prompts only, skip model calls and evaluation")
     parser.add_argument("--include-tests", action="store_true", help="Include test files in the model prompt context")
@@ -968,6 +1151,9 @@ def run_tasks(
     samples: int = 1,
     temperature: float = 0.0,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    preferred_provider: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    include_thinking_variants: bool = False,
     include_tests: bool = False,
     install_deps: bool = False,
     output_dir: Path = RUN_ARTIFACTS,
@@ -990,7 +1176,12 @@ def run_tasks(
         run_dir = create_run_directory(output_dir)
         run_id = run_dir.name
 
-    pricing_table = fetch_model_pricing(models)
+    original_models = list(models)
+    model_metadata = fetch_model_metadata(models)
+    if include_thinking_variants:
+        models = expand_models_with_thinking_variants(models, model_metadata)
+        # Refresh metadata to ensure newly added variants have full entries.
+        model_metadata = fetch_model_metadata(models)
 
     response_override = None
     if response_file:
@@ -1016,6 +1207,9 @@ def run_tasks(
                     sample_index=sample_idx,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    preferred_provider=preferred_provider,
+                    thinking_level=thinking_level,
+                    model_metadata=model_metadata,
                     include_tests=include_tests,
                     install_deps_flag=install_deps,
                     response_override=response_override,
@@ -1061,7 +1255,7 @@ def run_tasks(
             completion_tokens = int(completion_tokens)
             total_completion_tokens += completion_tokens
 
-        pricing = pricing_table.get(attempt['model'])
+        pricing = model_metadata.get(attempt['model'])
         if pricing and (prompt_tokens is not None or completion_tokens is not None):
             attempt_cost = 0.0
             if prompt_tokens is not None:
@@ -1079,6 +1273,7 @@ def run_tasks(
         "output_dir": str(output_dir),
         "tasks": tasks,
         "models": models,
+        "provider": preferred_provider,
         "samples": samples,
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -1086,6 +1281,9 @@ def run_tasks(
         "install_deps": install_deps,
         "allow_incomplete_diffs": allow_incomplete_diffs,
         "allow_diff_rewrite_fallback": allow_diff_rewrite_fallback,
+        "thinking_level": thinking_level,
+        "include_thinking_variants": include_thinking_variants,
+        "requested_models": original_models,
         "attempts": attempts,
         "metrics": compute_metrics(attempts, models, tasks, samples),
         "timing": {
@@ -1097,7 +1295,7 @@ def run_tasks(
             "completion_tokens": total_completion_tokens,
             "total_cost_usd": round(total_cost, 6),
         },
-        "pricing": {model: pricing_table.get(model) for model in models if pricing_table.get(model)},
+        "pricing": {model: model_metadata.get(model) for model in models if model_metadata.get(model)},
     }
 
     summary_path = run_dir / "summary.json"
@@ -1146,6 +1344,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         samples=samples,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        preferred_provider=args.provider,
+        thinking_level=args.thinking_level,
+        include_thinking_variants=args.include_thinking_variants,
         include_tests=args.include_tests,
         install_deps=args.install_deps,
         output_dir=args.output_dir,

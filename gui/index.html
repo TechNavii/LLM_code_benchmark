@@ -20,6 +20,11 @@
           Model ID(s)
           <input type="text" id="model-input" placeholder="google/gemini-2.5-flash-lite" required />
         </label>
+        <div id="model-capabilities" class="helper-note"></div>
+        <label>
+          Provider (optional)
+          <input type="text" id="provider-input" placeholder="Z.AI" />
+        </label>
         <label>
           Tasks (optional, comma separated)
           <input type="text" id="task-input" placeholder="python_tool_weather_cli,go_feature_wordcount" />
@@ -40,6 +45,10 @@
               <input type="number" id="max-tokens-input" min="1" max="200000" value="200000" />
             </label>
             <label>
+              Thinking level (optional)
+              <input type="text" id="thinking-level-input" placeholder="e.g., medium, high, budget_tokens=6000" />
+            </label>
+            <label>
               Response override (optional)
               <textarea id="response-text" rows="3" placeholder="Paste a stored model response to replay"></textarea>
             </label>
@@ -55,6 +64,9 @@
               </label>
               <label class="inline">
                 <input type="checkbox" id="allow-diff-rewrite" checked /> Allow diff rewrite fallback
+              </label>
+              <label class="inline">
+                <input type="checkbox" id="include-thinking-variants" /> Include thinking variants automatically
               </label>
             </div>
           </div>
@@ -80,6 +92,7 @@
             <th>Cost @ Best Accuracy (USD)</th>
             <th>Duration @ Best Accuracy (s)</th>
             <th>Runs</th>
+            <th>Thinking Level</th>
             <th class="actions-header">Actions</th>
           </tr>
         </thead>

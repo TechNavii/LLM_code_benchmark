@@ -4,9 +4,9 @@ import datetime as dt
 import json
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, text
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
 from sqlalchemy.orm import Mapped, Session, declarative_base, mapped_column, relationship, sessionmaker
 
 from server.config import get_settings
@@ -159,59 +159,162 @@ def get_run(run_id: str) -> Dict | None:
         return json.loads(record.summary_json)
 
 
+def _determine_model_level(attempts: List[Dict[str, Any]], default_level: Optional[str]) -> str:
+    for attempt in attempts:
+        applied = attempt.get("thinking_level_applied")
+        if applied:
+            return applied
+    for attempt in attempts:
+        if attempt.get("thinking_level_supported") is False and attempt.get("thinking_level_requested"):
+            requested = attempt.get("thinking_level_requested")
+            if requested:
+                return f"unsupported ({requested})"
+    if default_level:
+        return default_level
+    return "base"
+
+
 def leaderboard() -> List[Dict[str, Optional[float]]]:
-    leaderboard_query = text(
-        """
-        WITH ranked AS (
-            SELECT
-                id,
-                model_id,
-                accuracy,
-                total_cost,
-                total_duration,
-                timestamp_utc,
-                ROW_NUMBER() OVER (
-                    PARTITION BY model_id
-                    ORDER BY
-                        CASE WHEN accuracy IS NULL THEN 1 ELSE 0 END,
-                        accuracy DESC,
-                        CASE WHEN total_cost IS NULL THEN 1 ELSE 0 END,
-                        total_cost ASC,
-                        CASE WHEN total_duration IS NULL THEN 1 ELSE 0 END,
-                        total_duration ASC,
-                        timestamp_utc DESC
-                ) AS row_rank
-            FROM runs
-        ), counts AS (
-            SELECT model_id, COUNT(*) AS run_count
-            FROM runs
-            GROUP BY model_id
-        )
-        SELECT
-            ranked.model_id,
-            ranked.accuracy AS best_accuracy,
-            ranked.total_cost AS cost_at_best,
-            ranked.total_duration AS duration_at_best,
-            counts.run_count AS runs
-        FROM ranked
-        JOIN counts ON counts.model_id = ranked.model_id
-        WHERE ranked.row_rank = 1
-        ORDER BY
-            CASE WHEN ranked.accuracy IS NULL THEN 1 ELSE 0 END,
-            ranked.accuracy DESC,
-            CASE WHEN ranked.total_cost IS NULL THEN 1 ELSE 0 END,
-            ranked.total_cost ASC
-        """
+    stmt = select(
+        RunRecord.id,
+        RunRecord.summary_json,
+        RunRecord.timestamp_utc,
     )
     with get_session() as session:
-        rows = session.execute(leaderboard_query).all()
-    return [
-        {
-            "model_id": row.model_id,
-            "best_accuracy": row.best_accuracy,
-            "cost_at_best": row.cost_at_best,
-            "duration_at_best": row.duration_at_best,
-            "runs": row.runs,
-        }
-        for row in rows
-    ]
+        rows = session.execute(stmt).all()
+
+    def _is_better(candidate: Dict[str, Any], incumbent: Optional[Dict[str, Any]]) -> bool:
+        if incumbent is None:
+            return True
+        cand_acc = candidate.get("accuracy")
+        inc_acc = incumbent.get("accuracy")
+        if cand_acc is None and inc_acc is not None:
+            return False
+        if cand_acc is not None and inc_acc is None:
+            return True
+        if cand_acc is not None and inc_acc is not None:
+            if cand_acc > inc_acc:
+                return True
+            if cand_acc < inc_acc:
+                return False
+        cand_cost = candidate.get("cost")
+        inc_cost = incumbent.get("cost")
+        if cand_cost is None and inc_cost is not None:
+            return False
+        if cand_cost is not None and inc_cost is None:
+            return True
+        if cand_cost is not None and inc_cost is not None:
+            if cand_cost < inc_cost:
+                return True
+            if cand_cost > inc_cost:
+                return False
+        cand_duration = candidate.get("duration")
+        inc_duration = incumbent.get("duration")
+        if cand_duration is None and inc_duration is not None:
+            return False
+        if cand_duration is not None and inc_duration is None:
+            return True
+        if cand_duration is not None and inc_duration is not None:
+            if cand_duration < inc_duration:
+                return True
+            if cand_duration > inc_duration:
+                return False
+        return (candidate.get("timestamp") or dt.datetime.min) > (incumbent.get("timestamp") or dt.datetime.min)
+
+    groups: Dict[tuple[str, str], Dict[str, Any]] = {}
+
+    for row in rows:
+        try:
+            summary = json.loads(row.summary_json)
+        except json.JSONDecodeError:
+            continue
+
+        attempts = summary.get("attempts") or []
+        if not attempts:
+            continue
+        default_level = summary.get("thinking_level")
+        metrics = summary.get("metrics") or {}
+        accuracy_map = metrics.get("model_accuracy") or {}
+        per_model_attempts: Dict[str, List[Dict[str, Any]]] = {}
+        for attempt in attempts:
+            model_id = attempt.get("model")
+            if not model_id:
+                continue
+            per_model_attempts.setdefault(model_id, []).append(attempt)
+
+        for model_id, model_attempts in per_model_attempts.items():
+            level = _determine_model_level(model_attempts, default_level)
+            key = (model_id, level)
+            cost_values = [a.get("cost_usd") for a in model_attempts if a.get("cost_usd") is not None]
+            duration_values = [a.get("duration_seconds") for a in model_attempts if a.get("duration_seconds") is not None]
+            accuracy = accuracy_map.get(model_id)
+            if accuracy is None and model_attempts:
+                successes = sum(1 for a in model_attempts if (a.get("status") or "").lower() == "passed")
+                accuracy = successes / len(model_attempts) if model_attempts else None
+            candidate = {
+                "model_id": model_id,
+                "thinking_level": level,
+                "accuracy": accuracy,
+                "cost": sum(cost_values) if cost_values else None,
+                "duration": sum(duration_values) if duration_values else None,
+                "runs": 1,
+                "timestamp": row.timestamp_utc,
+            }
+            group = groups.setdefault(key, {"runs": 0, "best": None})
+            group["runs"] += 1
+            if _is_better(candidate, group["best"]):
+                group["best"] = candidate
+
+    leaderboard_rows = []
+    for (model_id, level), info in groups.items():
+        best = info.get("best") or {}
+        leaderboard_rows.append(
+            {
+                "model_id": model_id,
+                "thinking_level": level,
+                "best_accuracy": best.get("accuracy"),
+                "cost_at_best": best.get("cost"),
+                "duration_at_best": best.get("duration"),
+                "runs": info.get("runs", 0),
+            }
+        )
+
+    leaderboard_rows.sort(
+        key=lambda row: (
+            0 if row.get("best_accuracy") is None else -row["best_accuracy"],
+            row.get("cost_at_best") if row.get("cost_at_best") is not None else float("inf"),
+            row.get("duration_at_best") if row.get("duration_at_best") is not None else float("inf"),
+            row["model_id"],
+            row.get("thinking_level") or "",
+        )
+    )
+    return leaderboard_rows
+
+
+def delete_runs_for_model(model_id: str, thinking_level: Optional[str] = None) -> int:
+    like_pattern = f"%{model_id}%"
+    with get_session() as session:
+        candidates = session.scalars(
+            select(RunRecord).where(RunRecord.model_id.like(like_pattern))
+        ).all()
+        removed = 0
+        for record in candidates:
+            models = [m.strip() for m in (record.model_id or "").split(",") if m.strip()]
+            if model_id not in models:
+                continue
+            if thinking_level:
+                try:
+                    summary = json.loads(record.summary_json)
+                except json.JSONDecodeError:
+                    continue
+                attempts = summary.get("attempts") or []
+                default_level = summary.get("thinking_level")
+                per_model_attempts = [a for a in attempts if a.get("model") == model_id]
+                if not per_model_attempts:
+                    continue
+                level = _determine_model_level(per_model_attempts, default_level)
+                if level != thinking_level:
+                    continue
+            session.delete(record)
+            removed += 1
+        return removed

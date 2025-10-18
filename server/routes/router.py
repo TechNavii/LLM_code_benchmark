@@ -11,7 +11,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from harness.config import get_settings as get_harness_settings
-from harness.run_harness import run_tasks
+from harness.run_harness import run_tasks, fetch_model_metadata
 from server import database
 from server.config import get_settings
 from server.monitoring import timed
@@ -56,11 +56,14 @@ class RunRequestPayload(BaseModel):
     samples: int = 1
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
+    provider: Optional[str] = None
     include_tests: bool = False
     install_deps: bool = False
     allow_incomplete_diffs: bool = DEFAULT_ALLOW_INCOMPLETE_DIFFS
     allow_diff_rewrite_fallback: bool = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
     response_text: Optional[str] = None
+    thinking_level: Optional[str] = None
+    include_thinking_variants: bool = False
 
 
 @router.get("/", include_in_schema=False)
@@ -105,6 +108,7 @@ def get_leaderboard() -> Dict[str, Any]:
         "models": [
             {
                 "model_id": row["model_id"],
+                "thinking_level": row.get("thinking_level"),
                 "best_accuracy": row["best_accuracy"],
                 "cost_at_best": row["cost_at_best"],
                 "duration_at_best": row["duration_at_best"],
@@ -138,10 +142,13 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
             "samples": validated.samples,
             "temperature": validated.temperature,
             "max_tokens": validated.max_tokens,
+            "provider": validated.provider,
             "include_tests": validated.include_tests,
             "install_deps": validated.install_deps,
             "allow_incomplete_diffs": validated.allow_incomplete_diffs,
             "allow_diff_rewrite_fallback": validated.allow_diff_rewrite_fallback,
+            "thinking_level": validated.thinking_level,
+            "include_thinking_variants": validated.include_thinking_variants,
         },
     )
 
@@ -159,6 +166,9 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
             "cost_usd": summary.get("cost_usd"),
             "error": summary.get("error"),
             "diff_rewrite_fallback_used": summary.get("diff_rewrite_fallback_used"),
+            "provider": validated.provider,
+            "thinking_level_applied": summary.get("thinking_level_applied"),
+            "thinking_level_requested": summary.get("thinking_level_requested"),
         }
         progress_manager.publish_attempt(run_id, payload)
 
@@ -171,6 +181,9 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
                 samples=validated.samples,
                 temperature=validated.temperature,
                 max_tokens=validated.max_tokens,
+                preferred_provider=validated.provider,
+                thinking_level=validated.thinking_level,
+                include_thinking_variants=validated.include_thinking_variants,
                 include_tests=validated.include_tests,
                 install_deps=validated.install_deps,
                 allow_incomplete_diffs=validated.allow_incomplete_diffs,
@@ -189,6 +202,52 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
 
     asyncio.create_task(runner())
     return RunLaunchResponse(run_id=run_id)
+
+
+@router.delete("/leaderboard/{model_id:path}", tags=["leaderboard"])
+def delete_leaderboard_entry(model_id: str, thinking_level: Optional[str] = None) -> Dict[str, Any]:
+    removed = database.delete_runs_for_model(model_id, thinking_level)
+    status = "removed" if removed else "already_missing"
+    return {
+        "model_id": model_id,
+        "thinking_level": thinking_level,
+        "removed_runs": removed,
+        "status": status,
+    }
+
+
+@router.get("/models/capabilities", tags=["models"])
+def get_model_capabilities(model_id: str) -> Dict[str, Any]:
+    model_id = model_id.strip()
+    if not model_id:
+        raise HTTPException(status_code=400, detail="model_id must be provided")
+    metadata = fetch_model_metadata([model_id])
+    info = metadata.get(model_id) or metadata.get(f"openrouter/{model_id}")
+    if not info:
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found.")
+    supported_parameters = [
+        param for param in info.get("supported_parameters", []) if isinstance(param, str)
+    ]
+    supported_lower = {param.lower() for param in supported_parameters}
+    supports_reasoning = "reasoning" in supported_lower
+    suggested_levels: List[str] = []
+    if supports_reasoning:
+        suggested_levels = ["low", "medium", "high"]
+    supports_budget_tokens = False
+    supports_budget_seconds = False
+    if supports_reasoning:
+        # Many providers accept numerical budgets even if not documented.
+        supports_budget_tokens = True
+        supports_budget_seconds = True
+    return {
+        "model_id": model_id,
+        "supports_thinking": supports_reasoning,
+        "thinking_variant": info.get("thinking_variant"),
+        "supported_parameters": supported_parameters,
+        "suggested_levels": suggested_levels,
+        "supports_budget_tokens": supports_budget_tokens,
+        "supports_budget_seconds": supports_budget_seconds,
+    }
 
 
 @router.websocket("/runs/{run_id}/stream")

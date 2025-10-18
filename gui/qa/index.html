@@ -21,6 +21,10 @@
           <input type="text" id="qa-model-input" placeholder="openrouter/google/gemini-pro" required />
         </label>
         <label>
+          Provider (optional)
+          <input type="text" id="qa-provider-input" placeholder="Z.AI" />
+        </label>
+        <label>
           Samples
           <input type="number" id="qa-sample-input" min="1" value="1" />
         </label>
@@ -55,6 +59,7 @@
               <th>Cost @ Best (USD)</th>
               <th>Duration @ Best (s)</th>
               <th>Runs</th>
+              <th>Thinking Level</th>
               <th class="actions-header">Actions</th>
             </tr>
           </thead>

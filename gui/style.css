@@ -122,6 +122,14 @@ main.dashboard-grid {
   gap: 0.4rem;
 }
 
+.helper-note {
+  margin: 0.35rem 0 0.75rem;
+  font-size: 0.85rem;
+  color: rgba(148, 163, 184, 0.75);
+  line-height: 1.4;
+  min-height: 1.2rem;
+}
+
 .recent-card {
   grid-area: recent;
   align-self: start;
@@ -309,6 +317,36 @@ button {
   cursor: pointer;
   box-shadow: 0 20px 35px rgba(37, 99, 235, 0.35);
   transition: transform 0.25s ease, box-shadow 0.25s ease, filter 0.25s ease;
+}
+
+button.ghost {
+  padding: 0.45rem 1.1rem;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(15, 23, 42, 0.4);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+button.ghost.danger {
+  border-color: rgba(248, 113, 113, 0.35);
+  color: var(--danger);
+}
+
+button.ghost:hover {
+  transform: none;
+  filter: none;
+  border-color: rgba(96, 165, 250, 0.55);
+  background: rgba(59, 130, 246, 0.15);
+  box-shadow: none;
+}
+
+button.ghost.danger:hover {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: rgba(248, 113, 113, 0.18);
+  color: var(--danger);
 }
 
 button:hover {

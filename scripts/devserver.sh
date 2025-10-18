@@ -25,9 +25,6 @@ fi
 UVICORN_ARGS=(
   uvicorn
   server.api:app
-  --reload
-  --reload-exclude '.venv/*'
-  --reload-exclude 'runs/*'
 )
 
 CACHE_BUSTER="$(date +%s)"

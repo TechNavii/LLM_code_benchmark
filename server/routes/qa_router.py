@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import re
 from typing import Any, Dict, List, Optional
 
 import structlog
@@ -52,6 +53,7 @@ class QARunRequest(BaseModel):
     samples: PositiveInt = 1
     temperature: float = 0.5
     max_tokens: int = 200000
+    provider: Optional[str] = None
 
     @field_validator("models")
     @classmethod
@@ -67,6 +69,20 @@ class QARunRequest(BaseModel):
         if value <= 0:
             raise ValueError("max_tokens must be positive")
         return value
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, provider: Optional[str]) -> Optional[str]:
+        if provider is None:
+            return None
+        trimmed = provider.strip()
+        if not trimmed:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9._\-/]+", trimmed):
+            raise ValueError(
+                "provider must be alphanumeric with optional hyphen/underscore characters (dots and slashes allowed)"
+            )
+        return trimmed
 
 
 @router.on_event("startup")
@@ -120,6 +136,7 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
     samples = request.samples
     temperature = request.temperature
     max_tokens = request.max_tokens
+    provider = request.provider
 
     questions = load_questions()
     if not questions:
@@ -133,6 +150,7 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
             "samples": samples,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            "provider": provider,
             "question_count": len(questions),
         },
     )
@@ -159,6 +177,7 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
                 "judge_cost_usd": attempt.get("judge_cost_usd"),
                 "judge_error": attempt.get("judge_error"),
                 "error": attempt.get("error"),
+                "provider": provider,
             },
         )
 
@@ -170,6 +189,7 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
                 samples=samples,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                provider=provider,
                 run_id=run_id,
                 progress_callback=progress_proxy,
             )

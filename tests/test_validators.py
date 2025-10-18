@@ -11,6 +11,11 @@ def test_valid_request_passes() -> None:
     assert request.samples == 2
 
 
+def test_model_with_colon_allowed() -> None:
+    request = ValidatedRunRequest(models=["anthropic/claude-3.7-sonnet:thinking"], samples=1)
+    assert request.models == ["anthropic/claude-3.7-sonnet:thinking"]
+
+
 def test_invalid_model_name() -> None:
     with pytest.raises(ValueError):
         ValidatedRunRequest(models=["invalid model"], samples=1)
@@ -19,3 +24,18 @@ def test_invalid_model_name() -> None:
 def test_allowlist_enforced() -> None:
     with pytest.raises(ValueError):
         ValidatedRunRequest(models=["model-a"], samples=1, model_allowlist=["model-b"])
+
+
+def test_provider_allows_slash() -> None:
+    request = ValidatedRunRequest(models=["model-a"], samples=1, provider="novita/fp8")
+    assert request.provider == "novita/fp8"
+
+
+def test_provider_invalid_characters() -> None:
+    with pytest.raises(ValueError):
+        ValidatedRunRequest(models=["model-a"], samples=1, provider="invalid provider")
+
+
+def test_thinking_level_trimmed() -> None:
+    request = ValidatedRunRequest(models=["model-a"], samples=1, thinking_level="  medium  ")
+    assert request.thinking_level == "medium"

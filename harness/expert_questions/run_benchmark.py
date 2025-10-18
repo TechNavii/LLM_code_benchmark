@@ -35,6 +35,7 @@ def _call_openrouter(
     model: str,
     temperature: float,
     max_tokens: int,
+    preferred_provider: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any], float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
@@ -66,32 +67,37 @@ def _call_openrouter(
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
+    if preferred_provider:
+        payload["provider"] = {
+            "order": [preferred_provider],
+        }
 
     start = time.perf_counter()
     try:
         response = requests.post(url, headers=headers, json=payload, timeout=120)
-        latency = time.perf_counter() - start
-        response.raise_for_status()
-    except requests.exceptions.HTTPError as exc:
-        response = exc.response  # type: ignore[assignment]
-        status = response.status_code if response is not None else "unknown"
-        message = str(exc)
-        if response is not None:
-            try:
-                payload = response.json()
-                message = (
-                    payload.get("error", {}).get("message")
-                    or payload.get("message")
-                    or payload.get("detail")
-                    or message
-                )
-            except ValueError:
-                message = response.text or message
-        raise RuntimeError(f"Judge request failed ({status}): {message.strip()}") from exc
     except requests.exceptions.RequestException as exc:
         raise RuntimeError(f"Judge request failed: {exc}") from exc
-    else:
-        data = response.json()
+
+    latency = time.perf_counter() - start
+
+    if response.status_code >= 400:
+        error_message = response.text.strip()
+        try:
+            error_payload = response.json()
+        except ValueError:
+            error_payload = None
+        if isinstance(error_payload, dict):
+            error_message = (
+                error_payload.get("error", {}).get("message")
+                or error_payload.get("message")
+                or error_payload.get("detail")
+                or error_message
+            )
+        raise RuntimeError(
+            f"Judge request failed ({response.status_code}): {error_message}"
+        )
+
+    data = response.json()
     try:
         content = data["choices"][0]["message"]["content"]
     except (KeyError, IndexError) as exc:  # pragma: no cover - API schema issues
@@ -146,17 +152,47 @@ def _judge_answer(
         "max_tokens": max_tokens,
     }
 
-    start = time.perf_counter()
-    response = requests.post(url, headers=headers, json=payload, timeout=120)
-    latency = time.perf_counter() - start
-    response.raise_for_status()
-    data = response.json()
-    try:
-        text = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError):
-        return False, None, "Judge response missing content", data.get("usage"), None, latency
+    max_attempts = 3
+    total_latency = 0.0
+    last_usage: Optional[Dict[str, Any]] = None
+    last_raw: Optional[str] = None
+    failure_reason: Optional[str] = None
 
-    raw_text = text.strip()
+    for attempt_index in range(1, max_attempts + 1):
+        start = time.perf_counter()
+        response = requests.post(url, headers=headers, json=payload, timeout=120)
+        latency = time.perf_counter() - start
+        total_latency += latency
+        response.raise_for_status()
+        data = response.json()
+        last_usage = data.get("usage")
+
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError):
+            raw_text = ""
+            failure_reason = "Judge response missing content"
+        else:
+            raw_text = (text or "").strip()
+            if not raw_text:
+                failure_reason = "Judge returned empty content"
+
+        if raw_text:
+            last_raw = raw_text
+            break
+
+        if attempt_index >= max_attempts:
+            final_reason = failure_reason or "Judge returned empty content"
+            return (
+                False,
+                "FAIL",
+                f"{final_reason} after {max_attempts} attempts",
+                last_usage,
+                last_raw,
+                total_latency,
+            )
+
+    raw_text = (last_raw or "").strip()
 
     def _attempt_parse(payload: str) -> Optional[Dict[str, Any]]:
         try:
@@ -185,7 +221,7 @@ def _judge_answer(
         rationale = raw_text
 
     is_pass = decision_label == "PASS"
-    return is_pass, decision_label, rationale, data.get("usage"), raw_text, latency
+    return is_pass, decision_label, rationale, last_usage, raw_text, total_latency
 
 
 def _normalise_answer(value: str) -> str:
@@ -229,6 +265,7 @@ def run_question_benchmark(
     samples: int = 1,
     temperature: float = 0.5,
     max_tokens: int = 200000,
+    provider: Optional[str] = None,
     run_id: str,
     output_dir: Optional[Path] = None,
     progress_callback: Optional[ProgressCallback] = None,
@@ -277,6 +314,7 @@ def run_question_benchmark(
 
                 attempt: AttemptSummary = {
                     "model": model,
+                    "provider": provider,
                     "sample_index": sample_index,
                     "question_number": question.number,
                     "question": question.prompt,
@@ -295,6 +333,7 @@ def run_question_benchmark(
                         model=model,
                         temperature=temperature,
                         max_tokens=max_tokens,
+                        preferred_provider=provider,
                     )
                 except Exception as exc:
                     attempt["error"] = str(exc)
@@ -337,6 +376,9 @@ def run_question_benchmark(
                                 attempt["judge_decision"] = judge_decision
                             if judge_reason:
                                 attempt["judge_rationale"] = judge_reason
+                                reason_lower = judge_reason.lower()
+                                if "judge returned empty content" in reason_lower or "judge response missing content" in reason_lower:
+                                    attempt["judge_error"] = judge_reason
                             if judge_raw:
                                 attempt["judge_raw_response"] = judge_raw
                             if judge_usage:
@@ -471,6 +513,7 @@ def run_question_benchmark(
         "output_dir": str(base_output),
         "questions": [asdict(question_map[number]) for number in sorted(question_map)],
         "models": model_list,
+        "provider": provider,
         "samples": samples,
         "temperature": temperature,
         "max_tokens": max_tokens,

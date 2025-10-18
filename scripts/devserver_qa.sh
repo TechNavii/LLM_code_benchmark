@@ -94,9 +94,6 @@ fi
 UVICORN_ARGS=(
   uvicorn
   server.api:app
-  --reload
-  --reload-exclude '.venv/*'
-  --reload-exclude 'runs/*'
   --host "${DEVSERVER_HOST}"
   --port "${DEVSERVER_PORT}"
 )

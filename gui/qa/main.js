@@ -17,6 +17,7 @@ const temperatureInput = document.querySelector('#qa-temperature-input');
 const maxTokensInput = document.querySelector('#qa-max-tokens-input');
 const sampleInput = document.querySelector('#qa-sample-input');
 const modelInput = document.querySelector('#qa-model-input');
+const providerInput = document.querySelector('#qa-provider-input');
 
 let currentSocket = null;
 let currentRun = null;
@@ -122,6 +123,10 @@ async function startRun(event) {
     temperature: Number.isFinite(temperatureValue) ? temperatureValue : 0.5,
     max_tokens: Number.isFinite(maxTokensValue) && maxTokensValue > 0 ? maxTokensValue : 200000,
   };
+  const providerValue = providerInput?.value.trim();
+  if (providerValue) {
+    payload.provider = providerValue;
+  }
 
   abortCurrentSocket();
   runButton.disabled = true;
@@ -239,11 +244,13 @@ function setupRunView(metadata, runId) {
   runIdSpan.textContent = runId;
 
   const models = metadata?.models || [];
+  const provider = metadata?.provider || 'auto';
   const questionCount = metadata?.question_count ?? 100;
   const samples = metadata?.samples ?? 1;
   aggregateMetrics.innerHTML = '';
   const info = [
     `Models: ${models.join(', ') || '—'}`,
+    `Provider: ${provider}`,
     `Questions: ${questionCount}`,
     `Samples: ${samples}`,
     'Accuracy: pending…',
@@ -316,6 +323,7 @@ function renderRun(summary) {
   aggregateMetrics.innerHTML = '';
   const metrics = [
     `Models: ${summary.models?.join(', ') || '—'}`,
+    `Provider: ${summary.provider || 'auto'}`,
     `Questions: ${summary.questions?.length ?? '—'}`,
     `Accuracy: ${accuracy}`,
     `Total Cost: ${totalCost}`,
@@ -338,7 +346,7 @@ function renderRun(summary) {
   resultsBody.innerHTML = '';
   currentRun.rows.clear();
 
- attempts.forEach((attempt) => {
+  attempts.forEach((attempt) => {
     const usage = attempt.usage || {};
     const mainPrompt = usage.prompt_tokens ?? usage.input_tokens;
     const mainCompletion = usage.completion_tokens ?? usage.output_tokens;
@@ -402,12 +410,16 @@ async function refreshLeaderboard() {
     renderLeaderboardStatus('', 'info');
     rows.forEach((row) => {
       const tr = document.createElement('tr');
+      const levelLabel = row.thinking_level && row.thinking_level !== 'base'
+        ? row.thinking_level
+        : '—';
       tr.innerHTML = `
         <td>${row.model_id}</td>
         <td>${formatAccuracy(row.accuracy)}</td>
         <td>${formatCost(row.cost_usd)}</td>
         <td>${row.duration_seconds != null ? Number(row.duration_seconds).toFixed(2) : '—'}</td>
         <td>${row.runs ?? '—'}</td>
+        <td>${levelLabel}</td>
         <td><button class="danger" data-model="${row.model_id}">Clear</button></td>
       `;
       leaderboardBody.appendChild(tr);

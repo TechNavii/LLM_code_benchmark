@@ -27,6 +27,10 @@ const maxTokensInput = runForm.querySelector('#max-tokens-input');
 const responseTextInput = runForm.querySelector('#response-text');
 const allowIncompleteDiffsInput = runForm.querySelector('#allow-incomplete-diffs');
 const allowDiffRewriteInput = runForm.querySelector('#allow-diff-rewrite');
+const providerInput = runForm.querySelector('#provider-input');
+const thinkingLevelInput = runForm.querySelector('#thinking-level-input');
+const includeThinkingVariantsInput = runForm.querySelector('#include-thinking-variants');
+const modelCapabilitiesNote = document.querySelector('#model-capabilities');
 const openQaButton = document.querySelector('#open-qa-button');
 
 let currentSocket = null;
@@ -41,6 +45,15 @@ if (openQaButton) {
 refreshLeaderboard();
 refreshHistory();
 resetResultsLayout();
+
+let capabilityTimer = null;
+const modelInput = runForm.querySelector('#model-input');
+modelInput?.addEventListener('input', () => {
+  if (capabilityTimer) {
+    clearTimeout(capabilityTimer);
+  }
+  capabilityTimer = setTimeout(checkModelCapabilities, 600);
+});
 
 
 function setResultsPlaceholder(message) {
@@ -148,6 +161,17 @@ async function startRun(event) {
       payload.max_tokens = value;
     }
   }
+  const providerValue = providerInput?.value.trim();
+  if (providerValue) {
+    payload.provider = providerValue;
+  }
+  const thinkingValue = thinkingLevelInput?.value.trim();
+  if (thinkingValue) {
+    payload.thinking_level = thinkingValue;
+  }
+  if (includeThinkingVariantsInput) {
+    payload.include_thinking_variants = includeThinkingVariantsInput.checked;
+  }
   if (responseTextInput) {
     const responseText = responseTextInput.value.trim();
     if (responseText) {
@@ -250,7 +274,7 @@ function listenToRun(runId) {
 }
 
 function setupRunView(metadata, runId) {
-  const { models = [], tasks = [] } = metadata || {};
+  const { models = [], tasks = [], provider } = metadata || {};
   hideResultsPlaceholder();
   resultsCard.hidden = false;
   dashboardGrid?.classList.add('show-results');
@@ -263,6 +287,7 @@ function setupRunView(metadata, runId) {
   aggregateMetrics.innerHTML = '';
   const metrics = [
     `Models: ${models.join(', ') || '—'}`,
+    `Provider: ${provider || 'auto'}`,
     `Tasks: ${tasks.length}`,
     'Pass Rate: pending…',
     'Total Cost: pending…',
@@ -327,6 +352,7 @@ function renderRun(summary) {
 
   const metrics = [
     `Models: ${summary.models.join(', ')}`,
+    `Provider: ${summary.provider || 'auto'}`,
     `Tasks: ${summary.tasks.length}`,
     `Pass Rate: ${passRate}`,
     `Total Cost: $${totalCost}`,
@@ -381,15 +407,117 @@ async function refreshLeaderboard() {
     const accuracyText = accuracyValue != null ? `${(accuracyValue * 100).toFixed(2)}%` : '—';
     const bestCost = model.cost_at_best != null ? `$${Number(model.cost_at_best).toFixed(6)}` : '—';
     const bestDuration = model.duration_at_best != null ? Number(model.duration_at_best).toFixed(2) : '-';
+    const rawLevel = model.thinking_level || 'base';
+    const levelLabel = formatThinkingLevel(rawLevel);
     row.innerHTML = `
       <td class="breakable">${model.model_id}</td>
       <td>${accuracyText}</td>
       <td>${bestCost}</td>
       <td>${bestDuration}</td>
       <td>${model.runs}</td>
+      <td>${levelLabel}</td>
+      <td class="actions-cell">
+        <button type="button" class="ghost copy-model" data-action="copy-model" data-model="${model.model_id}">Copy ID</button>
+        <button type="button" class="ghost danger" data-action="delete-model" data-model="${model.model_id}" data-level="${rawLevel}">Delete</button>
+      </td>
     `;
     leaderboardBody.appendChild(row);
   });
+}
+
+function formatThinkingLevel(level) {
+  if (!level || level === 'base') {
+    return '—';
+  }
+  if (level.startsWith('unsupported')) {
+    return level
+      .replace('unsupported', 'Unsupported')
+      .replace(/\((.+)\)/, (_, inner) => inner ? ` (${inner})` : '');
+  }
+  return level.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+leaderboardBody?.addEventListener('click', async (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLButtonElement)) return;
+  if (target.dataset.action === 'copy-model') {
+    const modelId = target.dataset.model;
+    if (!modelId) return;
+    try {
+      await navigator.clipboard.writeText(modelId);
+      renderStatus(`Copied "${modelId}" to clipboard`, 'success');
+    } catch (error) {
+      console.error(error);
+      renderStatus('Failed to copy model id', 'error');
+    }
+  } else if (target.dataset.action === 'delete-model') {
+    const modelId = target.dataset.model;
+    const level = target.dataset.level;
+    if (!modelId) return;
+    const confirmed = window.confirm(`Delete stored runs for "${modelId}"${level && level !== 'base' ? ` (${level})` : ''}?`);
+    if (!confirmed) return;
+    target.disabled = true;
+    try {
+      const query = level && level !== 'base' ? `?thinking_level=${encodeURIComponent(level)}` : '';
+      const response = await fetch(`/leaderboard/${encodeURIComponent(modelId)}${query}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(detail.detail || response.statusText || 'Failed');
+      }
+      renderStatus(`Deleted runs for ${modelId}`, 'success');
+      await refreshLeaderboard();
+      await refreshHistory();
+    } catch (error) {
+      console.error(error);
+      renderStatus(`Failed to delete runs: ${error.message}`, 'error');
+      target.disabled = false;
+    }
+  }
+});
+
+async function checkModelCapabilities() {
+  const models = getInputArray('#model-input');
+  if (!models.length) {
+    if (modelCapabilitiesNote) modelCapabilitiesNote.textContent = '';
+    return;
+  }
+  const uniqueModels = [...new Set(models)].slice(0, 5);
+  modelCapabilitiesNote.textContent = 'Checking model capabilities…';
+  try {
+    const results = await Promise.all(uniqueModels.map(async (model) => {
+      try {
+        const response = await fetch(`/models/capabilities?model_id=${encodeURIComponent(model)}`);
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({}));
+          throw new Error(error.detail || response.statusText);
+        }
+        const data = await response.json();
+        const thinkingVariant = data.thinking_variant ? ` (variant: ${data.thinking_variant})` : '';
+        if (data.supports_thinking) {
+          const levels = Array.isArray(data.suggested_levels) && data.suggested_levels.length
+            ? ` levels: ${data.suggested_levels.join(', ')}`
+            : '';
+          const budgets = [];
+          if (data.supports_budget_tokens) budgets.push('budget_tokens');
+          if (data.supports_budget_seconds) budgets.push('budget_seconds');
+          const budgetText = budgets.length ? `; also supports ${budgets.join(' & ')}` : '';
+          return `${model}: supports thinking${thinkingVariant}${levels}${budgetText}`;
+        }
+        const suggestion = data.thinking_variant ? ` try ${data.thinking_variant}` : '';
+        return `${model}: no thinking support detected${suggestion ? ` (${suggestion})` : ''}`;
+      } catch (error) {
+        return `${model}: ${error.message ?? 'lookup failed'}`;
+      }
+    }));
+    modelCapabilitiesNote.textContent = results.join(' • ');
+  } catch (error) {
+    console.error(error);
+    if (modelCapabilitiesNote) {
+      modelCapabilitiesNote.textContent = 'Unable to check model capabilities right now.';
+    }
+  }
 }
 
 async function refreshHistory() {
