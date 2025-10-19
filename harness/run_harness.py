@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import datetime as dt
 import json
 import os
@@ -16,7 +17,7 @@ import textwrap
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 try:
     import requests
@@ -111,6 +112,8 @@ _PATCH_LINE_PREFIXES = (
     "\\ No newline at end of file",
 )
 
+STRICT_HUNK_HEADER_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@")
+
 
 def _is_probably_valid_patch(patch: str) -> bool:
     lines = patch.splitlines()
@@ -129,6 +132,143 @@ def _is_probably_valid_patch(patch: str) -> bool:
     if add_lines + remove_lines >= 2:
         return True
     return False
+
+
+def _normalize_patch_format(patch: str) -> tuple[str, bool]:
+    lines = patch.splitlines()
+    normalized: List[str] = []
+    in_hunk = False
+    current_old_line = 1
+    current_new_line = 1
+    synthetic_headers = False
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.lstrip()
+
+        if stripped in {"---", "+++"} and i + 1 < len(lines):
+            next_stripped = lines[i + 1].lstrip()
+            if stripped == "---" and next_stripped.startswith("--- "):
+                i += 1
+                continue
+            if stripped == "+++" and next_stripped.startswith("+++ "):
+                i += 1
+                continue
+        if stripped.startswith("diff --git") or stripped.startswith("index "):
+            normalized.append(line)
+            in_hunk = False
+            current_old_line = 1
+            current_new_line = 1
+            i += 1
+            continue
+
+        if stripped.startswith("--- "):
+            normalized.append(line)
+            in_hunk = False
+            current_old_line = 1
+            current_new_line = 1
+            i += 1
+            continue
+
+        if stripped.startswith("+++ "):
+            normalized.append(line)
+            in_hunk = False
+            current_old_line = 1
+            current_new_line = 1
+            i += 1
+            continue
+
+        if stripped.startswith("@@"):
+            in_hunk = True
+            # look ahead to measure hunk span
+            j = i + 1
+            measured_old = 0
+            measured_new = 0
+            while j < len(lines):
+                candidate = lines[j]
+                candidate_stripped = candidate.lstrip()
+                if candidate_stripped.startswith("@@") or candidate_stripped.startswith("diff --git") or candidate_stripped.startswith("--- ") or candidate_stripped.startswith("+++ "):
+                    break
+                if candidate.startswith(" "):
+                    measured_old += 1
+                    measured_new += 1
+                elif candidate.startswith("-") and not candidate.startswith("---"):
+                    measured_old += 1
+                elif candidate.startswith("+") and not candidate.startswith("+++"):
+                    measured_new += 1
+                elif candidate.startswith("\\"):
+                    pass
+                else:
+                    # treat malformed lines as context
+                    measured_old += 1
+                    measured_new += 1
+                j += 1
+
+            prefix = line[: len(line) - len(stripped)]
+            match = HUNK_HEADER_RE.match(stripped)
+            suffix = ""
+            parsed_old_len_val: Optional[int] = None
+            parsed_new_len_val: Optional[int] = None
+            old_start = current_old_line if current_old_line > 0 else 1
+            new_start = current_new_line if current_new_line > 0 else 1
+            old_len = measured_old
+            new_len = measured_new
+            if match:
+                old_start = int(match.group("old_start"))
+                new_start = int(match.group("new_start"))
+                parsed_old_len = match.group("old_len")
+                parsed_new_len = match.group("new_len")
+                if parsed_old_len:
+                    parsed_old_len_val = int(parsed_old_len)
+                if parsed_new_len:
+                    parsed_new_len_val = int(parsed_new_len)
+                if parsed_old_len_val is not None and parsed_old_len_val != measured_old and measured_old:
+                    synthetic_headers = True
+                if parsed_new_len_val is not None and parsed_new_len_val != measured_new and measured_new:
+                    synthetic_headers = True
+                if measured_old == 0 and parsed_old_len_val is not None:
+                    old_len = parsed_old_len_val
+                if measured_new == 0 and parsed_new_len_val is not None:
+                    new_len = parsed_new_len_val
+                suffix = stripped[match.end():].strip()
+            else:
+                synthetic_headers = True
+                suffix = stripped[2:].strip()
+                old_start = current_old_line if current_old_line > 0 else 1
+                new_start = current_new_line if current_new_line > 0 else 1
+                # default lengths for degenerate hunks
+                if old_len == 0 and new_len == 0:
+                    old_len = 0
+                    new_len = 0
+                if old_len == 0 and new_len > 0 and parsed_old_len_val is not None:
+                    old_len = parsed_old_len_val
+                if new_len == 0 and old_len > 0 and parsed_new_len_val is not None:
+                    new_len = parsed_new_len_val
+            header = f"@@ -{old_start},{old_len} +{new_start},{new_len} @@"
+            if suffix:
+                header = f"{header} {suffix}"
+            line = prefix + header
+
+            advance_old = old_len if old_len > 0 else (1 if new_len > 0 else 0)
+            advance_new = new_len if new_len > 0 else (1 if old_len > 0 else 0)
+            current_old_line = max(old_start + advance_old, 1)
+            current_new_line = max(new_start + advance_new, 1)
+
+            normalized.append(line)
+            i += 1
+            continue
+
+        if in_hunk and not line.startswith(('+', '-', ' ', '\\')):
+            line = f" {line}"
+
+        normalized.append(line)
+        i += 1
+
+    result = "\n".join(normalized)
+    if patch.endswith("\n") and not result.endswith("\n"):
+        result += "\n"
+    return result, synthetic_headers
 
 
 def _extract_incomplete_patch(candidate: str) -> str:
@@ -509,13 +649,14 @@ def extract_patch(raw_response: str, allow_incomplete_diffs: bool = False) -> st
     return patch.strip() + "\n"
 
 
-def clean_patch_text(patch_text: str) -> tuple[str, bool]:
+def clean_patch_text(patch_text: str) -> tuple[str, bool, bool]:
     ansi_escape = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
     cleaned = ansi_escape.sub('', patch_text)
     if '\x1b' in cleaned:
         raise HarnessError('Patch contains unsupported control characters.')
+    cleaned, synthetic_headers = _normalize_patch_format(cleaned)
     git_style = cleaned.startswith('--- a/') or cleaned.startswith('diff --git')
-    return cleaned, git_style
+    return cleaned, git_style, synthetic_headers
 
 
 def prepare_run_directory(task_id: str, metadata: Dict) -> Path:
@@ -746,9 +887,225 @@ def _apply_parsed_unified_diff(file_diffs, workspace_path: Path) -> Optional[Lis
     return rewritten
 
 
+def _parse_loose_unified_diff(cleaned_patch: str):
+    lines = cleaned_patch.splitlines()
+    files = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if line.startswith('diff --git'):
+            i += 1
+            continue
+        if not line.startswith('--- '):
+            i += 1
+            continue
+        old_path = line[4:].strip()
+        i += 1
+        if i >= len(lines) or not lines[i].startswith('+++ '):
+            return None
+        new_path = lines[i][4:].strip()
+        i += 1
+        hunks = []
+        while i < len(lines):
+            current = lines[i]
+            if current.startswith('diff --git') or current.startswith('--- '):
+                break
+            if current.startswith('@@'):
+                header = current
+                i += 1
+                hunk_ops: List[Tuple[str, str]] = []
+                while i < len(lines):
+                    candidate = lines[i]
+                    if candidate.startswith('diff --git') or candidate.startswith('--- ') or candidate.startswith('@@'):
+                        break
+                    if candidate.startswith('\\'):
+                        i += 1
+                        continue
+                    if not candidate:
+                        hunk_ops.append((' ', ''))
+                        i += 1
+                        continue
+                    prefix = candidate[0]
+                    if prefix in {'+', '-', ' '}:
+                        hunk_ops.append((prefix, candidate[1:]))
+                    else:
+                        hunk_ops.append((' ', candidate))
+                    i += 1
+                if hunk_ops:
+                    hunks.append((header, hunk_ops))
+                continue
+            i += 1
+        files.append((old_path, new_path, hunks))
+    return files or None
+
+
+def _find_subsequence(haystack: List[str], needle: List[str], start: int) -> Optional[int]:
+    if not needle:
+        return start
+    end_limit = len(haystack) - len(needle)
+    if end_limit < 0:
+        return None
+    start = max(start, 0)
+    for idx in range(start, end_limit + 1):
+        if haystack[idx:idx + len(needle)] == needle:
+            return idx
+    return None
+
+
+_COMPARE_STRATEGIES: Tuple[Callable[[str], str], ...] = (
+    lambda s: s,
+    lambda s: s.expandtabs(4),
+    lambda s: re.sub(r'\s+', ' ', s.strip()),
+)
+
+
+def _lines_equivalent(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    for transform in _COMPARE_STRATEGIES:
+        if transform(left) == transform(right):
+            return True
+    return False
+
+
+def _locate_hunk(updated_lines: List[str], pattern: List[str], search_start: int) -> Optional[int]:
+    for transform in _COMPARE_STRATEGIES:
+        haystack = [transform(line) for line in updated_lines]
+        needle = [transform(line) for line in pattern]
+        start_index = _find_subsequence(haystack, needle, search_start)
+        if start_index is None and search_start:
+            start_index = _find_subsequence(haystack, needle, 0)
+        if start_index is not None:
+            return start_index
+    if pattern:
+        pattern_text = "\n".join(pattern)
+        best_index = None
+        best_ratio = 0.0
+        window = len(pattern)
+        if window <= 0:
+            return search_start
+        lower_bound = max(search_start - 50, 0)
+        upper_bound = len(updated_lines) - window + 1
+        if upper_bound < 0:
+            return None
+        for idx in range(lower_bound, upper_bound):
+            segment = "\n".join(updated_lines[idx: idx + window])
+            ratio = difflib.SequenceMatcher(None, pattern_text, segment).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_index = idx
+        min_ratio = 0.9
+        if window <= 6:
+            min_ratio = 0.8
+        elif window <= 10:
+            min_ratio = 0.85
+        if best_index is not None and best_ratio >= min_ratio:
+            return best_index
+    return None
+
+
+def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List[str]]:
+    planned_writes: List[Tuple[str, str]] = []
+    for old_path, new_path, hunks in file_diffs:
+        if not hunks:
+            continue
+        target_rel = _normalize_patch_path(new_path)
+        if target_rel is None:
+            return None
+        source_rel = _normalize_patch_path(old_path)
+        source_candidate = source_rel or target_rel
+        source_path = workspace_path / source_candidate
+        if source_path.exists():
+            original_text = source_path.read_text(encoding="utf-8")
+        else:
+            original_text = ""
+        original_lines = original_text.splitlines()
+        updated_lines = original_lines[:]
+        search_start = 0
+        for _header, hunk_ops in hunks:
+            if not any(tag in ('+', '-') for tag, _ in hunk_ops):
+                continue
+            pattern = [text for tag, text in hunk_ops if tag in (' ', '-')]
+            start_index = _locate_hunk(updated_lines, pattern, search_start)
+            if start_index is None:
+                if all(tag == '-' for tag, _ in hunk_ops if tag in (' ', '-')):
+                    start_index = search_start
+                else:
+                    return None
+            new_segment: List[str] = []
+            cursor = start_index
+            for tag, text in hunk_ops:
+                if tag == ' ':
+                    if text == '':
+                        while cursor < len(updated_lines) and updated_lines[cursor].strip() == '':
+                            new_segment.append(updated_lines[cursor])
+                            cursor += 1
+                        continue
+                    search_cursor = cursor
+                    temp_buffer: List[str] = []
+                    found = False
+                    while search_cursor < len(updated_lines):
+                        existing_line = updated_lines[search_cursor]
+                        if _lines_equivalent(text, existing_line):
+                            new_segment.extend(temp_buffer)
+                            new_segment.append(existing_line)
+                            cursor = search_cursor + 1
+                            found = True
+                            break
+                        if existing_line.strip() == '':
+                            temp_buffer.append(existing_line)
+                            search_cursor += 1
+                            continue
+                        break
+                    if not found:
+                        return None
+                elif tag == '-':
+                    temp_segment: List[str] = []
+                    temp_cursor = cursor
+                    removed = False
+                    while temp_cursor < len(updated_lines):
+                        existing_line = updated_lines[temp_cursor]
+                        if _lines_equivalent(text, existing_line):
+                            cursor = temp_cursor + 1
+                            new_segment.extend(temp_segment)
+                            removed = True
+                            break
+                        if existing_line.strip() == '':
+                            temp_segment.append(existing_line)
+                            temp_cursor += 1
+                            continue
+                        break
+                    if not removed:
+                        # minus line not present; leave original text untouched
+                        continue
+                elif tag == '+':
+                    new_segment.append(text)
+                    if cursor < len(updated_lines) and _lines_equivalent(text, updated_lines[cursor]):
+                        cursor += 1
+                else:
+                    return None
+            updated_lines = updated_lines[:start_index] + new_segment + updated_lines[cursor:]
+            search_start = start_index + len(new_segment)
+        updated_text = "\n".join(updated_lines)
+        if updated_lines:
+            updated_text += "\n"
+        planned_writes.append((target_rel, updated_text))
+    if not planned_writes:
+        return None
+    rewritten: List[str] = []
+    for rel_path, content in planned_writes:
+        target_path = workspace_path / rel_path
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text(content, encoding="utf-8")
+        rewritten.append(rel_path)
+    return rewritten
+
+
 def _apply_diff_rewrite_fallback(
     cleaned_patch: str,
     workspace_path: Path,
+    *,
+    allow_strict_parse: bool,
 ) -> Optional[List[str]]:
     rewrites = _extract_full_file_rewrites(cleaned_patch)
     if rewrites:
@@ -760,10 +1117,20 @@ def _apply_diff_rewrite_fallback(
             rewritten_files.append(rel_path)
         return rewritten_files
 
-    parsed = _parse_unified_diff(cleaned_patch)
-    if not parsed:
+    loose_parsed = _parse_loose_unified_diff(cleaned_patch)
+    if loose_parsed:
+        rewritten = _apply_loose_unified_diff(loose_parsed, workspace_path)
+        if rewritten:
+            return rewritten
         return None
-    return _apply_parsed_unified_diff(parsed, workspace_path)
+
+    if not allow_strict_parse:
+        return None
+
+    parsed = _parse_unified_diff(cleaned_patch)
+    if parsed:
+        return _apply_parsed_unified_diff(parsed, workspace_path)
+    return None
 
 
 def _should_attempt_diff_rewrite(diagnostic: str) -> bool:
@@ -791,7 +1158,7 @@ def apply_patch(
     attempt_summary: Dict,
     attempt_dir: Path,
 ) -> None:
-    cleaned_patch, git_style = clean_patch_text(patch_text)
+    cleaned_patch, git_style, synthetic_headers = clean_patch_text(patch_text)
     patch_bytes = cleaned_patch.encode("utf-8")
 
     patch_args = ["patch", "--force", "-p1" if git_style else "-p0"]
@@ -803,7 +1170,11 @@ def apply_patch(
         stderr_text = dry_run.stderr.decode()
         diagnostic = f"{stdout_text}\n{stderr_text}" if stdout_text or stderr_text else ""
         if allow_diff_rewrite_fallback and _should_attempt_diff_rewrite(diagnostic):
-            rewritten_files = _apply_diff_rewrite_fallback(cleaned_patch, workspace_path)
+            rewritten_files = _apply_diff_rewrite_fallback(
+                cleaned_patch,
+                workspace_path,
+                allow_strict_parse=not synthetic_headers,
+            )
             if rewritten_files:
                 attempt_summary['diff_rewrite_fallback_used'] = True
                 attempt_summary['diff_rewrite_files'] = sorted(rewritten_files)

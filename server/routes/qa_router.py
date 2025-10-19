@@ -54,6 +54,8 @@ class QARunRequest(BaseModel):
     temperature: float = 0.5
     max_tokens: int = 200000
     provider: Optional[str] = None
+    thinking_level: Optional[str] = None
+    include_thinking_variants: bool = False
 
     @field_validator("models")
     @classmethod
@@ -83,6 +85,14 @@ class QARunRequest(BaseModel):
                 "provider must be alphanumeric with optional hyphen/underscore characters (dots and slashes allowed)"
             )
         return trimmed
+
+    @field_validator("thinking_level")
+    @classmethod
+    def validate_thinking_level(cls, level: Optional[str]) -> Optional[str]:
+        if level is None:
+            return None
+        trimmed = level.strip()
+        return trimmed or None
 
 
 @router.on_event("startup")
@@ -137,6 +147,8 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
     temperature = request.temperature
     max_tokens = request.max_tokens
     provider = request.provider
+    thinking_level = request.thinking_level
+    include_thinking_variants = request.include_thinking_variants
 
     questions = load_questions()
     if not questions:
@@ -152,6 +164,8 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
             "max_tokens": max_tokens,
             "provider": provider,
             "question_count": len(questions),
+            "thinking_level": thinking_level,
+            "include_thinking_variants": include_thinking_variants,
         },
     )
 
@@ -190,6 +204,8 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 provider=provider,
+                thinking_level=thinking_level,
+                include_thinking_variants=include_thinking_variants,
                 run_id=run_id,
                 progress_callback=progress_proxy,
             )

@@ -19,7 +19,11 @@ import structlog
 
 from harness.config import get_settings
 from harness.exceptions import HarnessError
-from harness.run_harness import fetch_model_pricing, store_text
+from harness.run_harness import (
+    expand_models_with_thinking_variants,
+    fetch_model_pricing,
+    store_text,
+)
 from harness.expert_questions.dataset import Question, load_questions
 
 SETTINGS = get_settings()
@@ -29,6 +33,29 @@ JUDGE_MAX_TOKENS = 256
 LOGGER = structlog.get_logger(__name__)
 
 
+def _compose_reasoning_payload(level: str) -> Dict[str, Any]:
+    value = (level or "").strip()
+    if not value:
+        return {}
+
+    if "=" in value:
+        key, raw = value.split("=", 1)
+        key = key.strip().lower()
+        raw_value = raw.strip()
+        if key in {"budget_tokens", "tokens"}:
+            try:
+                return {"budget_tokens": int(raw_value)}
+            except ValueError:
+                pass
+        if key in {"budget_seconds", "seconds"}:
+            try:
+                return {"budget_seconds": int(raw_value)}
+            except ValueError:
+                pass
+
+    return {"effort": value}
+
+
 def _call_openrouter(
     prompt: str,
     *,
@@ -36,6 +63,7 @@ def _call_openrouter(
     temperature: float,
     max_tokens: int,
     preferred_provider: Optional[str] = None,
+    reasoning_payload: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, Dict[str, Any], float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
@@ -71,6 +99,8 @@ def _call_openrouter(
         payload["provider"] = {
             "order": [preferred_provider],
         }
+    if reasoning_payload is not None:
+        payload["reasoning"] = reasoning_payload
 
     start = time.perf_counter()
     try:
@@ -266,6 +296,8 @@ def run_question_benchmark(
     temperature: float = 0.5,
     max_tokens: int = 200000,
     provider: Optional[str] = None,
+    thinking_level: Optional[str] = None,
+    include_thinking_variants: bool = False,
     run_id: str,
     output_dir: Optional[Path] = None,
     progress_callback: Optional[ProgressCallback] = None,
@@ -274,6 +306,15 @@ def run_question_benchmark(
     model_list = [model.strip() for model in models if model.strip()]
     if not model_list:
         raise HarnessError("At least one model must be provided.")
+    model_list = list(dict.fromkeys(model_list))
+    requested_models = list(model_list)
+
+    thinking_level = (thinking_level or "").strip() or None
+
+    if include_thinking_variants:
+        metadata_snapshot = fetch_model_pricing(model_list)
+        model_list = expand_models_with_thinking_variants(model_list, metadata_snapshot)
+        model_list = list(dict.fromkeys(model_list))
 
     samples = max(1, int(samples))
     temperature = float(temperature)
@@ -281,8 +322,8 @@ def run_question_benchmark(
 
     judge_enabled = bool(JUDGE_MODEL) and requests is not None
     pricing_models = list(dict.fromkeys(model_list + ([JUDGE_MODEL] if judge_enabled else [])))
-    pricing_table = fetch_model_pricing(pricing_models)
-    if judge_enabled and JUDGE_MODEL not in pricing_table:
+    model_metadata = fetch_model_pricing(pricing_models)
+    if judge_enabled and JUDGE_MODEL not in model_metadata:
         LOGGER.info(
             "qa.judge_disabled",
             reason="pricing_unavailable",
@@ -305,6 +346,15 @@ def run_question_benchmark(
     question_map = {question.number: question for question in questions}
 
     for model in model_list:
+        model_info = model_metadata.get(model) or {}
+        supported_params = {
+            param.lower()
+            for param in model_info.get("supported_parameters", [])
+            if isinstance(param, str)
+        }
+        supports_reasoning = bool(thinking_level) and "reasoning" in supported_params
+        reasoning_payload = _compose_reasoning_payload(thinking_level) if supports_reasoning and thinking_level else None
+
         for sample_index in range(samples):
             for question in questions:
                 attempt_dir = run_dir / f"q{question.number:03d}_{model.replace('/', '_')}__s{sample_index:02d}"
@@ -321,6 +371,11 @@ def run_question_benchmark(
                     "expected_answer": question.answer,
                     "status": "error",
                 }
+                if thinking_level:
+                    attempt["thinking_level_requested"] = thinking_level
+                    attempt["thinking_level_supported"] = supports_reasoning
+                    if supports_reasoning:
+                        attempt["thinking_level_applied"] = thinking_level
 
                 attempt_start = time.perf_counter()
                 api_latency = None
@@ -334,6 +389,7 @@ def run_question_benchmark(
                         temperature=temperature,
                         max_tokens=max_tokens,
                         preferred_provider=provider,
+                        reasoning_payload=reasoning_payload,
                     )
                 except Exception as exc:
                     attempt["error"] = str(exc)
@@ -428,7 +484,7 @@ def run_question_benchmark(
                     attempt["judge_completion_tokens"] = judge_completion_tokens
 
                 attempt_cost = 0.0
-                pricing = pricing_table.get(model)
+                pricing = model_metadata.get(model)
                 if pricing and (prompt_tokens is not None or completion_tokens is not None):
                     response_cost = 0.0
                     if prompt_tokens is not None:
@@ -440,7 +496,7 @@ def run_question_benchmark(
                         attempt_cost += response_cost
 
                 judge_cost = 0.0
-                judge_pricing = pricing_table.get(JUDGE_MODEL)
+                judge_pricing = model_metadata.get(JUDGE_MODEL)
                 if judge_pricing and (judge_prompt_tokens is not None or judge_completion_tokens is not None):
                     if judge_prompt_tokens is not None:
                         judge_cost += judge_prompt_tokens * judge_pricing.get("prompt", 0.0)
@@ -513,10 +569,13 @@ def run_question_benchmark(
         "output_dir": str(base_output),
         "questions": [asdict(question_map[number]) for number in sorted(question_map)],
         "models": model_list,
+        "requested_models": requested_models,
         "provider": provider,
         "samples": samples,
         "temperature": temperature,
         "max_tokens": max_tokens,
+        "thinking_level": thinking_level,
+        "include_thinking_variants": include_thinking_variants,
         "attempts": attempts,
         "metrics": {
             "per_model": per_model_stats,
@@ -535,7 +594,7 @@ def run_question_benchmark(
             "completion_tokens": total_completion_tokens,
             "total_cost_usd": round(total_cost, 6),
         },
-        "pricing": {model: pricing_table.get(model) for model in model_list if pricing_table.get(model)},
+        "pricing": {model: model_metadata.get(model) for model in model_list if model_metadata.get(model)},
     }
 
     summary_path = run_dir / "summary.json"

@@ -13,3 +13,13 @@ def test_qa_provider_allows_slash() -> None:
 def test_qa_provider_invalid_characters() -> None:
     with pytest.raises(ValueError):
         QARunRequest(models=["model-a"], provider="invalid provider")
+
+
+def test_qa_thinking_level_trimmed() -> None:
+    request = QARunRequest(models=["model-a"], thinking_level=" low ")
+    assert request.thinking_level == "low"
+
+
+def test_qa_thinking_level_blank() -> None:
+    request = QARunRequest(models=["model-a"], thinking_level="  ")
+    assert request.thinking_level is None
