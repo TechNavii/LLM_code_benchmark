@@ -536,6 +536,11 @@ def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> s
 
     return prompt
 
+# Number of times to retry transient completion failures before giving up.
+MAX_COMPLETION_RETRIES = 3
+RETRY_BACKOFF_SECONDS = 2.0
+
+
 def call_openrouter(
     prompt: str,
     model: str,
@@ -589,44 +594,69 @@ def call_openrouter(
             if "include_reasoning" in supported_params:
                 payload["include_reasoning"] = True
 
-    start_time = time.perf_counter()
-    response = requests.post(url, headers=headers, json=payload, timeout=120)
-    duration = time.perf_counter() - start_time
+    last_error: Optional[HarnessError] = None
+    backoff = RETRY_BACKOFF_SECONDS
 
-    if response.status_code >= 400:
-        error_message = response.text.strip()
+    for attempt in range(MAX_COMPLETION_RETRIES):
         try:
-            error_payload = response.json()
-        except ValueError:
-            error_payload = None
-        if isinstance(error_payload, dict):
-            error_message = (
-                error_payload.get("error", {}).get("message")
-                or error_payload.get("message")
-                or error_payload.get("detail")
-                or error_message
-            )
-        raise HarnessError(
-            f"OpenRouter request failed ({response.status_code}): {error_message}"
-        )
+            start_time = time.perf_counter()
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            duration = time.perf_counter() - start_time
+        except requests.exceptions.RequestException as exc:  # pragma: no cover - network failures
+            last_error = HarnessError(f"OpenRouter request failed: {exc}")
+            should_retry = True
+        else:
+            status = response.status_code
+            if status >= 500:
+                error_message = response.text.strip()
+                last_error = HarnessError(f"OpenRouter request failed ({status}): {error_message}")
+                should_retry = True
+            elif status >= 400:
+                error_message = response.text.strip()
+                try:
+                    error_payload = response.json()
+                except ValueError:
+                    error_payload = None
+                if isinstance(error_payload, dict):
+                    error_message = (
+                        error_payload.get("error", {}).get("message")
+                        or error_payload.get("message")
+                        or error_payload.get("detail")
+                        or error_message
+                    )
+                raise HarnessError(
+                    f"OpenRouter request failed ({status}): {error_message}"
+                )
+            else:
+                try:
+                    data = response.json()
+                except (requests.exceptions.JSONDecodeError, ValueError) as exc:
+                    content_type = response.headers.get("content-type", "unknown")
+                    body_preview = response.text.strip()
+                    if len(body_preview) > 512:
+                        body_preview = f"{body_preview[:512]}..."
+                    last_error = HarnessError(
+                        "OpenRouter returned a non-JSON response payload. "
+                        f"status={status} content-type={content_type} preview={body_preview!r}"
+                    )
+                    should_retry = True
+                else:
+                    try:
+                        content = data["choices"][0]["message"]["content"]
+                    except (KeyError, IndexError) as exc:  # pragma: no cover - API schema issues
+                        last_error = HarnessError(f"Unexpected OpenRouter response payload: {data}")
+                        should_retry = True
+                    else:
+                        return content, data, duration
 
-    try:
-        data = response.json()
-    except (requests.exceptions.JSONDecodeError, ValueError) as exc:
-        content_type = response.headers.get("content-type", "unknown")
-        body_preview = response.text.strip()
-        if len(body_preview) > 512:
-            body_preview = f"{body_preview[:512]}..."
-        raise HarnessError(
-            "OpenRouter returned a non-JSON response payload. "
-            f"status={response.status_code} content-type={content_type} preview={body_preview!r}"
-        ) from exc
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:  # pragma: no cover - API schema issues
-        raise HarnessError(f"Unexpected OpenRouter response payload: {data}") from exc
+        if attempt < MAX_COMPLETION_RETRIES - 1 and should_retry:
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+        break
 
-    return content, data, duration
+    assert last_error is not None  # for type checkers
+    raise last_error
 
 
 def extract_patch(raw_response: str, allow_incomplete_diffs: bool = False) -> str:
