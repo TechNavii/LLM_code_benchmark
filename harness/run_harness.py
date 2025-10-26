@@ -1620,9 +1620,10 @@ def run_tasks(
         else:
             levels = [thinking_level] if thinking_level else [None]
 
-        for level in levels:
-            for task_id in tasks:
-                metadata = load_metadata(task_id)
+        # Run per task → per level so you see all levels for each task earlier
+        for task_id in tasks:
+            metadata = load_metadata(task_id)
+            for level in levels:
                 for sample_idx in range(samples):
                     attempt_summary = evaluate_attempt(
                         task_id=task_id,
