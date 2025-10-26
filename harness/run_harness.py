@@ -1293,7 +1293,17 @@ def evaluate_attempt(
     run_dir: Path,
 ) -> Dict:
     prompt = build_prompt(task_id, metadata, include_tests=include_tests)
-    attempt_id = f"{task_id}__{model.replace('/', '_')}__sample{sample_index:02d}"
+    # Use the requested thinking level for artifact directory suffix so that
+    # base/low/medium/high attempts never collide, even when reasoning is unsupported.
+    def _sanitize_level_for_dir(level: Optional[str]) -> str:
+        if not level:
+            return "base"
+        # Keep it filesystem-friendly
+        safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", str(level))
+        return safe.strip("-_") or "base"
+
+    level_suffix = _sanitize_level_for_dir(thinking_level)
+    attempt_id = f"{task_id}__{model.replace('/', '_')}__sample{sample_index:02d}__lvl_{level_suffix}"
     attempt_dir = run_dir / attempt_id
     store_text(attempt_dir / "prompt.txt", prompt)
     attempt_timer = time.perf_counter()
@@ -1456,6 +1466,86 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
     metrics["pass_at_k"] = pass_at_k
     metrics["overall"] = overall
     return metrics
+
+
+def _bucket_level_for_metrics(attempt: Dict, default_level: Optional[str] = None) -> str:
+    # Mirror server/database._determine_model_level logic for consistency
+    applied = attempt.get("thinking_level_applied")
+    if applied:
+        return str(applied)
+    if attempt.get("thinking_level_supported") is False and attempt.get("thinking_level_requested"):
+        return f"unsupported ({attempt.get('thinking_level_requested')})"
+    if default_level:
+        return str(default_level)
+    return "base"
+
+
+def compute_metrics_by_thinking_level(
+    attempts: Iterable[Dict],
+    models: List[str],
+    tasks: List[str],
+    samples: int,
+    default_level: Optional[str] = None,
+) -> Dict[str, Dict[str, Dict[str, float]]]:
+    result: Dict[str, Dict[str, Dict[str, float]]] = {}
+    # Pre-index attempts per (model, level)
+    per_model_level: Dict[str, Dict[str, List[Dict]]] = {}
+    for a in attempts:
+        model = a.get("model")
+        if not model:
+            continue
+        level = _bucket_level_for_metrics(a, default_level)
+        per_model_level.setdefault(model, {}).setdefault(level, []).append(a)
+
+    for model, level_map in per_model_level.items():
+        result[model] = {}
+        for level, level_attempts in level_map.items():
+            # Attempt-level counts
+            total = len(level_attempts)
+            passed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "passed")
+            failed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "failed")
+            errored = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "error")
+
+            # Task-level accuracy for this level
+            tasks_for_level = {}
+            for x in level_attempts:
+                tid = x.get("task_id")
+                if not tid:
+                    continue
+                tasks_for_level.setdefault(tid, []).append(x)
+            task_ids = list(tasks_for_level.keys())
+            task_successes = 0
+            pass_at_1_hits = 0
+            for tid in task_ids:
+                attempts_for_task = tasks_for_level[tid]
+                if any((a.get("status") or "").lower() == "passed" for a in attempts_for_task):
+                    task_successes += 1
+                # pass@1 within this level uses best (min sample_index) attempt for the task
+                first = min(attempts_for_task, key=lambda x: x.get("sample_index", 0))
+                if (first.get("status") or "").lower() == "passed":
+                    pass_at_1_hits += 1
+
+            task_count = len(task_ids)
+            model_accuracy = (task_successes / task_count) if task_count else None
+            attempt_success = (passed / total) if total else None
+            pass_at_1 = (pass_at_1_hits / task_count) if task_count else None
+            pass_at_k = None
+            if samples > 1:
+                pass_at_k = model_accuracy
+            else:
+                pass_at_k = pass_at_1
+
+            result[model][level] = {
+                "attempts": total,
+                "passed": passed,
+                "failed": failed,
+                "error": errored,
+                "model_attempt_success": attempt_success,
+                "model_accuracy": model_accuracy,
+                "pass_at_1": pass_at_1,
+                "pass_at_k": pass_at_k,
+            }
+    return result
 
 
 def update_task_latest(task_id: str, attempt_summary: Dict) -> None:
@@ -1712,6 +1802,9 @@ def run_tasks(
         "requested_models": original_models,
         "attempts": attempts,
         "metrics": compute_metrics(attempts, models, tasks, samples),
+        "metrics_by_thinking_level": compute_metrics_by_thinking_level(
+            attempts, models, tasks, samples, thinking_level
+        ),
         "timing": {
             "total_duration_seconds": total_duration,
             "total_api_latency_seconds": total_api_latency,

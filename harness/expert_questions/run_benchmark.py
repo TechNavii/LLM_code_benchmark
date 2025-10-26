@@ -611,6 +611,67 @@ def run_question_benchmark(
                         progress_callback(model, question.number, sample_index, attempt)
 
     per_model_stats: Dict[str, Dict[str, Any]] = {}
+
+    def _bucket_level_for_metrics(attempt: Dict[str, Any], default_level: Optional[str] = None) -> str:
+        applied = attempt.get("thinking_level_applied")
+        if applied:
+            return str(applied)
+        if attempt.get("thinking_level_supported") is False and attempt.get("thinking_level_requested"):
+            return f"unsupported ({attempt.get('thinking_level_requested')})"
+        if default_level:
+            return str(default_level)
+        return "base"
+
+    # Build per-level metrics similar to coding harness
+    metrics_by_thinking_level: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    per_model_level: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+    for a in attempts:
+        model = a.get("model")
+        if not model:
+            continue
+        level = _bucket_level_for_metrics(a, thinking_level)
+        per_model_level.setdefault(model, {}).setdefault(level, []).append(a)
+
+    for model, level_map in per_model_level.items():
+        metrics_by_thinking_level[model] = {}
+        for level, level_attempts in level_map.items():
+            total = len(level_attempts)
+            passed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "passed")
+            failed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "failed")
+            errored = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "error")
+
+            # Accuracy for QA: percentage of attempts that passed (since 1 sample typical)
+            accuracy = (passed / total) if total else None
+
+            # Aggregate token usage and timings for this subset
+            prompt_tokens = 0
+            completion_tokens = 0
+            duration_sum = 0.0
+            latency_sum = 0.0
+            cost_sum = 0.0
+            for x in level_attempts:
+                usage_main = x.get("usage") or {}
+                prompt_tokens += int(usage_main.get("prompt_tokens") or usage_main.get("input_tokens") or 0)
+                completion_tokens += int(usage_main.get("completion_tokens") or usage_main.get("output_tokens") or 0)
+                prompt_tokens += int(x.get("judge_prompt_tokens") or 0)
+                completion_tokens += int(x.get("judge_completion_tokens") or 0)
+                duration_sum += float(x.get("duration_seconds") or 0.0)
+                latency_sum += float(x.get("api_latency_seconds") or 0.0)
+                latency_sum += float(x.get("judge_latency_seconds") or 0.0)
+                cost_sum += float(x.get("cost_usd") or 0.0)
+
+            metrics_by_thinking_level[model][level] = {
+                "attempts": total,
+                "passed": passed,
+                "failed": failed,
+                "error": errored,
+                "accuracy": accuracy,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "cost_usd": round(cost_sum, 6) if cost_sum else 0.0,
+                "duration_seconds": duration_sum,
+                "api_latency_seconds": latency_sum,
+            }
     for model in model_list:
         model_attempts = [attempt for attempt in attempts if attempt["model"] == model]
         correct = sum(1 for attempt in model_attempts if attempt.get("status") == "passed")
@@ -676,6 +737,7 @@ def run_question_benchmark(
                 "accuracy": overall_accuracy,
             },
         },
+        "metrics_by_thinking_level": metrics_by_thinking_level,
         "timing": {
             "total_duration_seconds": total_duration,
             "total_api_latency_seconds": total_latency,
