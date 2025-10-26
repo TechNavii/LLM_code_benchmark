@@ -18,6 +18,9 @@ const maxTokensInput = document.querySelector('#qa-max-tokens-input');
 const sampleInput = document.querySelector('#qa-sample-input');
 const modelInput = document.querySelector('#qa-model-input');
 const providerInput = document.querySelector('#qa-provider-input');
+const sweepThinkingLevelsInput = document.querySelector('#qa-sweep-thinking-levels');
+const includeThinkingVariantsInput = document.querySelector('#qa-include-thinking-variants');
+const modelCapabilitiesNote = document.querySelector('#qa-model-capabilities');
 
 let currentSocket = null;
 let currentRun = null;
@@ -30,6 +33,13 @@ backButton?.addEventListener('click', () => {
 refreshLeaderboard();
 refreshHistory();
 resetResultsLayout();
+
+// Auto-check model capabilities
+let capabilityTimer = null;
+modelInput?.addEventListener('input', () => {
+  if (capabilityTimer) clearTimeout(capabilityTimer);
+  capabilityTimer = setTimeout(checkModelCapabilities, 600);
+});
 
 function resetResultsLayout(message = 'Start a question run to see live answers and grading.') {
   dashboardGrid?.classList.remove('show-results');
@@ -127,6 +137,12 @@ async function startRun(event) {
   if (providerValue) {
     payload.provider = providerValue;
   }
+  if (sweepThinkingLevelsInput && sweepThinkingLevelsInput.checked) {
+    payload.sweep_thinking_levels = true;
+  }
+  if (includeThinkingVariantsInput && includeThinkingVariantsInput.checked) {
+    payload.include_thinking_variants = true;
+  }
 
   abortCurrentSocket();
   runButton.disabled = true;
@@ -151,6 +167,44 @@ async function startRun(event) {
     renderStatus(`Failed to launch run: ${error.message}`, 'error');
     runButton.disabled = false;
     resetResultsLayout();
+  }
+}
+
+async function checkModelCapabilities() {
+  const raw = modelInput?.value || '';
+  const models = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!models.length) {
+    if (modelCapabilitiesNote) modelCapabilitiesNote.textContent = '';
+    return;
+  }
+  const unique = [...new Set(models)].slice(0, 5);
+  modelCapabilitiesNote.textContent = 'Checking model capabilities…';
+  try {
+    const lines = await Promise.all(unique.map(async (m) => {
+      try {
+        const resp = await fetch(`/models/capabilities?model_id=${encodeURIComponent(m)}`);
+        if (!resp.ok) {
+          const detail = await resp.json().catch(() => ({}));
+          throw new Error(detail.detail || resp.statusText);
+        }
+        const data = await resp.json();
+        const thinkingVariant = data.thinking_variant ? ` (variant: ${data.thinking_variant})` : '';
+        if (data.supports_thinking) {
+          const levels = Array.isArray(data.suggested_levels) && data.suggested_levels.length
+            ? ` levels: ${data.suggested_levels.join(', ')}`
+            : '';
+          return `${m}: supports thinking${thinkingVariant}${levels}`;
+        }
+        const suggestion = data.thinking_variant ? ` try ${data.thinking_variant}` : '';
+        return `${m}: no thinking support detected${suggestion ? ` (${suggestion})` : ''}`;
+      } catch (e) {
+        return `${m}: ${e.message || 'lookup failed'}`;
+      }
+    }));
+    modelCapabilitiesNote.textContent = lines.join(' • ');
+  } catch (err) {
+    console.error(err);
+    if (modelCapabilitiesNote) modelCapabilitiesNote.textContent = 'Unable to check capabilities right now.';
   }
 }
 
@@ -268,41 +322,82 @@ function setupRunView(metadata, runId) {
 }
 
 function updateAttemptRow(event) {
-  const key = `${event.model || 'unknown'}::${event.question_number}::${event.sample_index ?? 0}`;
+  const levelKey = (event.thinking_level_applied || event.thinking_level_requested || 'base');
+  const key = `${event.model || 'unknown'}::${event.question_number}::${event.sample_index ?? 0}::${levelKey}`;
   let row = currentRun.rows.get(key);
   if (!row) {
     row = document.createElement('tr');
     row.classList.add('fade-in');
+    const levelLabel = levelKey && levelKey !== 'base' ? levelKey : '—';
     row.innerHTML = `
       <td>${event.question_number ?? '—'}</td>
       <td>${event.model || '—'}</td>
+      <td>${levelLabel}</td>
       <td class="status-cell"></td>
       <td>-</td>
       <td>-</td>
       <td>-</td>
       <td>-</td>
-      <td></td>
-      <td></td>
+      <td class="breakable"></td>
+      <td class="breakable"></td>
       <td></td>
     `;
-    resultsBody.appendChild(row);
+    // Track ordering metadata
+    row.dataset.question = String(event.question_number ?? '0');
+    row.dataset.level = levelKey;
+    row.dataset.levelOrder = String(_qaLevelOrder(levelKey));
+
+    // Insert preserving question asc and level order
+    const children = Array.from(resultsBody.children);
+    let inserted = false;
+    for (let i = 0; i < children.length; i++) {
+      const r = children[i];
+      const rq = Number(r.dataset.question || '0');
+      const rl = Number(r.dataset.levelOrder || '999');
+      const eq = Number(row.dataset.question || '0');
+      const el = Number(row.dataset.levelOrder || '999');
+      if (eq < rq || (eq === rq && el < rl)) {
+        resultsBody.insertBefore(row, r);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) {
+      resultsBody.appendChild(row);
+    }
     currentRun.rows.set(key, row);
   }
 
   const cells = row.children;
-  applyStatus(cells[2], event.status);
-  cells[3].textContent = event.duration_seconds != null ? Number(event.duration_seconds).toFixed(2) : '-';
-  cells[4].textContent = event.prompt_tokens ?? '-';
-  cells[5].textContent = event.completion_tokens ?? '-';
-  cells[6].textContent = event.cost_usd != null ? `$${Number(event.cost_usd).toFixed(6)}` : '-';
-  cells[7].textContent = event.model_answer || '';
-  cells[8].textContent = event.expected_answer || '';
+  applyStatus(cells[3], event.status);
+  cells[4].textContent = event.duration_seconds != null ? Number(event.duration_seconds).toFixed(2) : '-';
+  cells[5].textContent = event.prompt_tokens ?? '-';
+  cells[6].textContent = event.completion_tokens ?? '-';
+  cells[7].textContent = event.cost_usd != null ? `$${Number(event.cost_usd).toFixed(6)}` : '-';
+  const modelAns = (event.model_answer != null && String(event.model_answer).trim())
+    ? String(event.model_answer).trim()
+    : (event.normalized_answer != null ? String(event.normalized_answer).trim() : '');
+  const expectedAns = (event.expected_answer != null && String(event.expected_answer).trim())
+    ? String(event.expected_answer).trim()
+    : (event.normalized_expected != null ? String(event.normalized_expected).trim() : '');
+  cells[8].textContent = modelAns;
+  cells[9].textContent = expectedAns;
   const judgeInfo = event.judge_decision
     ? `Judge: ${event.judge_decision}${event.judge_rationale ? ` – ${event.judge_rationale}` : ''}`
     : '';
   const judgeError = event.judge_error ? `Judge error: ${event.judge_error}` : '';
   const errorMessage = event.error || '';
-  cells[9].textContent = [errorMessage, judgeInfo, judgeError].filter(Boolean).join(' | ');
+  cells[10].textContent = [errorMessage, judgeInfo, judgeError].filter(Boolean).join(' | ');
+}
+
+function _qaLevelOrder(level) {
+  const l = String(level || '').toLowerCase();
+  if (!l || l === 'base') return 0;
+  if (l === 'low') return 1;
+  if (l === 'medium') return 2;
+  if (l === 'high') return 3;
+  if (l.startsWith('unsupported')) return 98;
+  return 50;
 }
 
 function renderRun(summary) {
@@ -338,9 +433,13 @@ function renderRun(summary) {
 
   const attempts = Array.isArray(summary.attempts) ? summary.attempts.slice() : [];
   attempts.sort((a, b) => {
-    const modelCompare = (a.model || '').localeCompare(b.model || '');
-    if (modelCompare !== 0) return modelCompare;
-    return (a.question_number || 0) - (b.question_number || 0);
+    const aq = (a.question_number || 0);
+    const bq = (b.question_number || 0);
+    if (aq !== bq) return aq - bq;
+    const al = _qaLevelOrder(a.thinking_level_applied || a.thinking_level_requested || 'base');
+    const bl = _qaLevelOrder(b.thinking_level_applied || b.thinking_level_requested || 'base');
+    if (al !== bl) return al - bl;
+    return (a.model || '').localeCompare(b.model || '');
   });
 
   resultsBody.innerHTML = '';
@@ -368,11 +467,15 @@ function renderRun(summary) {
       completion_tokens: combinedCompletion,
       cost_usd: attempt.cost_usd,
       model_answer: attempt.model_answer,
+      normalized_answer: attempt.normalized_answer,
       expected_answer: attempt.expected_answer,
+      normalized_expected: attempt.normalized_expected,
       error: attempt.error,
       judge_decision: attempt.judge_decision,
       judge_rationale: attempt.judge_rationale,
       judge_error: attempt.judge_error,
+      thinking_level_applied: attempt.thinking_level_applied,
+      thinking_level_requested: attempt.thinking_level_requested,
     });
   });
 }

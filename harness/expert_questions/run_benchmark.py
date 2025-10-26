@@ -15,7 +15,23 @@ try:
 except ImportError:  # pragma: no cover - optional dependency for offline runs
     requests = None
 
-import structlog
+try:
+    import structlog  # type: ignore
+    LOGGER = structlog.get_logger(__name__)
+except Exception:  # pragma: no cover - fallback when structlog is unavailable
+    class _DummyLogger:
+        def info(self, *args, **kwargs):
+            pass
+        def warning(self, *args, **kwargs):
+            pass
+        def exception(self, *args, **kwargs):
+            pass
+    class _DummyStructlog:
+        @staticmethod
+        def get_logger(name=None):
+            return _DummyLogger()
+    structlog = _DummyStructlog()  # type: ignore
+    LOGGER = structlog.get_logger(__name__)
 
 from harness.config import get_settings
 from harness.exceptions import HarnessError
@@ -30,7 +46,7 @@ SETTINGS = get_settings()
 QA_RUNS_ROOT = SETTINGS.runs_root / "qa_runs"
 JUDGE_MODEL = SETTINGS.expert_qa_judge_model
 JUDGE_MAX_TOKENS = 256
-LOGGER = structlog.get_logger(__name__)
+ # LOGGER already defined above via structlog or fallback
 
 
 def _compose_reasoning_payload(level: str) -> Dict[str, Any]:
@@ -270,6 +286,38 @@ def _normalise_answer(value: str) -> str:
     return cleaned
 
 
+def _extract_single_line_answer(raw: str) -> str:
+    """Extract a single-line final answer from a raw model response.
+
+    Many providers prepend hidden or visible chain-of-thought blocks such as
+    <think>...</think>, <reasoning>...</reasoning>, or fenced blocks like
+    ```think ...```. We strip those and then take the last non-empty line.
+
+    Fallback: if nothing remains after stripping, return the first non-empty
+    line of the original content.
+    """
+    text = raw or ""
+    # Remove tagged reasoning blocks like <think>...</think>, <reasoning>...</reasoning>
+    text = re.sub(r"(?is)<(think|reasoning|deliberate|chain)>.*?</\1>", "", text)
+    # Remove bracket-tag variants like [think]...[/think]
+    text = re.sub(r"(?is)\[(think|reasoning|deliberate|chain)\].*?\[/\1\]", "", text)
+    # Remove fenced reasoning blocks like ```think ... ``` or ```reasoning ... ```
+    text = re.sub(r"(?is)```\s*(think|reasoning|deliberate)[\s\S]*?```", "", text)
+
+    # Now select the last non-empty line as the answer.
+    lines = [ln.strip() for ln in (text.strip().splitlines() if text else [])]
+    non_empty = [ln for ln in lines if ln]
+    if non_empty:
+        return non_empty[-1]
+
+    # Fallback to the first non-empty line from the original content.
+    orig_lines = [ln.strip() for ln in (raw.strip().splitlines() if raw else [])]
+    for ln in orig_lines:
+        if ln:
+            return ln
+    return ""
+
+
 def _build_prompt(question: Question) -> str:
     return (
         "Answer the following benchmark question with a single word or number.\n"
@@ -298,11 +346,20 @@ def run_question_benchmark(
     provider: Optional[str] = None,
     thinking_level: Optional[str] = None,
     include_thinking_variants: bool = False,
+    sweep_thinking_levels: bool = False,
+    question_limit: Optional[int] = None,
     run_id: str,
     output_dir: Optional[Path] = None,
     progress_callback: Optional[ProgressCallback] = None,
 ) -> Dict[str, Any]:
     questions = load_questions()
+    if question_limit is not None:
+        try:
+            limit = int(question_limit)
+        except (TypeError, ValueError):
+            limit = None
+        if limit is not None and limit > 0:
+            questions = questions[:limit]
     model_list = [model.strip() for model in models if model.strip()]
     if not model_list:
         raise HarnessError("At least one model must be provided.")
@@ -345,6 +402,13 @@ def run_question_benchmark(
 
     question_map = {question.number: question for question in questions}
 
+    def _suggest_levels_for_model(model_id: str) -> List[str]:
+        info = model_metadata.get(model_id) or {}
+        params = {str(p).lower() for p in (info.get("supported_parameters") or []) if isinstance(p, str)}
+        if "reasoning" not in params:
+            return []
+        return ["low", "medium", "high"]
+
     for model in model_list:
         model_info = model_metadata.get(model) or {}
         supported_params = {
@@ -352,8 +416,21 @@ def run_question_benchmark(
             for param in model_info.get("supported_parameters", [])
             if isinstance(param, str)
         }
-        supports_reasoning = bool(thinking_level) and "reasoning" in supported_params
-        reasoning_payload = _compose_reasoning_payload(thinking_level) if supports_reasoning and thinking_level else None
+        model_supports_reasoning = "reasoning" in supported_params
+        # Optional global thinking level (non-sweep mode only)
+        reasoning_payload = (
+            _compose_reasoning_payload(thinking_level)
+            if model_supports_reasoning and thinking_level
+            else None
+        )
+
+        # Determine which thinking levels to evaluate for this model
+        levels: List[Optional[str]]
+        if sweep_thinking_levels:
+            suggested = _suggest_levels_for_model(model)
+            levels = [None] + (suggested or ["low", "medium", "high"])  # fallback
+        else:
+            levels = [thinking_level] if thinking_level else [None]
 
         for sample_index in range(samples):
             for question in questions:
@@ -362,163 +439,176 @@ def run_question_benchmark(
                 prompt = _build_prompt(question)
                 store_text(attempt_dir / "prompt.txt", prompt)
 
-                attempt: AttemptSummary = {
-                    "model": model,
-                    "provider": provider,
-                    "sample_index": sample_index,
-                    "question_number": question.number,
-                    "question": question.prompt,
-                    "expected_answer": question.answer,
-                    "status": "error",
-                }
-                if thinking_level:
-                    attempt["thinking_level_requested"] = thinking_level
-                    attempt["thinking_level_supported"] = supports_reasoning
-                    if supports_reasoning:
-                        attempt["thinking_level_applied"] = thinking_level
+                for level in levels:
+                    level_suffix = (level or "base").replace("/", "_")
+                    level_dir = attempt_dir / f"lvl_{level_suffix}"
+                    level_dir.mkdir(parents=True, exist_ok=True)
+                    attempt: AttemptSummary = {
+                        "model": model,
+                        "provider": provider,
+                        "sample_index": sample_index,
+                        "question_number": question.number,
+                        "question": question.prompt,
+                        "expected_answer": question.answer,
+                        "status": "error",
+                    }
+                    if level:
+                        attempt["thinking_level_requested"] = level
+                        attempt["thinking_level_supported"] = model_supports_reasoning
+                        if model_supports_reasoning:
+                            attempt["thinking_level_applied"] = level
 
-                attempt_start = time.perf_counter()
-                api_latency = None
-                usage: Dict[str, Any] | None = None
-                judge_usage_data: Dict[str, Any] | None = None
-                judge_latency_value: Optional[float] = None
-                try:
-                    response_text, response_meta, api_latency = _call_openrouter(
-                        prompt,
-                        model=model,
-                        temperature=temperature,
-                        max_tokens=max_tokens,
-                        preferred_provider=provider,
-                        reasoning_payload=reasoning_payload,
-                    )
-                except Exception as exc:
-                    attempt["error"] = str(exc)
-                    store_text(attempt_dir / "error.log", str(exc))
-                else:
-                    store_text(attempt_dir / "response.txt", response_text)
-                    store_text(attempt_dir / "response.json", json.dumps(response_meta, indent=2))
-                    usage = response_meta.get("usage") if isinstance(response_meta, dict) else None
-                    model_answer = response_text.strip().splitlines()[0].strip()
-                    normalized_expected = _normalise_answer(question.answer)
-                    normalized_observed = _normalise_answer(model_answer)
-                    attempt.update(
-                        {
-                            "model_answer": model_answer,
-                            "normalized_expected": normalized_expected,
-                            "normalized_answer": normalized_observed,
-                        }
-                    )
-                    if normalized_expected and normalized_expected == normalized_observed:
-                        attempt["status"] = "passed"
-                    elif judge_enabled:
-                        try:
-                            judge_pass, judge_decision, judge_reason, judge_usage, judge_raw, judge_latency = _judge_answer(
-                                question.prompt,
-                                normalized_expected or question.answer,
-                                normalized_observed or model_answer,
-                            )
-                        except Exception as exc:  # pragma: no cover - defensive guard
-                            judge_enabled = False
-                            LOGGER.warning(
-                                "qa.judge_failed",
-                                question_number=question.number,
-                                model=model,
-                                error=str(exc),
-                            )
-                            attempt["judge_error"] = str(exc)
-                        else:
-                            attempt["judge_model"] = JUDGE_MODEL
-                            if judge_decision:
-                                attempt["judge_decision"] = judge_decision
-                            if judge_reason:
-                                attempt["judge_rationale"] = judge_reason
-                                reason_lower = judge_reason.lower()
-                                if "judge returned empty content" in reason_lower or "judge response missing content" in reason_lower:
-                                    attempt["judge_error"] = judge_reason
-                            if judge_raw:
-                                attempt["judge_raw_response"] = judge_raw
-                            if judge_usage:
-                                attempt["judge_usage"] = judge_usage
-                                judge_usage_data = judge_usage
-                            if judge_latency is not None:
-                                attempt["judge_latency_seconds"] = judge_latency
-                                judge_latency_value = judge_latency
-                            if judge_pass:
-                                attempt["status"] = "passed"
-                            else:
-                                attempt["status"] = "failed"
+                    attempt_start = time.perf_counter()
+                    api_latency = None
+                    usage: Dict[str, Any] | None = None
+                    judge_usage_data: Dict[str, Any] | None = None
+                    judge_latency_value: Optional[float] = None
+                    try:
+                        # Adjust reasoning payload per level
+                        level_reasoning = None
+                        if model_supports_reasoning and level:
+                            level_reasoning = _compose_reasoning_payload(level)
+                        response_text, response_meta, api_latency = _call_openrouter(
+                            prompt,
+                            model=model,
+                            temperature=temperature,
+                            max_tokens=max_tokens,
+                            preferred_provider=provider,
+                            reasoning_payload=level_reasoning or (
+                                reasoning_payload if model_supports_reasoning and thinking_level and not sweep_thinking_levels else None
+                            ),
+                        )
+                    except Exception as exc:
+                        attempt["error"] = str(exc)
+                        store_text(level_dir / "error.log", str(exc))
                     else:
-                        attempt["status"] = "failed"
+                        store_text(level_dir / "response.txt", response_text)
+                        store_text(level_dir / "response.json", json.dumps(response_meta, indent=2))
+                        usage = response_meta.get("usage") if isinstance(response_meta, dict) else None
+                        # Extract the final single-token/word answer robustly (skip reasoning blocks)
+                        model_answer = _extract_single_line_answer(response_text)
+                        normalized_expected = _normalise_answer(question.answer)
+                        normalized_observed = _normalise_answer(model_answer)
+                        attempt.update(
+                            {
+                                "model_answer": model_answer,
+                                "normalized_expected": normalized_expected,
+                                "normalized_answer": normalized_observed,
+                            }
+                        )
+                        if normalized_expected and normalized_expected == normalized_observed:
+                            attempt["status"] = "passed"
+                        elif judge_enabled:
+                            try:
+                                judge_pass, judge_decision, judge_reason, judge_usage, judge_raw, judge_latency = _judge_answer(
+                                    question.prompt,
+                                    normalized_expected or question.answer,
+                                    normalized_observed or model_answer,
+                                )
+                            except Exception as exc:  # pragma: no cover - defensive guard
+                                judge_enabled = False
+                                LOGGER.warning(
+                                    "qa.judge_failed",
+                                    question_number=question.number,
+                                    model=model,
+                                    error=str(exc),
+                                )
+                                attempt["judge_error"] = str(exc)
+                            else:
+                                attempt["judge_model"] = JUDGE_MODEL
+                                if judge_decision:
+                                    attempt["judge_decision"] = judge_decision
+                                if judge_reason:
+                                    attempt["judge_rationale"] = judge_reason
+                                    reason_lower = judge_reason.lower()
+                                    if "judge returned empty content" in reason_lower or "judge response missing content" in reason_lower:
+                                        attempt["judge_error"] = judge_reason
+                                if judge_raw:
+                                    attempt["judge_raw_response"] = judge_raw
+                                if judge_usage:
+                                    attempt["judge_usage"] = judge_usage
+                                    judge_usage_data = judge_usage
+                                if judge_latency is not None:
+                                    attempt["judge_latency_seconds"] = judge_latency
+                                    judge_latency_value = judge_latency
+                                if judge_pass:
+                                    attempt["status"] = "passed"
+                                else:
+                                    attempt["status"] = "failed"
+                        else:
+                            attempt["status"] = "failed"
 
-                duration = time.perf_counter() - attempt_start
-                attempt["duration_seconds"] = duration
-                if api_latency is not None:
-                    attempt["api_latency_seconds"] = api_latency
-                if usage is not None:
-                    attempt["usage"] = usage
+                    duration = time.perf_counter() - attempt_start
+                    attempt["duration_seconds"] = duration
+                    if api_latency is not None:
+                        attempt["api_latency_seconds"] = api_latency
+                    if usage is not None:
+                        attempt["usage"] = usage
 
-                prompt_tokens = None
-                completion_tokens = None
-                if usage:
-                    prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
-                    completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
-                judge_prompt_tokens = None
-                judge_completion_tokens = None
-                if judge_usage_data:
-                    judge_prompt_tokens = judge_usage_data.get("prompt_tokens") or judge_usage_data.get("input_tokens")
-                    judge_completion_tokens = judge_usage_data.get("completion_tokens") or judge_usage_data.get("output_tokens")
-                    attempt["judge_usage"] = judge_usage_data
-                if prompt_tokens is not None:
-                    prompt_tokens = int(prompt_tokens)
-                    total_prompt_tokens += prompt_tokens
-                if completion_tokens is not None:
-                    completion_tokens = int(completion_tokens)
-                    total_completion_tokens += completion_tokens
-                if judge_prompt_tokens is not None:
-                    judge_prompt_tokens = int(judge_prompt_tokens)
-                    total_prompt_tokens += judge_prompt_tokens
-                    attempt["judge_prompt_tokens"] = judge_prompt_tokens
-                if judge_completion_tokens is not None:
-                    judge_completion_tokens = int(judge_completion_tokens)
-                    total_completion_tokens += judge_completion_tokens
-                    attempt["judge_completion_tokens"] = judge_completion_tokens
-
-                attempt_cost = 0.0
-                pricing = model_metadata.get(model)
-                if pricing and (prompt_tokens is not None or completion_tokens is not None):
-                    response_cost = 0.0
+                    # Per-level token accounting and cost
+                    prompt_tokens = None
+                    completion_tokens = None
+                    if usage:
+                        prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+                        completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+                    judge_prompt_tokens = None
+                    judge_completion_tokens = None
+                    if judge_usage_data:
+                        judge_prompt_tokens = judge_usage_data.get("prompt_tokens") or judge_usage_data.get("input_tokens")
+                        judge_completion_tokens = judge_usage_data.get("completion_tokens") or judge_usage_data.get("output_tokens")
+                        attempt["judge_usage"] = judge_usage_data
                     if prompt_tokens is not None:
-                        response_cost += prompt_tokens * pricing.get("prompt", 0.0)
+                        prompt_tokens = int(prompt_tokens)
+                        total_prompt_tokens += prompt_tokens
                     if completion_tokens is not None:
-                        response_cost += completion_tokens * pricing.get("completion", 0.0)
-                    if response_cost:
-                        attempt["response_cost_usd"] = response_cost
-                        attempt_cost += response_cost
-
-                judge_cost = 0.0
-                judge_pricing = model_metadata.get(JUDGE_MODEL)
-                if judge_pricing and (judge_prompt_tokens is not None or judge_completion_tokens is not None):
+                        completion_tokens = int(completion_tokens)
+                        total_completion_tokens += completion_tokens
                     if judge_prompt_tokens is not None:
-                        judge_cost += judge_prompt_tokens * judge_pricing.get("prompt", 0.0)
+                        judge_prompt_tokens = int(judge_prompt_tokens)
+                        total_prompt_tokens += judge_prompt_tokens
+                        attempt["judge_prompt_tokens"] = judge_prompt_tokens
                     if judge_completion_tokens is not None:
-                        judge_cost += judge_completion_tokens * judge_pricing.get("completion", 0.0)
-                    if judge_cost:
-                        attempt["judge_cost_usd"] = judge_cost
-                        attempt_cost += judge_cost
+                        judge_completion_tokens = int(judge_completion_tokens)
+                        total_completion_tokens += judge_completion_tokens
+                        attempt["judge_completion_tokens"] = judge_completion_tokens
 
-                if attempt_cost:
-                    attempt["cost_usd"] = attempt_cost
-                    total_cost += attempt_cost
+                    attempt_cost = 0.0
+                    pricing = model_metadata.get(model)
+                    if pricing and (prompt_tokens is not None or completion_tokens is not None):
+                        response_cost = 0.0
+                        if prompt_tokens is not None:
+                            response_cost += prompt_tokens * pricing.get("prompt", 0.0)
+                        if completion_tokens is not None:
+                            response_cost += completion_tokens * pricing.get("completion", 0.0)
+                        if response_cost:
+                            attempt["response_cost_usd"] = response_cost
+                            attempt_cost += response_cost
 
-                total_duration += duration
-                if api_latency is not None:
-                    total_latency += api_latency
-                if judge_latency_value is not None:
-                    total_latency += judge_latency_value
+                    judge_cost = 0.0
+                    judge_pricing = model_metadata.get(JUDGE_MODEL)
+                    if judge_pricing and (judge_prompt_tokens is not None or judge_completion_tokens is not None):
+                        if judge_prompt_tokens is not None:
+                            judge_cost += judge_prompt_tokens * judge_pricing.get("prompt", 0.0)
+                        if judge_completion_tokens is not None:
+                            judge_cost += judge_completion_tokens * judge_pricing.get("completion", 0.0)
+                        if judge_cost:
+                            attempt["judge_cost_usd"] = judge_cost
+                            attempt_cost += judge_cost
 
-                attempts.append(attempt)
-                if progress_callback:
-                    progress_callback(model, question.number, sample_index, attempt)
+                    if attempt_cost:
+                        attempt["cost_usd"] = attempt_cost
+                        total_cost += attempt_cost
+
+                    total_duration += duration
+                    if api_latency is not None:
+                        total_latency += api_latency
+                    if judge_latency_value is not None:
+                        total_latency += judge_latency_value
+
+                    # Record the attempt and emit progress for this level
+                    attempts.append(attempt)
+                    if progress_callback:
+                        progress_callback(model, question.number, sample_index, attempt)
 
     per_model_stats: Dict[str, Dict[str, Any]] = {}
     for model in model_list:
@@ -576,6 +666,7 @@ def run_question_benchmark(
         "max_tokens": max_tokens,
         "thinking_level": thinking_level,
         "include_thinking_variants": include_thinking_variants,
+        "sweep_thinking_levels": bool(sweep_thinking_levels),
         "attempts": attempts,
         "metrics": {
             "per_model": per_model_stats,

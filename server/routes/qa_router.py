@@ -56,6 +56,7 @@ class QARunRequest(BaseModel):
     provider: Optional[str] = None
     thinking_level: Optional[str] = None
     include_thinking_variants: bool = False
+    sweep_thinking_levels: bool = False
 
     @field_validator("models")
     @classmethod
@@ -166,6 +167,7 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
             "question_count": len(questions),
             "thinking_level": thinking_level,
             "include_thinking_variants": include_thinking_variants,
+            "sweep_thinking_levels": request.sweep_thinking_levels,
         },
     )
 
@@ -192,6 +194,8 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
                 "judge_error": attempt.get("judge_error"),
                 "error": attempt.get("error"),
                 "provider": provider,
+                "thinking_level_applied": attempt.get("thinking_level_applied"),
+                "thinking_level_requested": attempt.get("thinking_level_requested"),
             },
         )
 
@@ -206,6 +210,7 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
                 provider=provider,
                 thinking_level=thinking_level,
                 include_thinking_variants=include_thinking_variants,
+                sweep_thinking_levels=request.sweep_thinking_levels,
                 run_id=run_id,
                 progress_callback=progress_proxy,
             )

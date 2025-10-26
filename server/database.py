@@ -235,22 +235,21 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
         default_level = summary.get("thinking_level")
         metrics = summary.get("metrics") or {}
         accuracy_map = metrics.get("model_accuracy") or {}
-        per_model_attempts: Dict[str, List[Dict[str, Any]]] = {}
+        # Group attempts per (model, thinking level)
+        per_model_level: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
         for attempt in attempts:
             model_id = attempt.get("model")
             if not model_id:
                 continue
-            per_model_attempts.setdefault(model_id, []).append(attempt)
+            level = _determine_model_level([attempt], default_level)
+            per_model_level.setdefault((model_id, level), []).append(attempt)
 
-        for model_id, model_attempts in per_model_attempts.items():
-            level = _determine_model_level(model_attempts, default_level)
-            key = (model_id, level)
+        for (model_id, level), model_attempts in per_model_level.items():
             cost_values = [a.get("cost_usd") for a in model_attempts if a.get("cost_usd") is not None]
             duration_values = [a.get("duration_seconds") for a in model_attempts if a.get("duration_seconds") is not None]
-            accuracy = accuracy_map.get(model_id)
-            if accuracy is None and model_attempts:
-                successes = sum(1 for a in model_attempts if (a.get("status") or "").lower() == "passed")
-                accuracy = successes / len(model_attempts) if model_attempts else None
+            # Compute accuracy for this (model, level) subset
+            successes = sum(1 for a in model_attempts if (a.get("status") or "").lower() == "passed")
+            accuracy = successes / len(model_attempts) if model_attempts else None
             candidate = {
                 "model_id": model_id,
                 "thinking_level": level,
@@ -260,6 +259,7 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
                 "runs": 1,
                 "timestamp": row.timestamp_utc,
             }
+            key = (model_id, level)
             group = groups.setdefault(key, {"runs": 0, "best": None})
             group["runs"] += 1
             if _is_better(candidate, group["best"]):

@@ -192,52 +192,111 @@ def leaderboard(limit_runs: int = 200) -> List[Dict[str, Any]]:
             .all()
         )
 
-    per_model: Dict[str, Dict[str, Any]] = {}
-    per_model_counts: Dict[str, int] = {}
+    # Determine thinking level similar to code harness grouping
+    def _determine_level(attempts: List[Dict[str, Any]], default_level: Optional[str]) -> str:
+        for a in attempts:
+            level = a.get("thinking_level_applied")
+            if level:
+                return str(level)
+        for a in attempts:
+            if a.get("thinking_level_supported") is False and a.get("thinking_level_requested"):
+                req = a.get("thinking_level_requested")
+                if req:
+                    return f"unsupported ({req})"
+        if default_level:
+            return default_level
+        return "base"
+
+    groups: Dict[tuple[str, str], Dict[str, Any]] = {}
+    counts: Dict[tuple[str, str], int] = {}
 
     for record in records:
-        summary = json.loads(record.summary_json)
-        per_model_stats = summary.get("metrics", {}).get("per_model", {})
-        attempts = summary.get("attempts", [])
-        for model, stats in per_model_stats.items():
-            accuracy = stats.get("accuracy")
-            cost = stats.get("cost_usd")
-            duration = stats.get("duration_seconds")
-            total = stats.get("total")
-            correct = stats.get("correct")
-            prompt_tokens = stats.get("prompt_tokens")
-            completion_tokens = stats.get("completion_tokens")
-
-            per_model_counts[model] = per_model_counts.get(model, 0) + 1
-
-            if accuracy is None:
+        try:
+            summary = json.loads(record.summary_json)
+        except json.JSONDecodeError:
+            continue
+        attempts = summary.get("attempts") or []
+        default_level = summary.get("thinking_level")
+        # Group attempts by (model, determined level)
+        per_key: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+        for a in attempts:
+            model = a.get("model")
+            if not model:
                 continue
+            level = _determine_level([a], default_level)
+            per_key.setdefault((model, level), []).append(a)
 
-            existing = per_model.get(model)
-            if existing is None or (existing.get("accuracy") or 0) < accuracy:
-                per_model[model] = {
-                    "model_id": model,
-                    "accuracy": accuracy,
-                    "cost_usd": cost,
-                    "duration_seconds": duration,
-                    "runs": per_model_counts[model],
-                    "total": total,
-                    "correct": correct,
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                }
-            else:
-                per_model[model]["runs"] = per_model_counts[model]
+        # Build candidates per group
+        for key, group_attempts in per_key.items():
+            model_id, level = key
+            successes = sum(1 for a in group_attempts if (a.get("status") or "").lower() == "passed")
+            total = len(group_attempts)
+            accuracy = successes / total if total else None
+            cost_values = [a.get("cost_usd") for a in group_attempts if a.get("cost_usd") is not None]
+            duration_values = [a.get("duration_seconds") for a in group_attempts if a.get("duration_seconds") is not None]
 
-    # sort models by best accuracy (desc), then cost (asc)
-    leaderboard_rows = sorted(
-        per_model.values(),
-        key=lambda row: (
-            0 if row.get("accuracy") is None else -row["accuracy"],
-            row.get("cost_usd") or float("inf"),
-        ),
+            candidate = {
+                "model_id": model_id,
+                "thinking_level": level,
+                "accuracy": accuracy,
+                "cost_usd": sum(cost_values) if cost_values else None,
+                "duration_seconds": sum(duration_values) if duration_values else None,
+                "runs": 1,
+            }
+            counts[key] = counts.get(key, 0) + 1
+            incumbent = groups.get(key)
+            # Prefer higher accuracy; tie-break on lower cost, then lower duration
+            def _better(a, b):
+                if b is None:
+                    return True
+                ax, bx = a.get("accuracy"), b.get("accuracy")
+                if ax is not None and bx is not None:
+                    if ax != bx:
+                        return ax > bx
+                elif ax is not None or bx is not None:
+                    return ax is not None
+                ac, bc = a.get("cost_usd"), b.get("cost_usd")
+                if ac is not None and bc is not None:
+                    if ac != bc:
+                        return ac < bc
+                elif ac is not None or bc is not None:
+                    return ac is not None
+                ad, bd = a.get("duration_seconds"), b.get("duration_seconds")
+                if ad is not None and bd is not None:
+                    if ad != bd:
+                        return ad < bd
+                elif ad is not None or bd is not None:
+                    return ad is not None
+                return True
+
+            if _better(candidate, incumbent):
+                groups[key] = candidate
+
+    # Compile leaderboard rows
+    rows: List[Dict[str, Any]] = []
+    for key, best in groups.items():
+        model_id, level = key
+        rows.append(
+            {
+                "model_id": model_id,
+                "thinking_level": level,
+                "accuracy": best.get("accuracy"),
+                "cost_usd": best.get("cost_usd"),
+                "duration_seconds": best.get("duration_seconds"),
+                "runs": counts.get(key, 1),
+            }
+        )
+
+    rows.sort(
+        key=lambda r: (
+            0 if r.get("accuracy") is None else -r["accuracy"],
+            r.get("cost_usd") if r.get("cost_usd") is not None else float("inf"),
+            r.get("duration_seconds") if r.get("duration_seconds") is not None else float("inf"),
+            r.get("model_id") or "",
+            r.get("thinking_level") or "",
+        )
     )
-    return leaderboard_rows
+    return rows
 
 
 def delete_runs_for_model(model_id: str) -> int:

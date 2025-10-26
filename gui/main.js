@@ -30,6 +30,7 @@ const allowDiffRewriteInput = runForm.querySelector('#allow-diff-rewrite');
 const providerInput = runForm.querySelector('#provider-input');
 const thinkingLevelInput = runForm.querySelector('#thinking-level-input');
 const includeThinkingVariantsInput = runForm.querySelector('#include-thinking-variants');
+const sweepThinkingLevelsInput = runForm.querySelector('#sweep-thinking-levels');
 const modelCapabilitiesNote = document.querySelector('#model-capabilities');
 const openQaButton = document.querySelector('#open-qa-button');
 
@@ -172,6 +173,9 @@ async function startRun(event) {
   if (includeThinkingVariantsInput) {
     payload.include_thinking_variants = includeThinkingVariantsInput.checked;
   }
+  if (sweepThinkingLevelsInput) {
+    payload.sweep_thinking_levels = !!sweepThinkingLevelsInput.checked;
+  }
   if (responseTextInput) {
     const responseText = responseTextInput.value.trim();
     if (responseText) {
@@ -300,13 +304,24 @@ function setupRunView(metadata, runId) {
   });
 
   resultsBody.innerHTML = '';
-  tasks.forEach((task, index) => {
-    const row = document.createElement('tr');
+  currentRun.rows.clear();
+}
+
+function updateAttemptRow(event) {
+  const { task_id: taskId, status, duration_seconds: duration, prompt_tokens: prompt, completion_tokens: completion, cost_usd: cost, error } = event;
+  const levelKey = event.thinking_level_applied || event.thinking_level_requested || 'base';
+  const rowKey = `${taskId}::${levelKey}`;
+  let row = currentRun.rows.get(rowKey);
+  if (!row) {
+    row = document.createElement('tr');
     row.classList.add('fade-in');
-    row.style.animationDelay = `${index * 30}ms`;
-    row.dataset.taskId = task;
+    row.dataset.task = taskId;
+    row.dataset.level = levelKey;
+    row.dataset.levelOrder = String(levelOrder(levelKey));
+    const levelLabel = formatThinkingLevel(levelKey);
     row.innerHTML = `
-      <td>${renderTaskName(task)}</td>
+      <td>${renderTaskName(taskId)}</td>
+      <td>${levelLabel}</td>
       <td class="status-cell"></td>
       <td>-</td>
       <td>-</td>
@@ -314,26 +329,31 @@ function setupRunView(metadata, runId) {
       <td>-</td>
       <td></td>
     `;
-    applyStatus(row.querySelector('.status-cell'), 'pending');
-    resultsBody.appendChild(row);
-    currentRun.rows.set(task, row);
-  });
-}
-
-function updateAttemptRow(event) {
-  const { task_id: taskId, status, duration_seconds: duration, prompt_tokens: prompt, completion_tokens: completion, cost_usd: cost, error } = event;
-  const row = currentRun.rows.get(taskId);
-  if (!row) {
-    return;
+    // Insert in order: task asc, then level order
+    const children = Array.from(resultsBody.children);
+    let inserted = false;
+    for (let i = 0; i < children.length; i++) {
+      const r = children[i];
+      const rt = r.dataset.task || '';
+      const rl = Number(r.dataset.levelOrder || '999');
+      const cmp = rt.localeCompare(taskId);
+      const el = Number(row.dataset.levelOrder || '999');
+      if (cmp > 0 || (cmp === 0 && el < rl)) {
+        resultsBody.insertBefore(row, r);
+        inserted = true;
+        break;
+      }
+    }
+    if (!inserted) resultsBody.appendChild(row);
+    currentRun.rows.set(rowKey, row);
   }
   const cells = row.children;
-  const statusCell = cells[1];
-  applyStatus(statusCell, status);
-  cells[2].textContent = duration != null ? duration.toFixed(2) : '-';
-  cells[3].textContent = prompt != null ? prompt : '-';
-  cells[4].textContent = completion != null ? completion : '-';
-  cells[5].textContent = cost != null ? `$${cost.toFixed(6)}` : '-';
-  cells[6].textContent = error || '';
+  applyStatus(cells[2], status);
+  cells[3].textContent = duration != null ? duration.toFixed(2) : '-';
+  cells[4].textContent = prompt != null ? prompt : '-';
+  cells[5].textContent = completion != null ? completion : '-';
+  cells[6].textContent = cost != null ? `$${Number(cost).toFixed(6)}` : '-';
+  cells[7].textContent = error || '';
 }
 
 function renderRun(summary) {
@@ -366,17 +386,29 @@ function renderRun(summary) {
   });
 
   resultsBody.innerHTML = '';
-  summary.attempts.forEach((attempt, index) => {
-    const row = document.createElement('tr');
-    row.classList.add('fade-in');
-    row.style.animationDelay = `${index * 40}ms`;
+  const attempts = Array.isArray(summary.attempts) ? summary.attempts.slice() : [];
+  attempts.sort((a, b) => {
+    const ta = a.task_id || '';
+    const tb = b.task_id || '';
+    const cmp = ta.localeCompare(tb);
+    if (cmp !== 0) return cmp;
+    const la = levelOrder(a.thinking_level_applied || a.thinking_level_requested || 'base');
+    const lb = levelOrder(b.thinking_level_applied || b.thinking_level_requested || 'base');
+    return la - lb;
+  });
+  attempts.forEach((attempt, index) => {
     const usage = attempt.usage || {};
     const prompt = usage.prompt_tokens ?? usage.input_tokens;
     const completion = usage.completion_tokens ?? usage.output_tokens;
-    const cost = attempt.cost_usd != null ? `$${attempt.cost_usd.toFixed(6)}` : '-';
-    const duration = attempt.duration_seconds != null ? attempt.duration_seconds.toFixed(2) : '-';
+    const cost = attempt.cost_usd != null ? `$${Number(attempt.cost_usd).toFixed(6)}` : '-';
+    const duration = attempt.duration_seconds != null ? Number(attempt.duration_seconds).toFixed(2) : '-';
+    const levelLabel = formatThinkingLevel(attempt.thinking_level_applied || attempt.thinking_level_requested || 'base');
+    const row = document.createElement('tr');
+    row.classList.add('fade-in');
+    row.style.animationDelay = `${index * 30}ms`;
     row.innerHTML = `
       <td>${renderTaskName(attempt.task_id)}</td>
+      <td>${levelLabel}</td>
       <td class="status-cell"></td>
       <td>${duration}</td>
       <td>${prompt ?? '-'}</td>
@@ -435,6 +467,16 @@ function formatThinkingLevel(level) {
       .replace(/\((.+)\)/, (_, inner) => inner ? ` (${inner})` : '');
   }
   return level.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function levelOrder(level) {
+  const l = String(level || '').toLowerCase();
+  if (!l || l === 'base') return 0;
+  if (l === 'low') return 1;
+  if (l === 'medium') return 2;
+  if (l === 'high') return 3;
+  if (l.startsWith('unsupported')) return 98;
+  return 50;
 }
 
 leaderboardBody?.addEventListener('click', async (event) => {

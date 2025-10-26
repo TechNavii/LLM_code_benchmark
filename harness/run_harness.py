@@ -1496,6 +1496,11 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Also evaluate :thinking variants for models that support them.",
     )
+    parser.add_argument(
+        "--sweep-thinking-levels",
+        action="store_true",
+        help="Evaluate base plus low/medium/high thinking levels where supported.",
+    )
     parser.add_argument("--response-file", type=Path, help="Replay a stored model response (single-task runs only)")
     parser.add_argument("--dry-run", action="store_true", help="Print prompts only, skip model calls and evaluation")
     parser.add_argument("--include-tests", action="store_true", help="Include test files in the model prompt context")
@@ -1554,6 +1559,7 @@ def run_tasks(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     preferred_provider: Optional[str] = None,
     thinking_level: Optional[str] = None,
+    sweep_thinking_levels: bool = False,
     include_thinking_variants: bool = False,
     include_tests: bool = False,
     install_deps: bool = False,
@@ -1597,31 +1603,48 @@ def run_tasks(
 
     attempts: List[Dict] = []
 
+    def _suggest_levels_for_model(model_id: str) -> List[str]:
+        info = model_metadata.get(model_id) or {}
+        params = {p.lower() for p in (info.get("supported_parameters") or []) if isinstance(p, str)}
+        if "reasoning" not in params:
+            return []
+        # Default suggestion set; providers typically accept these effort levels
+        return ["low", "medium", "high"]
+
     for model in models:
-        for task_id in tasks:
-            metadata = load_metadata(task_id)
-            for sample_idx in range(samples):
-                attempt_summary = evaluate_attempt(
-                    task_id=task_id,
-                    metadata=metadata,
-                    model=model,
-                    sample_index=sample_idx,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    preferred_provider=preferred_provider,
-                    thinking_level=thinking_level,
-                    model_metadata=model_metadata,
-                    include_tests=include_tests,
-                    install_deps_flag=install_deps,
-                    response_override=response_override,
-                    allow_incomplete_diffs=allow_incomplete_diffs,
-                    allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
-                    run_dir=run_dir,
-                )
-                attempts.append(attempt_summary)
-                update_task_latest(task_id, attempt_summary)
-                if progress_callback:
-                    progress_callback(model=model, task_id=task_id, sample_index=sample_idx, summary=attempt_summary)
+        # Determine which thinking levels to evaluate for this model
+        levels: List[Optional[str]]
+        if sweep_thinking_levels:
+            suggested = _suggest_levels_for_model(model)
+            levels = [None] + (suggested or ["low", "medium", "high"])  # fallback if unknown
+        else:
+            levels = [thinking_level] if thinking_level else [None]
+
+        for level in levels:
+            for task_id in tasks:
+                metadata = load_metadata(task_id)
+                for sample_idx in range(samples):
+                    attempt_summary = evaluate_attempt(
+                        task_id=task_id,
+                        metadata=metadata,
+                        model=model,
+                        sample_index=sample_idx,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                        preferred_provider=preferred_provider,
+                        thinking_level=level,
+                        model_metadata=model_metadata,
+                        include_tests=include_tests,
+                        install_deps_flag=install_deps,
+                        response_override=response_override,
+                        allow_incomplete_diffs=allow_incomplete_diffs,
+                        allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
+                        run_dir=run_dir,
+                    )
+                    attempts.append(attempt_summary)
+                    update_task_latest(task_id, attempt_summary)
+                    if progress_callback:
+                        progress_callback(model=model, task_id=task_id, sample_index=sample_idx, summary=attempt_summary)
 
     try:
         run_dir_relative = str(run_dir.relative_to(output_dir))
@@ -1683,6 +1706,7 @@ def run_tasks(
         "allow_incomplete_diffs": allow_incomplete_diffs,
         "allow_diff_rewrite_fallback": allow_diff_rewrite_fallback,
         "thinking_level": thinking_level,
+        "sweep_thinking_levels": bool(sweep_thinking_levels),
         "include_thinking_variants": include_thinking_variants,
         "requested_models": original_models,
         "attempts": attempts,
@@ -1747,6 +1771,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         max_tokens=args.max_tokens,
         preferred_provider=args.provider,
         thinking_level=args.thinking_level,
+        sweep_thinking_levels=args.sweep_thinking_levels,
         include_thinking_variants=args.include_thinking_variants,
         include_tests=args.include_tests,
         install_deps=args.install_deps,

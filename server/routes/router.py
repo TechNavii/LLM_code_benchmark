@@ -64,6 +64,7 @@ class RunRequestPayload(BaseModel):
     response_text: Optional[str] = None
     thinking_level: Optional[str] = None
     include_thinking_variants: bool = False
+    sweep_thinking_levels: bool = False
 
 
 @router.get("/", include_in_schema=False)
@@ -149,6 +150,7 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
             "allow_diff_rewrite_fallback": validated.allow_diff_rewrite_fallback,
             "thinking_level": validated.thinking_level,
             "include_thinking_variants": validated.include_thinking_variants,
+            "sweep_thinking_levels": validated.sweep_thinking_levels,
         },
     )
 
@@ -183,6 +185,7 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
                 max_tokens=validated.max_tokens,
                 preferred_provider=validated.provider,
                 thinking_level=validated.thinking_level,
+                sweep_thinking_levels=validated.sweep_thinking_levels,
                 include_thinking_variants=validated.include_thinking_variants,
                 include_tests=validated.include_tests,
                 install_deps=validated.install_deps,

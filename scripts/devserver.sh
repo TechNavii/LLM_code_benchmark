@@ -70,7 +70,7 @@ import webbrowser
 host = os.environ.get('DEVSERVER_HOST', '127.0.0.1')
 port = int(os.environ.get('DEVSERVER_PORT', '8000'))
 cache_buster = os.environ.get('DEVSERVER_CACHE_BUSTER', '${CACHE_BUSTER}')
-url = f"http://{host}:{port}/ui/index.html?devrefresh={cache_buster}"
+url = f"http://{host}:{port}/ui/index.html"
 
 try:
     webbrowser.open(url, new=0, autoraise=True)
