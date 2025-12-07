@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 
@@ -14,7 +14,7 @@ class CacheEntry:
     expires_at: datetime
 
     def is_expired(self) -> bool:
-        return datetime.utcnow() > self.expires_at
+        return datetime.now(timezone.utc) > self.expires_at
 
 
 class AsyncCache:
@@ -33,7 +33,7 @@ class AsyncCache:
 
     async def set(self, key: str, value: Any, ttl_seconds: int = 300) -> None:
         async with self._lock:
-            expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
             self._cache[key] = CacheEntry(value=value, expires_at=expires_at)
 
     async def invalidate(self, key: str) -> None:

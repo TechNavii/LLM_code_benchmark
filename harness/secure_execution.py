@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import resource
 import subprocess
 from pathlib import Path
 from typing import Iterable, Optional
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_command(command: Iterable[str]) -> list[str]:
@@ -38,11 +41,11 @@ def secure_run(
         try:
             resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
         except (ValueError, OSError):
-            pass
+            logger.warning("Failed to set memory limit to %dMB", max_memory_mb)
         try:
             resource.setrlimit(resource.RLIMIT_CPU, (timeout, timeout + 1))
         except (ValueError, OSError):
-            pass
+            logger.warning("Failed to set CPU limit to %ds", timeout)
 
     process_env = env.copy() if env else None
 

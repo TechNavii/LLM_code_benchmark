@@ -23,6 +23,7 @@ router = APIRouter()
 settings = get_settings()
 logger = structlog.get_logger(__name__)
 HARNESS_SETTINGS = get_harness_settings()
+_background_tasks: set = set()
 DEFAULT_ALLOW_INCOMPLETE_DIFFS = HARNESS_SETTINGS.allow_incomplete_diffs
 DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK = HARNESS_SETTINGS.allow_diff_rewrite_fallback
 DEFAULT_MAX_TOKENS = HARNESS_SETTINGS.default_max_tokens
@@ -203,7 +204,9 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
             database.save_run(summary)
             progress_manager.complete(run_id, summary)
 
-    asyncio.create_task(runner())
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return RunLaunchResponse(run_id=run_id)
 
 

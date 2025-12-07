@@ -4,7 +4,7 @@ import datetime as dt
 import json
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
 from sqlalchemy.orm import Mapped, Session, declarative_base, mapped_column, relationship, sessionmaker
@@ -70,7 +70,7 @@ def init_db() -> None:
 
 
 @contextmanager
-def get_session() -> Session:
+def get_session() -> Iterator[Session]:
     session = SessionLocal()
     try:
         yield session
@@ -233,8 +233,6 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
         if not attempts:
             continue
         default_level = summary.get("thinking_level")
-        metrics = summary.get("metrics") or {}
-        accuracy_map = metrics.get("model_accuracy") or {}
         # Group attempts per (model, thinking level)
         per_model_level: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
         for attempt in attempts:

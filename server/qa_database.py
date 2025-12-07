@@ -66,8 +66,6 @@ DB_PATH = ROOT / "runs" / "qa_history.db"
 
 engine = create_engine(
     f"sqlite:///{DB_PATH}",
-    pool_size=settings.database.pool_size,
-    max_overflow=settings.database.max_overflow,
     echo=settings.database.echo,
 )
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, class_=Session)

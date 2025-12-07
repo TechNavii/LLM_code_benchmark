@@ -29,17 +29,23 @@ class ResilientOpenRouterClient:
         self._timeout = timeout_seconds
         self._session: Optional[aiohttp.ClientSession] = None
 
+    async def __aenter__(self) -> "ResilientOpenRouterClient":
+        if self._session is None:
+            timeout = aiohttp.ClientTimeout(total=self._timeout)
+            connector = aiohttp.TCPConnector(limit=10)
+            self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        await self.close()
+
     @asynccontextmanager
     async def session(self) -> AsyncIterator[aiohttp.ClientSession]:
         if self._session is None:
             timeout = aiohttp.ClientTimeout(total=self._timeout)
             connector = aiohttp.TCPConnector(limit=10)
             self._session = aiohttp.ClientSession(timeout=timeout, connector=connector)
-        try:
-            yield self._session
-        finally:
-            # caller is responsible for closing via close()
-            ...
+        yield self._session
 
     async def close(self) -> None:
         if self._session is not None:

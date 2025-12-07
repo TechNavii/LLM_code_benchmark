@@ -25,6 +25,7 @@ from server.qa_progress import qa_progress_manager
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/qa", tags=["qa"])
+_background_tasks: set = set()
 
 
 class QARunLaunchResponse(BaseModel):
@@ -221,7 +222,9 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
             save_run(summary)
             qa_progress_manager.complete(run_id, summary)
 
-    asyncio.create_task(runner())
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     return QARunLaunchResponse(run_id=run_id)
 
 

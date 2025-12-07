@@ -244,7 +244,13 @@ function listenToRun(runId) {
   };
 
   socket.onmessage = (event) => {
-    const data = JSON.parse(event.data);
+    let data;
+    try {
+      data = JSON.parse(event.data);
+    } catch (e) {
+      console.error('Failed to parse WebSocket message', e);
+      return;
+    }
     switch (data.type) {
       case 'init':
         setupRunView(data.metadata, runId);
@@ -329,19 +335,25 @@ function updateAttemptRow(event) {
     row = document.createElement('tr');
     row.classList.add('fade-in');
     const levelLabel = levelKey && levelKey !== 'base' ? levelKey : '—';
-    row.innerHTML = `
-      <td>${event.question_number ?? '—'}</td>
-      <td>${event.model || '—'}</td>
-      <td>${levelLabel}</td>
-      <td class="status-cell"></td>
-      <td>-</td>
-      <td>-</td>
-      <td>-</td>
-      <td>-</td>
-      <td class="breakable"></td>
-      <td class="breakable"></td>
-      <td></td>
-    `;
+    const cellData = [
+      { text: event.question_number ?? '—' },
+      { text: event.model || '—' },
+      { text: levelLabel },
+      { text: '', className: 'status-cell' },
+      { text: '-' },
+      { text: '-' },
+      { text: '-' },
+      { text: '-' },
+      { text: '', className: 'breakable' },
+      { text: '', className: 'breakable' },
+      { text: '' },
+    ];
+    cellData.forEach((cell) => {
+      const td = document.createElement('td');
+      td.textContent = cell.text;
+      if (cell.className) td.className = cell.className;
+      row.appendChild(td);
+    });
     // Track ordering metadata
     row.dataset.question = String(event.question_number ?? '0');
     row.dataset.level = levelKey;
@@ -516,15 +528,26 @@ async function refreshLeaderboard() {
       const levelLabel = row.thinking_level && row.thinking_level !== 'base'
         ? row.thinking_level
         : '—';
-      tr.innerHTML = `
-        <td>${row.model_id}</td>
-        <td>${formatAccuracy(row.accuracy)}</td>
-        <td>${formatCost(row.cost_usd)}</td>
-        <td>${row.duration_seconds != null ? Number(row.duration_seconds).toFixed(2) : '—'}</td>
-        <td>${row.runs ?? '—'}</td>
-        <td>${levelLabel}</td>
-        <td><button class="danger" data-model="${row.model_id}">Clear</button></td>
-      `;
+      const cellValues = [
+        row.model_id,
+        formatAccuracy(row.accuracy),
+        formatCost(row.cost_usd),
+        row.duration_seconds != null ? Number(row.duration_seconds).toFixed(2) : '—',
+        row.runs ?? '—',
+        levelLabel,
+      ];
+      cellValues.forEach((text) => {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.appendChild(td);
+      });
+      const btnCell = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'danger';
+      btn.dataset.model = row.model_id;
+      btn.textContent = 'Clear';
+      btnCell.appendChild(btn);
+      tr.appendChild(btnCell);
       leaderboardBody.appendChild(tr);
     });
   } catch (error) {
@@ -575,25 +598,38 @@ async function refreshHistory() {
     const rows = Array.isArray(data.runs) ? data.runs : [];
     if (!rows.length) {
       const emptyRow = document.createElement('tr');
-      emptyRow.innerHTML = '<td colspan="6" class="empty-state">No question runs yet.</td>';
+      const emptyTd = document.createElement('td');
+      emptyTd.colSpan = 6;
+      emptyTd.className = 'empty-state';
+      emptyTd.textContent = 'No question runs yet.';
+      emptyRow.appendChild(emptyTd);
       historyBody.appendChild(emptyRow);
       return;
     }
     rows.forEach((row) => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td>${row.run_id}</td>
-        <td>${formatTimestamp(row.timestamp_utc)}</td>
-        <td>${row.model_id || '—'}</td>
-        <td>${formatAccuracy(row.accuracy)}</td>
-        <td>${formatCost(row.total_cost_usd)}</td>
-        <td>${row.total_duration_seconds != null ? Number(row.total_duration_seconds).toFixed(2) : '—'}</td>
-      `;
+      const cells = [
+        row.run_id,
+        formatTimestamp(row.timestamp_utc),
+        row.model_id || '—',
+        formatAccuracy(row.accuracy),
+        formatCost(row.total_cost_usd),
+        row.total_duration_seconds != null ? Number(row.total_duration_seconds).toFixed(2) : '—',
+      ];
+      cells.forEach((text) => {
+        const td = document.createElement('td');
+        td.textContent = text;
+        tr.appendChild(td);
+      });
       historyBody.appendChild(tr);
     });
   } catch (error) {
     const row = document.createElement('tr');
-    row.innerHTML = `<td colspan="6" class="error">Failed to load history: ${error.message}</td>`;
+    const td = document.createElement('td');
+    td.colSpan = 6;
+    td.className = 'error';
+    td.textContent = `Failed to load history: ${error.message}`;
+    row.appendChild(td);
     historyBody.appendChild(row);
   }
 }

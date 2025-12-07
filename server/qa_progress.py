@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import threading
 import uuid
 from typing import Any, Dict
 
@@ -12,6 +13,7 @@ class ProgressManager:
     def __init__(self) -> None:
         self._runs: Dict[str, Dict[str, Any]] = {}
         self._lock = asyncio.Lock()
+        self._sync_lock = threading.RLock()
 
     def generate_run_id(self) -> str:
         timestamp = dt.datetime.now(dt.timezone.utc).strftime("qa_%Y%m%dT%H%M%SZ")
@@ -52,28 +54,31 @@ class ProgressManager:
                 del self._runs[run_id]
 
     def _publish(self, run_id: str, event: Dict[str, Any]) -> None:
-        run = self._runs.get(run_id)
-        if not run:
-            return
-        run["events"].append(event)
-        for queue in list(run["queues"]):
-            queue.put_nowait(event)
+        with self._sync_lock:
+            run = self._runs.get(run_id)
+            if not run:
+                return
+            run["events"].append(event)
+            for queue in list(run["queues"]):
+                queue.put_nowait(event)
 
     def publish_attempt(self, run_id: str, event: Dict[str, Any]) -> None:
         payload = {"type": "attempt", **event}
         self._publish(run_id, payload)
 
     def complete(self, run_id: str, summary: Dict[str, Any]) -> None:
-        self._publish(run_id, {"type": "complete", "summary": summary})
-        run = self._runs.get(run_id)
-        if run:
-            run["done"] = True
+        with self._sync_lock:
+            self._publish(run_id, {"type": "complete", "summary": summary})
+            run = self._runs.get(run_id)
+            if run:
+                run["done"] = True
 
     def fail(self, run_id: str, message: str) -> None:
-        self._publish(run_id, {"type": "error", "message": message})
-        run = self._runs.get(run_id)
-        if run:
-            run["done"] = True
+        with self._sync_lock:
+            self._publish(run_id, {"type": "error", "message": message})
+            run = self._runs.get(run_id)
+            if run:
+                run["done"] = True
 
 
 qa_progress_manager = ProgressManager()

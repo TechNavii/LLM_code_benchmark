@@ -637,7 +637,7 @@ def call_openrouter(
             else:
                 try:
                     data = response.json()
-                except (requests.exceptions.JSONDecodeError, ValueError) as exc:
+                except (requests.exceptions.JSONDecodeError, ValueError):
                     content_type = response.headers.get("content-type", "unknown")
                     body_preview = response.text.strip()
                     if len(body_preview) > 512:
@@ -801,8 +801,8 @@ def _run_patch_command(args: List[str], patch_bytes: bytes, workspace_path: Path
             check=False,
             timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
-        raise HarnessError("Failed to apply patch: patch command timed out")
+    except subprocess.TimeoutExpired as exc:
+        raise HarnessError("Failed to apply patch: patch command timed out") from exc
 
 
 def _normalize_patch_path(path: str) -> Optional[str]:
@@ -829,7 +829,6 @@ def _extract_full_file_rewrites(cleaned_patch: str) -> Optional[Dict[str, str]]:
         if not line.startswith('--- '):
             i += 1
             continue
-        old_path = line[4:].strip()
         i += 1
         if i >= len(lines) or not lines[i].startswith('+++ '):
             return None
