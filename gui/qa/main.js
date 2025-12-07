@@ -572,7 +572,8 @@ function renderRun(summary) {
   });
 
   const attempts = Array.isArray(summary.attempts) ? summary.attempts.slice() : [];
-  allResultsData = attempts;
+  // Clear before re-rendering - updateAttemptRow will repopulate
+  allResultsData = [];
   
   attempts.sort((a, b) => {
     const aq = (a.question_number || 0);
