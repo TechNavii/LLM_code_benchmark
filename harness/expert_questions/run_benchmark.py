@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import re
 import time
 from dataclasses import asdict
@@ -46,6 +47,9 @@ SETTINGS = get_settings()
 QA_RUNS_ROOT = SETTINGS.runs_root / "qa_runs"
 JUDGE_MODEL = SETTINGS.expert_qa_judge_model
 JUDGE_MAX_TOKENS = 256
+# Retry strategy for QA completions (configurable via settings)
+MAX_QA_COMPLETION_RETRIES = SETTINGS.qa_completion_max_retries
+QA_RETRY_BACKOFF_SECONDS = SETTINGS.qa_retry_backoff_seconds
  # LOGGER already defined above via structlog or fallback
 
 
@@ -118,37 +122,115 @@ def _call_openrouter(
     if reasoning_payload is not None:
         payload["reasoning"] = reasoning_payload
 
-    start = time.perf_counter()
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-    except requests.exceptions.RequestException as exc:
-        raise RuntimeError(f"Judge request failed: {exc}") from exc
+    last_error: Optional[Exception] = None
+    backoff = QA_RETRY_BACKOFF_SECONDS
 
-    latency = time.perf_counter() - start
-
-    if response.status_code >= 400:
-        error_message = response.text.strip()
+    for attempt in range(MAX_QA_COMPLETION_RETRIES):
+        start = time.perf_counter()
         try:
-            error_payload = response.json()
-        except ValueError:
-            error_payload = None
-        if isinstance(error_payload, dict):
-            error_message = (
-                error_payload.get("error", {}).get("message")
-                or error_payload.get("message")
-                or error_payload.get("detail")
-                or error_message
-            )
-        raise RuntimeError(
-            f"Judge request failed ({response.status_code}): {error_message}"
-        )
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+        except requests.exceptions.RequestException as exc:
+            last_error = RuntimeError(f"Judge request failed: {exc}")
+            should_retry = True
+        else:
+            if response.status_code >= 500:
+                err_text = response.text.strip()
+                last_error = RuntimeError(f"Judge request failed ({response.status_code}): {err_text}")
+                should_retry = True
+            elif response.status_code >= 400:
+                error_message = response.text.strip()
+                try:
+                    error_payload = response.json()
+                except ValueError:
+                    error_payload = None
+                if isinstance(error_payload, dict):
+                    error_message = (
+                        error_payload.get("error", {}).get("message")
+                        or error_payload.get("message")
+                        or error_payload.get("detail")
+                        or error_message
+                    )
+                # Treat 429 (rate limit) as a transient error that can be retried
+                if response.status_code == 429:
+                    last_error = RuntimeError(f"Request failed ({response.status_code}): {error_message}")
+                    should_retry = True
+                else:
+                    # Other 4xx: do not retry
+                    raise RuntimeError(
+                        f"Judge request failed ({response.status_code}): {error_message}"
+                    )
+            else:
+                try:
+                    data = response.json()
+                except ValueError:
+                    last_error = RuntimeError("Judge returned non-JSON response")
+                    should_retry = True
+                else:
+                    # Handle nested provider error inside choices even when HTTP status is 200
+                    try:
+                        choices = data.get("choices")
+                    except AttributeError:
+                        choices = None
 
-    data = response.json()
-    try:
-        content = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:  # pragma: no cover - API schema issues
-        raise HarnessError(f"Unexpected OpenRouter response payload: {data}") from exc
-    return content, data, latency
+                    if not choices:
+                        # Check for top-level error field
+                        top_error = data.get("error") if isinstance(data, dict) else None
+                        if isinstance(top_error, dict):
+                            code = top_error.get("code")
+                            message = str(top_error.get("message") or "")
+                            is_transient = False
+                            try:
+                                code_int = int(code) if code is not None else None
+                                is_transient = code_int is not None and (code_int >= 500 or code_int == 429)
+                            except (TypeError, ValueError):
+                                is_transient = False
+                            lowered = message.lower()
+                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                                is_transient = True
+                            last_error = HarnessError(f"Provider error ({code}): {message or 'unknown error'}")
+                            should_retry = is_transient
+                        else:
+                            last_error = HarnessError(f"Unexpected OpenRouter response payload: {data}")
+                            should_retry = True
+                    else:
+                        first = choices[0] if choices else {}
+                        choice_error = (first or {}).get("error")
+                        content = (first or {}).get("message", {}).get("content", "")
+
+                        if isinstance(choice_error, dict):
+                            code = choice_error.get("code")
+                            message = str(choice_error.get("message") or "")
+                            # Treat 5xx, 429 (rate limit), or network/upstream issues as transient
+                            is_transient = False
+                            try:
+                                code_int = int(code) if code is not None else None
+                                is_transient = code_int is not None and (code_int >= 500 or code_int == 429)
+                            except (TypeError, ValueError):
+                                is_transient = False
+                            lowered = message.lower()
+                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                                is_transient = True
+
+                            last_error = RuntimeError(
+                                f"Provider error ({code}): {message or 'unknown error'}"
+                            )
+                            should_retry = is_transient
+                        else:
+                            cleaned = (content or "").strip()
+                            if cleaned:
+                                latency = time.perf_counter() - start
+                                return cleaned, data, latency
+                            last_error = RuntimeError("Judge returned empty content")
+                            should_retry = True
+
+        if attempt < MAX_QA_COMPLETION_RETRIES - 1 and should_retry:
+            time.sleep(backoff)
+            backoff *= 2
+            continue
+        break
+
+    assert last_error is not None
+    raise last_error
 
 
 def _judge_answer(
@@ -198,34 +280,68 @@ def _judge_answer(
         "max_tokens": max_tokens,
     }
 
-    max_attempts = 3
+    max_attempts = MAX_QA_COMPLETION_RETRIES
     total_latency = 0.0
     last_usage: Optional[Dict[str, Any]] = None
     last_raw: Optional[str] = None
     failure_reason: Optional[str] = None
+    backoff = QA_RETRY_BACKOFF_SECONDS
 
     for attempt_index in range(1, max_attempts + 1):
         start = time.perf_counter()
-        response = requests.post(url, headers=headers, json=payload, timeout=120)
-        latency = time.perf_counter() - start
-        total_latency += latency
-        response.raise_for_status()
-        data = response.json()
-        last_usage = data.get("usage")
-
+        should_retry = False
         try:
-            text = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError):
-            raw_text = ""
-            failure_reason = "Judge response missing content"
+            response = requests.post(url, headers=headers, json=payload, timeout=120)
+        except requests.exceptions.RequestException as exc:
+            failure_reason = f"Judge request failed: {exc}"
+            should_retry = True
+            latency = time.perf_counter() - start
+            total_latency += latency
         else:
-            raw_text = (text or "").strip()
-            if not raw_text:
-                failure_reason = "Judge returned empty content"
+            latency = time.perf_counter() - start
+            total_latency += latency
+            status = response.status_code
+            if status >= 500 or status == 429:
+                # Transient error - retry
+                failure_reason = f"Judge request failed ({status}): {response.text.strip()}"
+                should_retry = True
+            elif status >= 400:
+                # Non-transient 4xx error - don't retry
+                return (
+                    False,
+                    "FAIL",
+                    f"Judge request failed ({status}): {response.text.strip()}",
+                    None,
+                    None,
+                    total_latency,
+                )
+            else:
+                try:
+                    data = response.json()
+                except ValueError:
+                    failure_reason = "Judge returned non-JSON response"
+                    should_retry = True
+                else:
+                    last_usage = data.get("usage")
+                    try:
+                        text = data["choices"][0]["message"]["content"]
+                    except (KeyError, IndexError):
+                        raw_text = ""
+                        failure_reason = "Judge response missing content"
+                    else:
+                        raw_text = (text or "").strip()
+                        if not raw_text:
+                            failure_reason = "Judge returned empty content"
+                        else:
+                            last_raw = raw_text
 
-        if raw_text:
-            last_raw = raw_text
+        if last_raw:
             break
+
+        if attempt_index < max_attempts and should_retry:
+            time.sleep(backoff)
+            backoff *= 2
+            continue
 
         if attempt_index >= max_attempts:
             final_reason = failure_reason or "Judge returned empty content"
@@ -377,16 +493,19 @@ def run_question_benchmark(
     temperature = float(temperature)
     max_tokens = int(max_tokens)
 
+    if JUDGE_MODEL and requests is None:
+        raise HarnessError("Judge model configured but requests library unavailable; aborting to avoid unjudged scores")
+
     judge_enabled = bool(JUDGE_MODEL) and requests is not None
+    judge_status_reason = None
     pricing_models = list(dict.fromkeys(model_list + ([JUDGE_MODEL] if judge_enabled else [])))
     model_metadata = fetch_model_pricing(pricing_models)
     if judge_enabled and JUDGE_MODEL not in model_metadata:
-        LOGGER.info(
-            "qa.judge_disabled",
-            reason="pricing_unavailable",
-            judge_model=JUDGE_MODEL,
-        )
-        judge_enabled = False
+        judge_status_reason = "pricing_unavailable"
+        raise HarnessError(f"Judge model pricing unavailable for {JUDGE_MODEL}; aborting to avoid unjudged scores")
+    if judge_enabled and requests is None:
+        judge_status_reason = "requests_unavailable"
+        raise HarnessError("requests library unavailable; cannot use judge model safely")
 
     base_output = Path(output_dir) if output_dir else QA_RUNS_ROOT
     base_output.mkdir(parents=True, exist_ok=True)
@@ -408,6 +527,16 @@ def run_question_benchmark(
         if "reasoning" not in params:
             return []
         return ["low", "medium", "high"]
+
+    def _estimate_pass_at_k(total: int, correct: int, k: int) -> Optional[float]:
+        if total <= 0 or k <= 0:
+            return None
+        k = min(k, total)
+        if correct <= 0:
+            return 0.0
+        if correct >= total:
+            return 1.0
+        return 1.0 - math.comb(total - correct, k) / math.comb(total, k)
 
     for model in model_list:
         model_info = model_metadata.get(model) or {}
@@ -507,6 +636,7 @@ def run_question_benchmark(
                                 )
                             except Exception as exc:  # pragma: no cover - defensive guard
                                 judge_enabled = False
+                                judge_status_reason = judge_status_reason or f"judge_failed:{exc}"
                                 LOGGER.warning(
                                     "qa.judge_failed",
                                     question_number=question.number,
@@ -622,7 +752,7 @@ def run_question_benchmark(
             return str(default_level)
         return "base"
 
-    # Build per-level metrics similar to coding harness
+    # Build per-level metrics similar to coding harness but at question granularity
     metrics_by_thinking_level: Dict[str, Dict[str, Dict[str, Any]]] = {}
     per_model_level: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
     for a in attempts:
@@ -635,13 +765,28 @@ def run_question_benchmark(
     for model, level_map in per_model_level.items():
         metrics_by_thinking_level[model] = {}
         for level, level_attempts in level_map.items():
-            total = len(level_attempts)
-            passed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "passed")
-            failed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "failed")
-            errored = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "error")
+            total_attempts = len(level_attempts)
+            passed_attempts = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "passed")
+            failed_attempts = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "failed")
+            errored_attempts = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "error")
 
-            # Accuracy for QA: percentage of attempts that passed (since 1 sample typical)
-            accuracy = (passed / total) if total else None
+            by_question: Dict[int, List[Dict[str, Any]]] = {}
+            for att in level_attempts:
+                qn = att.get("question_number")
+                if qn is None:
+                    continue
+                by_question.setdefault(int(qn), []).append(att)
+
+            pass_at_1_values: List[float] = []
+            pass_at_k_values: List[float] = []
+            for attempts_for_question in by_question.values():
+                total = len(attempts_for_question)
+                correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
+                pass_at_1_values.append(_estimate_pass_at_k(total, correct, 1) or 0.0)
+                pass_at_k_values.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
+
+            question_count = len(by_question)
+            accuracy = (sum(pass_at_k_values) / question_count) if question_count else None
 
             # Aggregate token usage and timings for this subset
             prompt_tokens = 0
@@ -661,10 +806,13 @@ def run_question_benchmark(
                 cost_sum += float(x.get("cost_usd") or 0.0)
 
             metrics_by_thinking_level[model][level] = {
-                "attempts": total,
-                "passed": passed,
-                "failed": failed,
-                "error": errored,
+                "attempts": total_attempts,
+                "passed_attempts": passed_attempts,
+                "failed_attempts": failed_attempts,
+                "error_attempts": errored_attempts,
+                "questions": question_count,
+                "pass_at_1": (sum(pass_at_1_values) / question_count) if question_count else None,
+                "pass_at_k": (sum(pass_at_k_values) / question_count) if question_count else None,
                 "accuracy": accuracy,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
@@ -672,11 +820,28 @@ def run_question_benchmark(
                 "duration_seconds": duration_sum,
                 "api_latency_seconds": latency_sum,
             }
+
     for model in model_list:
-        model_attempts = [attempt for attempt in attempts if attempt["model"] == model]
-        correct = sum(1 for attempt in model_attempts if attempt.get("status") == "passed")
-        total = len(model_attempts)
-        accuracy = correct / total if total else None
+        model_attempts = [attempt for attempt in attempts if attempt.get("model") == model]
+        by_question: Dict[int, List[Dict[str, Any]]] = {}
+        for att in model_attempts:
+            qn = att.get("question_number")
+            if qn is None:
+                continue
+            by_question.setdefault(int(qn), []).append(att)
+
+        pass_at_1_values: List[float] = []
+        pass_at_k_values: List[float] = []
+        for attempts_for_question in by_question.values():
+            total = len(attempts_for_question)
+            correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
+            pass_at_1_values.append(_estimate_pass_at_k(total, correct, 1) or 0.0)
+            pass_at_k_values.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
+
+        question_total = len(by_question)
+        accuracy = (sum(pass_at_k_values) / question_total) if question_total else None
+        pass_at_1_overall = (sum(pass_at_1_values) / question_total) if question_total else None
+
         model_prompt_tokens = 0
         model_completion_tokens = 0
         for attempt in model_attempts:
@@ -698,8 +863,9 @@ def run_question_benchmark(
         model_latency = sum(float(attempt.get("api_latency_seconds") or 0.0) for attempt in model_attempts)
         model_latency += sum(float(attempt.get("judge_latency_seconds") or 0.0) for attempt in model_attempts)
         per_model_stats[model] = {
-            "correct": correct,
-            "total": total,
+            "questions": question_total,
+            "pass_at_1": pass_at_1_overall,
+            "pass_at_k": (sum(pass_at_k_values) / question_total) if question_total else None,
             "accuracy": accuracy,
             "prompt_tokens": model_prompt_tokens,
             "completion_tokens": model_completion_tokens,
@@ -708,9 +874,19 @@ def run_question_benchmark(
             "api_latency_seconds": model_latency,
         }
 
-    overall_total = len(attempts)
-    overall_correct = sum(1 for attempt in attempts if attempt.get("status") == "passed")
-    overall_accuracy = overall_correct / overall_total if overall_total else None
+    # Overall accuracy now reflects question-level pass@k across all models
+    overall_questions: Dict[int, List[Dict[str, Any]]] = {}
+    for att in attempts:
+        qn = att.get("question_number")
+        if qn is None:
+            continue
+        overall_questions.setdefault(int(qn), []).append(att)
+    overall_pass_at_k_values: List[float] = []
+    for attempts_for_question in overall_questions.values():
+        total = len(attempts_for_question)
+        correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
+        overall_pass_at_k_values.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
+    overall_accuracy = (sum(overall_pass_at_k_values) / len(overall_pass_at_k_values)) if overall_pass_at_k_values else None
 
     # Store a machine-readable summary on disk
     summary = {
@@ -732,8 +908,6 @@ def run_question_benchmark(
         "metrics": {
             "per_model": per_model_stats,
             "overall": {
-                "correct": overall_correct,
-                "total": overall_total,
                 "accuracy": overall_accuracy,
             },
         },
@@ -748,6 +922,10 @@ def run_question_benchmark(
             "total_cost_usd": round(total_cost, 6),
         },
         "pricing": {model: model_metadata.get(model) for model in model_list if model_metadata.get(model)},
+        "judge_status": {
+            "enabled": judge_enabled,
+            "reason": judge_status_reason or (None if judge_enabled else "disabled"),
+        },
     }
 
     summary_path = run_dir / "summary.json"

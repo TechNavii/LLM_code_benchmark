@@ -25,7 +25,7 @@ class ValidatedRunRequest(BaseModel):
     tasks: Optional[List[str]] = Field(default=None)
     samples: int = Field(default=1, ge=1, le=10)
     temperature: float = Field(default=_DEFAULT_TEMPERATURE, ge=0.0, le=2.0)
-    max_tokens: int = Field(default=_DEFAULT_MAX_TOKENS, ge=1, le=200_000)
+    max_tokens: int = Field(default=_DEFAULT_MAX_TOKENS, ge=1)
     provider: Optional[str] = Field(default=None, max_length=64)
     include_tests: bool = False
     install_deps: bool = False

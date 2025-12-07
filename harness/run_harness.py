@@ -7,6 +7,7 @@ import argparse
 import difflib
 import datetime as dt
 import json
+import math
 import os
 import re
 import shutil
@@ -16,6 +17,7 @@ import tempfile
 import textwrap
 import time
 import uuid
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -537,8 +539,8 @@ def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> s
     return prompt
 
 # Number of times to retry transient completion failures before giving up.
-MAX_COMPLETION_RETRIES = 3
-RETRY_BACKOFF_SECONDS = 2.0
+MAX_COMPLETION_RETRIES = SETTINGS.completion_max_retries
+RETRY_BACKOFF_SECONDS = SETTINGS.completion_retry_backoff_seconds
 
 
 def call_openrouter(
@@ -624,9 +626,14 @@ def call_openrouter(
                         or error_payload.get("detail")
                         or error_message
                     )
-                raise HarnessError(
-                    f"OpenRouter request failed ({status}): {error_message}"
-                )
+                # Treat 429 (rate limit) as a transient error that can be retried
+                if status == 429:
+                    last_error = HarnessError(f"OpenRouter request failed ({status}): {error_message}")
+                    should_retry = True
+                else:
+                    raise HarnessError(
+                        f"OpenRouter request failed ({status}): {error_message}"
+                    )
             else:
                 try:
                     data = response.json()
@@ -641,13 +648,63 @@ def call_openrouter(
                     )
                     should_retry = True
                 else:
+                    # Handle provider-nested error responses that still return HTTP 200
                     try:
-                        content = data["choices"][0]["message"]["content"]
-                    except (KeyError, IndexError) as exc:  # pragma: no cover - API schema issues
-                        last_error = HarnessError(f"Unexpected OpenRouter response payload: {data}")
-                        should_retry = True
+                        choices = data.get("choices")
+                    except AttributeError:
+                        choices = None
+
+                    if not choices:
+                        # Check for top-level error field
+                        top_error = data.get("error") if isinstance(data, dict) else None
+                        if isinstance(top_error, dict):
+                            code = top_error.get("code")
+                            message = str(top_error.get("message") or "")
+                            is_transient = False
+                            try:
+                                code_int = int(code) if code is not None else None
+                                is_transient = code_int is not None and (code_int >= 500 or code_int == 429)
+                            except (TypeError, ValueError):
+                                is_transient = False
+                            lowered = message.lower()
+                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                                is_transient = True
+                            last_error = HarnessError(f"Provider error ({code}): {message or 'unknown error'}")
+                            should_retry = is_transient
+                        else:
+                            last_error = HarnessError(f"Unexpected OpenRouter response payload: {data}")
+                            should_retry = True
                     else:
-                        return content, data, duration
+                        first = choices[0] if choices else {}
+                        choice_error = (first or {}).get("error")
+                        content = (first or {}).get("message", {}).get("content", "")
+
+                        # If the provider surfaced an error inside choices, decide whether to retry
+                        if isinstance(choice_error, dict):
+                            code = choice_error.get("code")
+                            message = str(choice_error.get("message") or "")
+                            # Treat 5xx, 429 (rate limit), or network/upstream issues as transient
+                            is_transient = False
+                            try:
+                                code_int = int(code) if code is not None else None
+                                is_transient = code_int is not None and (code_int >= 500 or code_int == 429)
+                            except (TypeError, ValueError):
+                                is_transient = False
+                            lowered = message.lower()
+                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                                is_transient = True
+
+                            last_error = HarnessError(
+                                f"OpenRouter provider error ({code}): {message or 'unknown error'}"
+                            )
+                            should_retry = is_transient
+                        else:
+                            cleaned = (content or "").strip()
+                            if cleaned:
+                                return cleaned, data, duration
+                            # Empty content with no explicit error: retry once or twice
+                            last_error = HarnessError("OpenRouter returned empty content")
+                            should_retry = True
 
         if attempt < MAX_COMPLETION_RETRIES - 1 and should_retry:
             time.sleep(backoff)
@@ -1172,8 +1229,13 @@ def _should_attempt_diff_rewrite(diagnostic: str) -> bool:
             "unexpected end of file",
             "hunks ignored",
             "no file to patch",
+            # Accept both singular and plural forms reported by different patch versions
             "hunk failed",
-            "out of 1 hunks failed",
+            "hunks failed",
+            # Generic phrasing used by GNU/BSD patch output
+            "failed while patching",
+            # Flexible match for counts: e.g., "1 out of 2 hunks failed"
+            "out of",
             "can't seem to find a patch",
             "cannot find a patch",
         )
@@ -1319,6 +1381,7 @@ def evaluate_attempt(
         "return_code": None,
         "error": None,
         "attempt_dir": str(attempt_dir.relative_to(run_dir)),
+        "attempt_dir_abs": str(attempt_dir),
     }
 
     model_info = model_metadata.get(model) or {}
@@ -1381,13 +1444,21 @@ def evaluate_attempt(
         working_dir = eval_config.get("working_dir")
         process = run_evaluation(command, workspace_path, timeout, env_updates, working_dir)
 
-        store_text(attempt_dir / "stdout.log", truncate_log(process.stdout.decode("utf-8")))
-        store_text(attempt_dir / "stderr.log", truncate_log(process.stderr.decode("utf-8")))
+        stdout_text = truncate_log(process.stdout.decode("utf-8"))
+        stderr_text = truncate_log(process.stderr.decode("utf-8"))
+        store_text(attempt_dir / "stdout.log", stdout_text)
+        store_text(attempt_dir / "stderr.log", stderr_text)
 
         attempt_summary.update(
             {
                 "status": "passed" if process.returncode == 0 else "failed",
                 "return_code": process.returncode,
+                "eval_command": command,
+                "eval_timeout_seconds": timeout,
+                "eval_working_dir": str((workspace_path / working_dir).resolve()) if working_dir else str(workspace_path),
+                "eval_env_overrides": env_updates or {},
+                "stdout_excerpt": stdout_text[:2000],
+                "stderr_excerpt": stderr_text[:2000],
             }
         )
 
@@ -1404,6 +1475,16 @@ def evaluate_attempt(
     return attempt_summary
 
 def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str], samples: int) -> Dict:
+    def _estimate_pass_at_k(total: int, correct: int, k: int) -> Optional[float]:
+        if total <= 0 or k <= 0:
+            return None
+        k = min(k, total)
+        if correct <= 0:
+            return 0.0
+        if correct >= total:
+            return 1.0
+        return 1.0 - math.comb(total - correct, k) / math.comb(total, k)
+
     metrics: Dict[str, Dict[str, Optional[float]]] = {
         "model_accuracy": {},
         "model_attempt_success": {},
@@ -1424,31 +1505,23 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
         successes = sum(1 for a in model_attempts if a["status"] == "passed")
         metrics["model_attempt_success"][model] = successes / len(model_attempts)
 
-        task_success_rates: List[int] = []
-        task_pass_at_1: List[int] = []
-        task_pass_at_k: List[int] = []
+        task_pass_at_1: List[float] = []
+        task_pass_at_k: List[float] = []
 
         for task in tasks:
             task_attempts = [a for a in model_attempts if a["task_id"] == task]
             if not task_attempts:
                 continue
-            task_success = any(a["status"] == "passed" for a in task_attempts)
-            task_success_rates.append(1 if task_success else 0)
-
-            first_attempt = min(task_attempts, key=lambda x: x["sample_index"])
-            task_pass_at_1.append(1 if first_attempt["status"] == "passed" else 0)
-
-            if samples > 1:
-                task_pass_at_k.append(1 if task_success else 0)
+            total = len(task_attempts)
+            correct = sum(1 for a in task_attempts if a["status"] == "passed")
+            task_pass_at_1.append(_estimate_pass_at_k(total, correct, 1) or 0.0)
+            task_pass_at_k.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
 
         metrics["model_accuracy"][model] = (
-            sum(task_success_rates) / len(task_success_rates) if task_success_rates else None
+            sum(task_pass_at_k) / len(task_pass_at_k) if task_pass_at_k else None
         )
         pass_at_1[model] = sum(task_pass_at_1) / len(task_pass_at_1) if task_pass_at_1 else None
-        if samples > 1:
-            pass_at_k[model] = sum(task_pass_at_k) / len(task_pass_at_k) if task_pass_at_k else None
-        else:
-            pass_at_k[model] = pass_at_1[model]
+        pass_at_k[model] = sum(task_pass_at_k) / len(task_pass_at_k) if task_pass_at_k else None
 
     overall_accuracy_values = [v for v in metrics["model_accuracy"].values() if v is not None]
     overall_attempt_success_values = [v for v in metrics["model_attempt_success"].values() if v is not None]
@@ -1487,6 +1560,16 @@ def compute_metrics_by_thinking_level(
     samples: int,
     default_level: Optional[str] = None,
 ) -> Dict[str, Dict[str, Dict[str, float]]]:
+    def _estimate_pass_at_k(total: int, correct: int, k: int) -> Optional[float]:
+        if total <= 0 or k <= 0:
+            return None
+        k = min(k, total)
+        if correct <= 0:
+            return 0.0
+        if correct >= total:
+            return 1.0
+        return 1.0 - math.comb(total - correct, k) / math.comb(total, k)
+
     result: Dict[str, Dict[str, Dict[str, float]]] = {}
     # Pre-index attempts per (model, level)
     per_model_level: Dict[str, Dict[str, List[Dict]]] = {}
@@ -1506,34 +1589,28 @@ def compute_metrics_by_thinking_level(
             failed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "failed")
             errored = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "error")
 
-            # Task-level accuracy for this level
-            tasks_for_level = {}
+            # Task-level pass@k accuracy for this level
+            tasks_for_level: Dict[str, List[Dict]] = {}
             for x in level_attempts:
                 tid = x.get("task_id")
                 if not tid:
                     continue
                 tasks_for_level.setdefault(tid, []).append(x)
             task_ids = list(tasks_for_level.keys())
-            task_successes = 0
-            pass_at_1_hits = 0
+            pass_at_1_values: List[float] = []
+            pass_at_k_values: List[float] = []
             for tid in task_ids:
                 attempts_for_task = tasks_for_level[tid]
-                if any((a.get("status") or "").lower() == "passed" for a in attempts_for_task):
-                    task_successes += 1
-                # pass@1 within this level uses best (min sample_index) attempt for the task
-                first = min(attempts_for_task, key=lambda x: x.get("sample_index", 0))
-                if (first.get("status") or "").lower() == "passed":
-                    pass_at_1_hits += 1
+                total = len(attempts_for_task)
+                correct = sum(1 for a in attempts_for_task if (a.get("status") or "").lower() == "passed")
+                pass_at_1_values.append(_estimate_pass_at_k(total, correct, 1) or 0.0)
+                pass_at_k_values.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
 
             task_count = len(task_ids)
-            model_accuracy = (task_successes / task_count) if task_count else None
+            model_accuracy = (sum(pass_at_k_values) / task_count) if task_count else None
             attempt_success = (passed / total) if total else None
-            pass_at_1 = (pass_at_1_hits / task_count) if task_count else None
-            pass_at_k = None
-            if samples > 1:
-                pass_at_k = model_accuracy
-            else:
-                pass_at_k = pass_at_1
+            pass_at_1 = (sum(pass_at_1_values) / task_count) if task_count else None
+            pass_at_k = (sum(pass_at_k_values) / task_count) if task_count else None
 
             result[model][level] = {
                 "attempts": total,
@@ -1548,9 +1625,18 @@ def compute_metrics_by_thinking_level(
     return result
 
 
+def _safe_name(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value))
+    return safe.strip("._-") or "default"
+
+
 def update_task_latest(task_id: str, attempt_summary: Dict) -> None:
     RUN_ARTIFACTS.mkdir(exist_ok=True)
-    output_path = RUN_ARTIFACTS / f"{task_id}_latest.json"
+    model = _safe_name(attempt_summary.get("model", "unknown"))
+    output_path = RUN_ARTIFACTS / f"{task_id}__{model}_latest.json"
+
+    legacy_path = RUN_ARTIFACTS / f"{task_id}_latest.json"
+    index_path = RUN_ARTIFACTS / "latest_index.json"
 
     status_rank = {"passed": 2, "failed": 1, "error": 0}
     if output_path.exists():
@@ -1565,6 +1651,20 @@ def update_task_latest(task_id: str, attempt_summary: Dict) -> None:
                 return
     with output_path.open("w", encoding="utf-8") as fh:
         json.dump(attempt_summary, fh, indent=2)
+
+    # Maintain an index of latest artifacts to avoid legacy task-only bleed.
+    index_entry = {
+        "task": task_id,
+        "model": attempt_summary.get("model"),
+        "path": output_path.name,
+        "legacy_path": legacy_path.name,
+    }
+    try:
+        current_index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {}
+    except json.JSONDecodeError:
+        current_index = {}
+    current_index[f"{task_id}::{model}"] = index_entry
+    store_text(index_path, json.dumps(current_index, indent=2))
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -1692,6 +1792,7 @@ def run_tasks(
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
 
     attempts: List[Dict] = []
+    patch_fallbacks_used: List[str] = []
 
     def _suggest_levels_for_model(model_id: str) -> List[str]:
         info = model_metadata.get(model_id) or {}
@@ -1736,6 +1837,8 @@ def run_tasks(
                     update_task_latest(task_id, attempt_summary)
                     if progress_callback:
                         progress_callback(model=model, task_id=task_id, sample_index=sample_idx, summary=attempt_summary)
+                    if attempt_summary.get("diff_rewrite_fallback_used"):
+                        patch_fallbacks_used.append(attempt_summary["attempt_dir"])
 
     try:
         run_dir_relative = str(run_dir.relative_to(output_dir))
@@ -1780,6 +1883,26 @@ def run_tasks(
             attempt['cost_usd'] = attempt_cost
             total_cost += attempt_cost
 
+    status_counts = Counter(attempt.get("status") for attempt in attempts)
+    model_status_counts: Dict[str, Dict[str, int]] = {}
+    task_status: Dict[str, str] = {}
+    attempt_manifest: List[Dict[str, Any]] = []
+
+    for attempt in attempts:
+        model_status_counts.setdefault(attempt["model"], {}).setdefault(attempt.get("status"), 0)
+        model_status_counts[attempt["model"]][attempt.get("status")] += 1
+        task_status[attempt["task_id"]] = attempt.get("status")
+        attempt_manifest.append(
+            {
+                "task_id": attempt.get("task_id"),
+                "model": attempt.get("model"),
+                "provider": attempt.get("provider"),
+                "status": attempt.get("status"),
+                "attempt_dir": attempt.get("attempt_dir"),
+                "sample_index": attempt.get("sample_index"),
+            }
+        )
+
     summary = {
         "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "run_id": run_id,
@@ -1801,6 +1924,11 @@ def run_tasks(
         "include_thinking_variants": include_thinking_variants,
         "requested_models": original_models,
         "attempts": attempts,
+        "patch_fallbacks_used": patch_fallbacks_used,
+        "status_counts": dict(status_counts),
+        "model_status_counts": model_status_counts,
+        "task_status": task_status,
+        "attempt_manifest": attempt_manifest,
         "metrics": compute_metrics(attempts, models, tasks, samples),
         "metrics_by_thinking_level": compute_metrics_by_thinking_level(
             attempts, models, tasks, samples, thinking_level
@@ -1819,6 +1947,9 @@ def run_tasks(
 
     summary_path = run_dir / "summary.json"
     store_text(summary_path, json.dumps(summary, indent=2))
+
+    store_text(run_dir / "attempts.json", json.dumps(attempts, indent=2))
+    store_text(run_dir / "manifest.json", json.dumps(attempt_manifest, indent=2))
 
     latest_summary_path = RUN_ARTIFACTS / "latest_summary.json"
     store_text(latest_summary_path, json.dumps(summary, indent=2))

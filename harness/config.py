@@ -21,11 +21,17 @@ class HarnessSettings(BaseSettings):
     install_deps_by_default: bool = False
     timeout_seconds: int = 300
     max_log_chars: int = 20000
-    allow_incomplete_diffs: bool = True
-    allow_diff_rewrite_fallback: bool = True
+    # Disabled by default so patch fallbacks are explicit opt-ins.
+    allow_incomplete_diffs: bool = False
+    allow_diff_rewrite_fallback: bool = False
     tasks_root: Path = ROOT / "tasks"
     runs_root: Path = ROOT / "runs"
     expert_qa_judge_model: str | None = "openai/gpt-5-mini"
+    # Retry tuning (can be overridden via env)
+    completion_max_retries: int = 6
+    completion_retry_backoff_seconds: float = 4.0
+    qa_completion_max_retries: int = 6
+    qa_retry_backoff_seconds: float = 4.0
 
     model_config = {
         "env_file": ROOT / ".env",
