@@ -721,16 +721,28 @@ def extract_patch(raw_response: str, allow_incomplete_diffs: bool = False) -> st
     if fence not in raw_response:
         raise HarnessError("Model response does not contain a ```diff fenced block.")
     start = raw_response.index(fence) + len(fence)
-    try:
-        end = raw_response.index("```", start)
-    except ValueError as exc:
+    # Find closing ``` that is at the start of a line (not embedded in code)
+    # This handles cases where generated code contains ``` strings
+    end = None
+    search_pos = start
+    while search_pos < len(raw_response):
+        try:
+            candidate = raw_response.index("```", search_pos)
+        except ValueError:
+            break
+        # Check if this ``` is at the start of a line (preceded by newline or at start)
+        if candidate == 0 or raw_response[candidate - 1] == '\n':
+            end = candidate
+            break
+        search_pos = candidate + 3
+    if end is None:
         if not allow_incomplete_diffs:
-            raise HarnessError("Model response does not contain closing ``` fence.") from exc
+            raise HarnessError("Model response does not contain closing ``` fence.") from None
         fallback_patch = _extract_incomplete_patch(raw_response[start:])
         if not fallback_patch or not _is_probably_valid_patch(fallback_patch):
             raise HarnessError(
                 "Model response diff block is incomplete or untrustworthy (missing closing ``` fence)."
-            ) from exc
+            )
         return fallback_patch
     patch = raw_response[start:end]
     return patch.strip() + "\n"
