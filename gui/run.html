@@ -7,14 +7,30 @@
   <link rel="stylesheet" href="/ui/style.css" />
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  
+  <nav class="nav-bar" role="navigation" aria-label="Main navigation">
+    <a href="/ui/index.html" class="nav-brand">Benchmark Harness</a>
+    <div class="nav-tabs">
+      <a href="/ui/index.html" class="nav-tab">Code Tasks</a>
+      <a href="/ui/qa/index.html" class="nav-tab">QA Questions</a>
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-shortcuts">Press <kbd>?</kbd> for shortcuts</div>
+  </nav>
+
   <header>
     <h1>Run Details</h1>
     <p class="tagline">Dive into per-task performance, logs, and neon traces from the latest benchmark.</p>
   </header>
 
-  <main>
-    <section class="card summary-card">
-      <a class="back-link" href="/ui/index.html">← Back to dashboard</a>
+  <main id="main-content" role="main">
+    <section class="card summary-card" aria-labelledby="run-title">
+      <nav class="breadcrumb" aria-label="Breadcrumb">
+        <a href="/ui/index.html">Dashboard</a>
+        <span class="breadcrumb-sep">›</span>
+        <span>Run Details</span>
+      </nav>
       <h2 id="run-title"></h2>
       <p id="run-subtitle"></p>
       <div id="run-message" class="status" role="status"></div>
@@ -23,11 +39,17 @@
     </section>
 
     <div class="run-layout">
-      <section class="card run-attempts">
-        <h2>Attempts</h2>
+      <section class="card run-attempts" aria-labelledby="attempts-heading">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+          <h2 id="attempts-heading">Attempts</h2>
+          <div class="export-buttons">
+            <button type="button" class="ghost" id="export-attempts-csv" aria-label="Export attempts to CSV">Export CSV</button>
+          </div>
+        </div>
+        <div id="attempts-filter-container"></div>
         <div class="attempts-pane">
           <div class="table-wrapper">
-            <table class="attempts-table">
+            <table class="attempts-table" id="attempts-table">
               <thead>
                 <tr>
                   <th>Task</th>

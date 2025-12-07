@@ -3,16 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Expert QA Benchmark</title>
+  <title>QA Questions • Benchmark Harness</title>
   <link rel="stylesheet" href="/ui/style.css" />
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+  
+  <nav class="nav-bar" role="navigation" aria-label="Main navigation">
+    <a href="/ui/index.html" class="nav-brand">Benchmark Harness</a>
+    <div class="nav-tabs">
+      <a href="/ui/index.html" class="nav-tab">Code Tasks</a>
+      <a href="/ui/qa/index.html" class="nav-tab active" aria-current="page">QA Questions</a>
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-shortcuts">Press <kbd>?</kbd> for shortcuts</div>
+  </nav>
+
   <header>
     <h1>Expert QA Benchmark</h1>
     <p class="tagline">Evaluate models on 100 expert-level questions with instant verdicts.</p>
   </header>
 
-  <main class="dashboard-grid qa-grid">
+  <main class="dashboard-grid qa-grid" id="main-content" role="main">
     <section class="card launch-card">
       <h2>Launch Question Run</h2>
       <form id="qa-run-form">
@@ -77,14 +89,22 @@
       </div>
     </section>
 
-    <section class="card accent-card results-card results-empty" id="qa-results-card" hidden>
-      <h2>Latest Question Run (<span id="qa-run-id">—</span>)</h2>
+    <section class="card accent-card results-card results-empty" id="qa-results-card" hidden aria-labelledby="qa-results-heading">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <h2 id="qa-results-heading">Latest Question Run (<span id="qa-run-id">—</span>)</h2>
+        <div class="export-buttons">
+          <button type="button" class="ghost" id="qa-export-csv-btn" aria-label="Export results to CSV">Export CSV</button>
+          <button type="button" class="ghost" id="qa-export-json-btn" aria-label="Export results to JSON">Export JSON</button>
+        </div>
+      </div>
       <div class="results-placeholder" id="qa-results-placeholder">
         <p>Start a question run to see live answers and grading.</p>
       </div>
+      <div id="qa-progress-container"></div>
       <div class="metrics" id="qa-aggregate-metrics"></div>
+      <div id="qa-filter-container"></div>
       <div class="table-wrapper">
-        <table>
+        <table id="qa-results-table">
           <thead>
             <tr>
               <th>#</th>
@@ -105,10 +125,15 @@
       </div>
     </section>
 
-    <section class="card recent-card">
-      <h2>Recent Question Runs</h2>
+    <section class="card recent-card" aria-labelledby="qa-history-heading">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <h2 id="qa-history-heading">Recent Question Runs</h2>
+        <div class="export-buttons">
+          <button type="button" class="ghost" id="qa-export-history-csv" aria-label="Export history to CSV">Export CSV</button>
+        </div>
+      </div>
       <div class="table-wrapper">
-        <table>
+        <table id="qa-history-table">
           <thead>
             <tr>
               <th>Run ID</th>
@@ -122,6 +147,7 @@
           <tbody id="qa-history-body"></tbody>
         </table>
       </div>
+      <div id="qa-history-pagination"></div>
     </section>
   </main>
 

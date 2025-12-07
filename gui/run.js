@@ -1,14 +1,23 @@
 import { TASK_LANGUAGE } from './task-language.js';
+import {
+  showToast,
+  mapStatus,
+  createStatusBadge,
+  makeSortable,
+  createFilterBar,
+  createCopyButton,
+  exportToCSV,
+  registerShortcut,
+  formatNumber,
+  formatCost,
+  renderTaskName,
+  getTaskLanguage,
+  LANGUAGE_LABELS
+} from './components.js';
 
-const LANGUAGE_LABELS = {
-  javascript: 'JS',
-  python: 'PY',
-  go: 'GO',
-  cpp: 'C++',
-  html: 'HTML',
-  rust: 'RS',
-  default: '??',
-};
+// ============================================================================
+// DOM Elements
+// ============================================================================
 
 const params = new URLSearchParams(window.location.search);
 const runId = params.get('run_id');
@@ -25,9 +34,21 @@ const detailTitle = document.querySelector('#detail-title');
 const detailDescription = document.querySelector('#detail-description');
 const detailMeta = document.querySelector('#detail-meta');
 const detailLogs = document.querySelector('#detail-logs');
+const attemptsTable = document.querySelector('#attempts-table');
+const attemptsFilterContainer = document.querySelector('#attempts-filter-container');
+const exportAttemptsCsvBtn = document.querySelector('#export-attempts-csv');
+
+// ============================================================================
+// State
+// ============================================================================
 
 let attempts = [];
 let selectedRow = null;
+let attemptsFilter = null;
+
+// ============================================================================
+// Initialization
+// ============================================================================
 
 if (!runId) {
   setRunMessage('Run ID missing from URL. Append ?run_id=<id>.', 'error');
@@ -37,10 +58,176 @@ if (!runId) {
   loadRunDetails();
 }
 
+// Initialize filter
+if (attemptsFilterContainer) {
+  attemptsFilter = createFilterBar(attemptsFilterContainer, {
+    searchPlaceholder: 'Search tasks...',
+    showLanguageFilter: true
+  });
+  attemptsFilter.onFilter(applyAttemptsFilter);
+}
+
+// Make table sortable
+if (attemptsTable) makeSortable(attemptsTable);
+
+// Export button
+exportAttemptsCsvBtn?.addEventListener('click', () => {
+  if (attempts.length) {
+    const data = attempts.map(a => ({
+      task_id: a.task_id,
+      language: getTaskLanguage(a.task_id, TASK_LANGUAGE),
+      status: a.status,
+      duration_seconds: a.duration_seconds,
+      prompt_tokens: extractTokens(a.usage, 'prompt'),
+      completion_tokens: extractTokens(a.usage, 'completion'),
+      cost_usd: a.cost_usd,
+      error: a.error || ''
+    }));
+    exportToCSV(data, `run_${runId}_attempts.csv`);
+  }
+});
+
+// ============================================================================
+// Keyboard Shortcuts
+// ============================================================================
+
+registerShortcut('d', () => {
+  window.location.href = '/ui/index.html';
+}, 'Go to dashboard');
+
+registerShortcut('j', () => {
+  const rows = attemptBody?.querySelectorAll('tr:not([hidden])');
+  if (!rows?.length) return;
+  const currentIdx = Array.from(rows).findIndex(r => r.classList.contains('selected'));
+  const nextIdx = currentIdx < rows.length - 1 ? currentIdx + 1 : 0;
+  rows[nextIdx]?.click();
+}, 'Next attempt');
+
+registerShortcut('k', () => {
+  const rows = attemptBody?.querySelectorAll('tr:not([hidden])');
+  if (!rows?.length) return;
+  const currentIdx = Array.from(rows).findIndex(r => r.classList.contains('selected'));
+  const prevIdx = currentIdx > 0 ? currentIdx - 1 : rows.length - 1;
+  rows[prevIdx]?.click();
+}, 'Previous attempt');
+
+// ============================================================================
+// Filter
+// ============================================================================
+
+function applyAttemptsFilter(filters) {
+  const rows = attemptBody?.querySelectorAll('tr') || [];
+  rows.forEach(row => {
+    const taskId = row.dataset.task || '';
+    const status = row.dataset.status || '';
+    const language = getTaskLanguage(taskId, TASK_LANGUAGE);
+    
+    let visible = true;
+    
+    if (filters.search && !taskId.toLowerCase().includes(filters.search)) {
+      visible = false;
+    }
+    
+    if (filters.status && status !== filters.status) {
+      visible = false;
+    }
+    
+    if (filters.language && language !== filters.language) {
+      visible = false;
+    }
+    
+    row.hidden = !visible;
+  });
+}
+
+// ============================================================================
+// UI Helpers
+// ============================================================================
+
 function setRunMessage(message, level = 'info') {
   runMessage.textContent = message;
   runMessage.className = `status ${level}`;
 }
+
+function extractTokens(usage, type) {
+  if (!usage) return '-';
+  if (type === 'prompt') {
+    return usage.prompt_tokens ?? usage.input_tokens ?? '-';
+  }
+  return usage.completion_tokens ?? usage.output_tokens ?? '-';
+}
+
+function buildRunApiPath(id) {
+  const segments = encodePathSegments(String(id));
+  return `/runs/${segments}`;
+}
+
+function buildArtifactUrl(run, path) {
+  const runSegments = encodePathSegments(String(run));
+  const relativeSegments = encodePathSegments(String(path));
+  return `/artifacts/${runSegments}/${relativeSegments}`;
+}
+
+function encodePathSegments(path) {
+  return path.split('/').filter(Boolean).map((segment) => encodeURIComponent(segment)).join('/');
+}
+
+async function fetchText(url) {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const text = await response.text();
+    return truncateForDisplay(text);
+  } catch (error) {
+    console.warn(`Failed to fetch ${url}`, error);
+    return null;
+  }
+}
+
+function truncateForDisplay(text) {
+  const limit = 20000;
+  if (text.length <= limit) return text || '(empty)';
+  return `${text.slice(0, limit)}\n\n… truncated (${text.length - limit} characters omitted)`;
+}
+
+// ============================================================================
+// Syntax Highlighting for Diffs
+// ============================================================================
+
+function highlightDiff(text) {
+  const lines = text.split('\n');
+  const highlighted = lines.map(line => {
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      return `<span class="diff-header">${escapeHtml(line)}</span>`;
+    }
+    if (line.startsWith('@@')) {
+      return `<span class="diff-range">${escapeHtml(line)}</span>`;
+    }
+    if (line.startsWith('+')) {
+      return `<span class="diff-add">${escapeHtml(line)}</span>`;
+    }
+    if (line.startsWith('-')) {
+      return `<span class="diff-remove">${escapeHtml(line)}</span>`;
+    }
+    return escapeHtml(line);
+  });
+  return highlighted.join('\n');
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function addLineNumbers(text) {
+  const lines = text.split('\n');
+  return lines.map((line, i) => `<span class="line">${line}</span>`).join('\n');
+}
+
+// ============================================================================
+// Data Loading
+// ============================================================================
 
 async function loadRunDetails() {
   setRunMessage('Loading run details…', 'info');
@@ -55,9 +242,11 @@ async function loadRunDetails() {
     renderRunSummary(summary);
     renderAttempts(summary);
     setRunMessage('Run ready', 'success');
+    showToast('Run details loaded', 'success', 2000);
   } catch (error) {
     console.error(error);
     setRunMessage(`Failed to load run: ${error.message}`, 'error');
+    showToast(`Failed to load run: ${error.message}`, 'error');
   }
 }
 
@@ -112,25 +301,33 @@ function renderRunSummary(summary) {
 function renderAttempts(summary) {
   attempts = summary.attempts || [];
   attemptBody.innerHTML = '';
+  
   if (!attempts.length) {
     attemptEmpty.hidden = false;
     return;
   }
+  
   attemptEmpty.hidden = true;
+  
   attempts.forEach((attempt, index) => {
     const row = document.createElement('tr');
     row.style.animationDelay = `${index * 30}ms`;
+    row.classList.add('fade-in');
+    row.dataset.task = attempt.task_id;
+    row.dataset.status = attempt.status?.toLowerCase() || '';
+    
     const { label, className, chip } = mapStatus(attempt.status);
-    const language = (TASK_LANGUAGE && TASK_LANGUAGE[attempt.task_id]) || 'default';
-    const languageLabel = LANGUAGE_LABELS[language] || LANGUAGE_LABELS.default;
+    const language = getTaskLanguage(attempt.task_id, TASK_LANGUAGE);
+    
     row.innerHTML = `
-      <td><span class="task-name"><span class="task-icon ${language}">${languageLabel}</span><span>${attempt.task_id}</span></span></td>
+      <td>${renderTaskName(attempt.task_id, TASK_LANGUAGE)}</td>
       <td class="status-cell ${className}"><span class="status-chip ${chip}">${label}</span></td>
       <td>${formatNumber(attempt.duration_seconds)}</td>
       <td>${extractTokens(attempt.usage, 'prompt')}</td>
       <td>${extractTokens(attempt.usage, 'completion')}</td>
       <td>${formatCost(attempt.cost_usd)}</td>
     `;
+    
     row.addEventListener('click', () => {
       if (selectedRow) {
         selectedRow.classList.remove('selected');
@@ -139,38 +336,16 @@ function renderAttempts(summary) {
       selectedRow = row;
       showAttemptDetail(attempt);
     });
+    
     attemptBody.appendChild(row);
   });
+  
   // Lock onto the first attempt by default
   if (attempts.length) {
     attemptBody.firstElementChild?.classList.add('selected');
     selectedRow = attemptBody.firstElementChild;
     showAttemptDetail(attempts[0]);
   }
-}
-
-function formatNumber(value) {
-  if (value == null) {
-    return '-';
-  }
-  return Number(value).toFixed(2);
-}
-
-function extractTokens(usage, type) {
-  if (!usage) {
-    return '-';
-  }
-  if (type === 'prompt') {
-    return usage.prompt_tokens ?? usage.input_tokens ?? '-';
-  }
-  return usage.completion_tokens ?? usage.output_tokens ?? '-';
-}
-
-function formatCost(cost) {
-  if (cost == null) {
-    return '-';
-  }
-  return `$${Number(cost).toFixed(6)}`;
 }
 
 async function showAttemptDetail(attempt) {
@@ -180,6 +355,7 @@ async function showAttemptDetail(attempt) {
 
   const badge = createStatusBadge(attempt.status);
   detailDescription.appendChild(badge);
+  
   if (attempt.error) {
     const errorBox = document.createElement('div');
     errorBox.className = 'empty-state';
@@ -210,23 +386,22 @@ async function showAttemptDetail(attempt) {
 
   detailLogs.innerHTML = '';
   const logFiles = [
-    { file: 'stdout.log', label: 'stdout.log' },
-    { file: 'stderr.log', label: 'stderr.log' },
-    { file: 'error.log', label: 'error.log' },
-    { file: 'response.txt', label: 'response.txt' },
-    { file: 'patch.diff', label: 'patch.diff' },
+    { file: 'stdout.log', label: 'stdout.log', highlight: false },
+    { file: 'stderr.log', label: 'stderr.log', highlight: false },
+    { file: 'error.log', label: 'error.log', highlight: false },
+    { file: 'response.txt', label: 'response.txt', highlight: false },
+    { file: 'patch.diff', label: 'patch.diff', highlight: true },
   ];
 
   const logPromises = logFiles.map(async (entry) => {
     const url = buildArtifactUrl(runId, `${attempt.attempt_dir}/${entry.file}`);
     const text = await fetchText(url);
-    if (text === null) {
-      return null;
-    }
+    if (text === null) return null;
     return { ...entry, url, text };
   });
 
   const logs = (await Promise.all(logPromises)).filter(Boolean);
+  
   if (!logs.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -235,95 +410,44 @@ async function showAttemptDetail(attempt) {
     return;
   }
 
-  logs.forEach(({ file, label, url, text }) => {
+  logs.forEach(({ file, label, url, text, highlight }) => {
     const details = document.createElement('details');
     details.className = 'log-entry';
+    
     const summary = document.createElement('summary');
     summary.textContent = label;
     details.appendChild(summary);
 
     const actions = document.createElement('div');
     actions.className = 'log-actions';
+    actions.style.display = 'flex';
+    actions.style.gap = '0.5rem';
+    
+    // Copy button
+    const copyBtn = createCopyButton(text, 'Copy');
+    actions.appendChild(copyBtn);
+    
+    // Open raw link
     const link = document.createElement('a');
     link.href = url;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
     link.textContent = 'Open raw';
     actions.appendChild(link);
+    
     details.appendChild(actions);
 
     const pre = document.createElement('pre');
     pre.className = 'log-output';
-    pre.textContent = text;
+    
+    if (highlight && file.endsWith('.diff')) {
+      pre.classList.add('highlighted', 'line-numbers');
+      pre.innerHTML = addLineNumbers(highlightDiff(text));
+    } else {
+      pre.textContent = text;
+    }
+    
     details.appendChild(pre);
     detailLogs.appendChild(details);
   });
-}
-
-function mapStatus(status) {
-  const normalized = (status || '').toString().trim().toLowerCase();
-  if (["pass", "passed", "success"].includes(normalized)) {
-    return { label: 'PASS', className: 'status-pass', chip: 'pass' };
-  }
-  if (["fail", "failed", "error"].includes(normalized)) {
-    return { label: 'FAIL', className: 'status-fail', chip: 'fail' };
-  }
-  if (!normalized || normalized === 'pending' || normalized === 'queued') {
-    return { label: 'PENDING', className: 'status-pending', chip: 'pending' };
-  }
-  if (normalized === 'running') {
-    return { label: 'RUNNING', className: 'status-info', chip: 'info' };
-  }
-  return { label: normalized.toUpperCase(), className: `status-${normalized}`, chip: 'info' };
-}
-
-function createStatusBadge(status) {
-  const { label, className, chip } = mapStatus(status);
-  const badge = document.createElement('span');
-  const variant = chip || (className.startsWith('status-') ? className.replace('status-', '') : className);
-  const palette = new Set(['pass', 'fail', 'pending', 'info']);
-  badge.className = `status-badge ${palette.has(variant) ? variant : 'info'}`;
-  badge.textContent = label;
-  return badge;
-}
-
-function buildRunApiPath(id) {
-  const segments = encodePathSegments(String(id));
-  return `/runs/${segments}`;
-}
-
-function buildArtifactUrl(run, path) {
-  const runSegments = encodePathSegments(String(run));
-  const relativeSegments = encodePathSegments(String(path));
-  return `/artifacts/${runSegments}/${relativeSegments}`;
-}
-
-function encodePathSegments(path) {
-  return path
-    .split('/')
-    .filter(Boolean)
-    .map((segment) => encodeURIComponent(segment))
-    .join('/');
-}
-
-async function fetchText(url) {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      return null;
-    }
-    const text = await response.text();
-    return truncateForDisplay(text);
-  } catch (error) {
-    console.warn(`Failed to fetch ${url}`, error);
-    return null;
-  }
-}
-
-function truncateForDisplay(text) {
-  const limit = 20000;
-  if (text.length <= limit) {
-    return text || '(empty)';
-  }
-  return `${text.slice(0, limit)}\n\n… truncated (${text.length - limit} characters omitted)`;
 }
