@@ -230,21 +230,24 @@ export function createFilterBar(container, options = {}) {
   searchGroup.appendChild(searchInput);
   wrapper.appendChild(searchGroup);
   
-  // Status filter
-  const statusGroup = document.createElement('div');
-  statusGroup.className = 'filter-group';
-  
-  const statusSelect = document.createElement('select');
-  statusSelect.className = 'filter-select';
-  statusSelect.setAttribute('aria-label', 'Filter by status');
-  statusSelect.innerHTML = `
-    <option value="">All Statuses</option>
-    <option value="passed">Passed</option>
-    <option value="failed">Failed</option>
-    <option value="error">Error</option>
-  `;
-  statusGroup.appendChild(statusSelect);
-  wrapper.appendChild(statusGroup);
+  // Status filter (optional)
+  let statusSelect = null;
+  if (options.showStatusFilter !== false) {
+    const statusGroup = document.createElement('div');
+    statusGroup.className = 'filter-group';
+    
+    statusSelect = document.createElement('select');
+    statusSelect.className = 'filter-select';
+    statusSelect.setAttribute('aria-label', 'Filter by status');
+    statusSelect.innerHTML = `
+      <option value="">All Statuses</option>
+      <option value="passed">Passed</option>
+      <option value="failed">Failed</option>
+      <option value="error">Error</option>
+    `;
+    statusGroup.appendChild(statusSelect);
+    wrapper.appendChild(statusGroup);
+  }
   
   // Language filter (for code tasks)
   let languageSelect = null;
@@ -287,13 +290,13 @@ export function createFilterBar(container, options = {}) {
     getFilters() {
       return {
         search: searchInput.value.toLowerCase().trim(),
-        status: statusSelect.value,
+        status: statusSelect?.value || '',
         language: languageSelect?.value || ''
       };
     },
     clear() {
       searchInput.value = '';
-      statusSelect.value = '';
+      if (statusSelect) statusSelect.value = '';
       if (languageSelect) languageSelect.value = '';
     },
     onFilter(callback) {
@@ -303,7 +306,7 @@ export function createFilterBar(container, options = {}) {
         debounceTimer = setTimeout(() => callback(this.getFilters()), 150);
       };
       searchInput.addEventListener('input', triggerFilter);
-      statusSelect.addEventListener('change', triggerFilter);
+      statusSelect?.addEventListener('change', triggerFilter);
       languageSelect?.addEventListener('change', triggerFilter);
       clearBtn.addEventListener('click', () => {
         this.clear();

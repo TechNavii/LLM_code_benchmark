@@ -98,10 +98,11 @@ if (filterContainer) {
   resultsFilter.element.hidden = true;
 }
 
-// Initialize leaderboard filter
+// Initialize leaderboard filter (search only)
 if (leaderboardFilterContainer) {
   leaderboardFilter = createFilterBar(leaderboardFilterContainer, {
     searchPlaceholder: 'Search models...',
+    showStatusFilter: false,
     showLanguageFilter: false
   });
   leaderboardFilter.onFilter(applyLeaderboardFilter);
