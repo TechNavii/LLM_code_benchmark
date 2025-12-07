@@ -37,6 +37,7 @@ const dashboardGrid = document.querySelector('main.dashboard-grid');
 const progressContainer = document.querySelector('#qa-progress-container');
 const filterContainer = document.querySelector('#qa-filter-container');
 const historyPaginationContainer = document.querySelector('#qa-history-pagination');
+const leaderboardFilterContainer = document.querySelector('#qa-leaderboard-filter-container');
 const resultsTable = document.querySelector('#qa-results-table');
 const historyTable = document.querySelector('#qa-history-table');
 const leaderboardTable = document.querySelector('.leaderboard-card table');
@@ -62,9 +63,11 @@ let currentSocket = null;
 let currentRun = null;
 let progressBar = null;
 let resultsFilter = null;
+let leaderboardFilter = null;
 let historyPagination = null;
 let allHistoryData = [];
 let allResultsData = [];
+let allLeaderboardData = [];
 
 // ============================================================================
 // Initialization
@@ -93,6 +96,15 @@ if (filterContainer) {
   });
   resultsFilter.onFilter(applyResultsFilter);
   resultsFilter.element.hidden = true;
+}
+
+// Initialize leaderboard filter
+if (leaderboardFilterContainer) {
+  leaderboardFilter = createFilterBar(leaderboardFilterContainer, {
+    searchPlaceholder: 'Search models...',
+    showLanguageFilter: false
+  });
+  leaderboardFilter.onFilter(applyLeaderboardFilter);
 }
 
 // Initialize history pagination
@@ -188,6 +200,25 @@ function applyResultsFilter(filters) {
     }
     
     if (filters.status && status !== filters.status) {
+      visible = false;
+    }
+    
+    row.hidden = !visible;
+  });
+}
+
+// ============================================================================
+// Leaderboard Filtering
+// ============================================================================
+
+function applyLeaderboardFilter(filters) {
+  const rows = leaderboardBody?.querySelectorAll('tr') || [];
+  rows.forEach(row => {
+    const modelId = row.dataset.model || row.cells[0]?.textContent || '';
+    
+    let visible = true;
+    
+    if (filters.search && !modelId.toLowerCase().includes(filters.search)) {
       visible = false;
     }
     
@@ -692,9 +723,11 @@ async function refreshLeaderboard() {
     
     renderLeaderboardStatus('', 'info');
     leaderboardBody.innerHTML = '';
+    allLeaderboardData = rows;
     
     rows.forEach((row) => {
       const tr = document.createElement('tr');
+      tr.dataset.model = row.model_id;
       const levelLabel = row.thinking_level && row.thinking_level !== 'base' ? row.thinking_level : '—';
       const cellValues = [
         row.model_id,

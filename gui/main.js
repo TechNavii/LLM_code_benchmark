@@ -50,6 +50,7 @@ const modelCapabilitiesNote = document.querySelector('#model-capabilities');
 const progressContainer = document.querySelector('#progress-container');
 const resultsFilterContainer = document.querySelector('#results-filter-container');
 const historyPaginationContainer = document.querySelector('#history-pagination');
+const leaderboardFilterContainer = document.querySelector('#leaderboard-filter-container');
 const resultsTable = document.querySelector('#results-table');
 const historyTable = document.querySelector('#history-table');
 const leaderboardTable = document.querySelector('.leaderboard-card table');
@@ -65,9 +66,11 @@ let currentSocket = null;
 let currentRun = null;
 let progressBar = null;
 let resultsFilter = null;
+let leaderboardFilter = null;
 let historyPagination = null;
 let allHistoryData = [];
 let allResultsData = [];
+let allLeaderboardData = [];
 
 // ============================================================================
 // Initialization
@@ -92,6 +95,15 @@ if (resultsFilterContainer) {
   });
   resultsFilter.onFilter(applyResultsFilter);
   resultsFilter.element.hidden = true;
+}
+
+// Initialize leaderboard filter
+if (leaderboardFilterContainer) {
+  leaderboardFilter = createFilterBar(leaderboardFilterContainer, {
+    searchPlaceholder: 'Search models...',
+    showLanguageFilter: false
+  });
+  leaderboardFilter.onFilter(applyLeaderboardFilter);
 }
 
 // Initialize history pagination
@@ -193,6 +205,25 @@ function applyResultsFilter(filters) {
     }
     
     if (filters.language && language !== filters.language) {
+      visible = false;
+    }
+    
+    row.hidden = !visible;
+  });
+}
+
+// ============================================================================
+// Leaderboard Filtering
+// ============================================================================
+
+function applyLeaderboardFilter(filters) {
+  const rows = leaderboardBody?.querySelectorAll('tr') || [];
+  rows.forEach(row => {
+    const modelId = row.dataset.model || row.cells[0]?.textContent || '';
+    
+    let visible = true;
+    
+    if (filters.search && !modelId.toLowerCase().includes(filters.search)) {
       visible = false;
     }
     
@@ -651,8 +682,10 @@ async function refreshLeaderboard() {
     const data = await response.json();
     
     leaderboardBody.innerHTML = '';
+    allLeaderboardData = data.models || [];
     data.models.forEach((model) => {
       const row = document.createElement('tr');
+      row.dataset.model = model.model_id;
       const accuracyValue = model.best_accuracy;
       const accuracyText = accuracyValue != null ? `${(accuracyValue * 100).toFixed(2)}%` : '—';
       const bestCost = model.cost_at_best != null ? `$${Number(model.cost_at_best).toFixed(6)}` : '—';
