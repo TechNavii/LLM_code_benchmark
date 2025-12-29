@@ -5,13 +5,22 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import structlog
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, PositiveInt, field_validator
 
-from harness.expert_questions import load_questions, run_question_benchmark
+from harness.expert_questions import (
+    load_questions,
+    run_question_benchmark,
+    load_qa_api_error_attempts,
+    retry_qa_api_error_attempts,
+    load_qa_failed_attempts,
+    retry_qa_failed_attempts,
+)
+from server.config import get_settings
 from server.qa_database import (
     delete_runs_for_model,
     get_run,
@@ -23,6 +32,7 @@ from server.qa_database import (
 from server.qa_progress import qa_progress_manager
 
 logger = structlog.get_logger(__name__)
+settings = get_settings()
 
 router = APIRouter(prefix="/qa", tags=["qa"])
 _background_tasks: set = set()
@@ -226,6 +236,220 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     return QARunLaunchResponse(run_id=run_id)
+
+
+class QARetryApiErrorsResponse(BaseModel):
+    retry_run_id: str
+    original_run_id: str
+    api_errors_found: int
+    message: str
+
+
+class QAApiErrorsInfoResponse(BaseModel):
+    run_id: str
+    api_error_count: int
+    api_errors: List[Dict[str, Any]]
+
+
+class QARetrySingleAttemptRequest(BaseModel):
+    question_number: int
+    model: Optional[str] = None
+    sample_index: Optional[int] = None
+
+
+@router.get("/runs/{run_id}/api-errors", response_model=QAApiErrorsInfoResponse)
+async def qa_get_api_errors(run_id: str) -> QAApiErrorsInfoResponse:
+    """Get information about api_error attempts in a QA run."""
+    summary = get_run(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="QA Run not found")
+
+    run_dir = Path(settings.runs_root) / "qa_runs" / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="QA Run directory not found")
+
+    try:
+        api_errors = load_qa_api_error_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
+
+    return QAApiErrorsInfoResponse(
+        run_id=run_id,
+        api_error_count=len(api_errors),
+        api_errors=[
+            {
+                "question_number": e.get("question_number"),
+                "model": e.get("model"),
+                "sample_index": e.get("sample_index"),
+                "thinking_level": e.get("thinking_level_requested"),
+                "error": e.get("error", "")[:200],
+            }
+            for e in api_errors
+        ],
+    )
+
+
+@router.post("/runs/{run_id}/retry-api-errors", response_model=QARetryApiErrorsResponse)
+async def qa_retry_api_errors(run_id: str) -> QARetryApiErrorsResponse:
+    """Retry only the api_error attempts from a previous QA run."""
+    summary = get_run(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="QA Run not found")
+
+    run_dir = Path(settings.runs_root) / "qa_runs" / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="QA Run directory not found")
+
+    try:
+        api_errors = load_qa_api_error_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
+
+    if not api_errors:
+        return QARetryApiErrorsResponse(
+            retry_run_id="",
+            original_run_id=run_id,
+            api_errors_found=0,
+            message="No api_error attempts found to retry",
+        )
+
+    retry_run_id = qa_progress_manager.generate_run_id()
+    await qa_progress_manager.start_run(
+        retry_run_id,
+        {
+            "original_run_id": run_id,
+            "retry_mode": True,
+            "api_errors_to_retry": len(api_errors),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    )
+
+    output_dir = Path(settings.runs_root)
+
+    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: Dict[str, Any]) -> None:
+        qa_progress_manager.publish_attempt(
+            retry_run_id,
+            {
+                "model": model,
+                "question_number": question_number,
+                "sample_index": sample_index,
+                "status": attempt.get("status"),
+                "duration_seconds": attempt.get("duration_seconds"),
+                "error": attempt.get("error"),
+            },
+        )
+
+    async def runner() -> None:
+        try:
+            result = await asyncio.to_thread(
+                retry_qa_api_error_attempts,
+                original_run_dir=run_dir,
+                output_dir=output_dir,
+                progress_callback=progress_proxy,
+                run_id=retry_run_id,
+            )
+        except Exception as exc:
+            logger.exception("qa.retry.failed", run_id=retry_run_id, error=str(exc))
+            qa_progress_manager.fail(retry_run_id, str(exc))
+        else:
+            save_run(result)
+            qa_progress_manager.complete(retry_run_id, result)
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return QARetryApiErrorsResponse(
+        retry_run_id=retry_run_id,
+        original_run_id=run_id,
+        api_errors_found=len(api_errors),
+        message=f"Retrying {len(api_errors)} api_error attempts",
+    )
+
+
+@router.post("/runs/{run_id}/retry-single", response_model=QARetryApiErrorsResponse)
+async def qa_retry_single_attempt(run_id: str, request: QARetrySingleAttemptRequest) -> QARetryApiErrorsResponse:
+    """Retry a single failed attempt from a previous QA run."""
+    summary = get_run(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="QA Run not found")
+
+    run_dir = Path(settings.runs_root) / "qa_runs" / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="QA Run directory not found")
+
+    try:
+        all_failed = load_qa_failed_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load failed attempts: {exc}")
+
+    # Filter to find the specific attempt
+    filtered = [
+        e for e in all_failed
+        if e.get("question_number") == request.question_number
+        and (request.model is None or e.get("model") == request.model)
+        and (request.sample_index is None or e.get("sample_index") == request.sample_index)
+    ]
+
+    if not filtered:
+        raise HTTPException(status_code=404, detail="Specified attempt not found or not a failed attempt")
+
+    retry_run_id = qa_progress_manager.generate_run_id()
+    await qa_progress_manager.start_run(
+        retry_run_id,
+        {
+            "original_run_id": run_id,
+            "retry_mode": True,
+            "single_retry": True,
+            "question_number": request.question_number,
+            "api_errors_to_retry": len(filtered),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    )
+
+    output_dir = Path(settings.runs_root)
+
+    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: Dict[str, Any]) -> None:
+        qa_progress_manager.publish_attempt(
+            retry_run_id,
+            {
+                "model": model,
+                "question_number": question_number,
+                "sample_index": sample_index,
+                "status": attempt.get("status"),
+                "duration_seconds": attempt.get("duration_seconds"),
+                "error": attempt.get("error"),
+            },
+        )
+
+    async def runner() -> None:
+        try:
+            result = await asyncio.to_thread(
+                retry_qa_failed_attempts,
+                original_run_dir=run_dir,
+                output_dir=output_dir,
+                progress_callback=progress_proxy,
+                filter_question_number=request.question_number,
+                filter_model=request.model,
+                filter_sample_index=request.sample_index,
+            )
+        except Exception as exc:
+            logger.exception("qa.retry.single.failed", run_id=retry_run_id, error=str(exc))
+            qa_progress_manager.fail(retry_run_id, str(exc))
+        else:
+            save_run(result)
+            qa_progress_manager.complete(retry_run_id, result)
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return QARetryApiErrorsResponse(
+        retry_run_id=retry_run_id,
+        original_run_id=run_id,
+        api_errors_found=len(filtered),
+        message=f"Retrying {len(filtered)} failed attempt(s) for question {request.question_number}",
+    )
 
 
 @router.websocket("/runs/{run_id}/stream")

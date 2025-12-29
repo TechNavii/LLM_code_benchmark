@@ -103,6 +103,14 @@
       </div>
       <div id="qa-progress-container"></div>
       <div class="metrics" id="qa-aggregate-metrics"></div>
+      <div id="qa-api-error-section" class="api-error-section" hidden>
+        <div class="api-error-info">
+          <span class="api-error-count" id="qa-api-error-count"></span>
+          <button type="button" class="retry-btn" id="qa-retry-api-errors-btn">
+            Retry API Errors
+          </button>
+        </div>
+      </div>
       <div id="qa-filter-container"></div>
       <div class="table-wrapper">
         <table id="qa-results-table">
@@ -119,6 +127,7 @@
               <th>Model Answer</th>
               <th>Expected</th>
               <th>Error</th>
+              <th class="actions-header">Actions</th>
             </tr>
           </thead>
           <tbody id="qa-results-body"></tbody>
@@ -143,6 +152,7 @@
               <th>Accuracy</th>
               <th>Total Cost (USD)</th>
               <th>Duration (s)</th>
+              <th>Errors</th>
             </tr>
           </thead>
           <tbody id="qa-history-body"></tbody>
@@ -152,6 +162,6 @@
     </section>
   </main>
 
-  <script src="/ui/qa/main.js" type="module"></script>
+  <script src="/ui/qa/main.js?v=20251223" type="module"></script>
 </body>
 </html>

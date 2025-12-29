@@ -36,6 +36,14 @@
       <div id="run-message" class="status" role="status"></div>
       <div class="metrics" id="run-metrics"></div>
       <div class="meta-grid" id="run-meta"></div>
+      <div id="api-error-section" class="api-error-section" hidden>
+        <div class="api-error-info">
+          <span class="api-error-count"></span>
+          <button type="button" class="retry-btn" id="retry-api-errors-btn">
+            Retry API Errors
+          </button>
+        </div>
+      </div>
     </section>
 
     <div class="run-layout">
@@ -54,10 +62,12 @@
                 <tr>
                   <th>Task</th>
                   <th>Status</th>
+                  <th>Error</th>
                   <th>Duration (s)</th>
                   <th>Prompt Tokens</th>
                   <th>Completion Tokens</th>
                   <th>Cost (USD)</th>
+                  <th class="actions-header">Actions</th>
                 </tr>
               </thead>
               <tbody id="attempt-body"></tbody>
@@ -76,6 +86,6 @@
     </div>
   </main>
 
-  <script src="/ui/run.js" type="module"></script>
+  <script src="/ui/run.js?v=20251223" type="module"></script>
 </body>
 </html>

@@ -37,6 +37,9 @@ const detailLogs = document.querySelector('#detail-logs');
 const attemptsTable = document.querySelector('#attempts-table');
 const attemptsFilterContainer = document.querySelector('#attempts-filter-container');
 const exportAttemptsCsvBtn = document.querySelector('#export-attempts-csv');
+const apiErrorSection = document.querySelector('#api-error-section');
+const apiErrorCount = document.querySelector('.api-error-count');
+const retryApiErrorsBtn = document.querySelector('#retry-api-errors-btn');
 
 // ============================================================================
 // State
@@ -220,6 +223,15 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+function escapeAttr(text) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function addLineNumbers(text) {
   const lines = text.split('\n');
   return lines.map((line, i) => `<span class="line">${line}</span>`).join('\n');
@@ -243,10 +255,219 @@ async function loadRunDetails() {
     renderAttempts(summary);
     setRunMessage('Run ready', 'success');
     showToast('Run details loaded', 'success', 2000);
+    
+    // Load API error info
+    await loadApiErrorInfo();
   } catch (error) {
     console.error(error);
     setRunMessage(`Failed to load run: ${error.message}`, 'error');
     showToast(`Failed to load run: ${error.message}`, 'error');
+  }
+}
+
+async function loadApiErrorInfo() {
+  try {
+    const response = await fetch(`${buildRunApiPath(runId)}/api-errors`);
+    if (!response.ok) return;
+    
+    const data = await response.json();
+    if (data.api_error_count > 0) {
+      apiErrorSection.hidden = false;
+      apiErrorCount.textContent = `${data.api_error_count} API error(s) detected (rate limits, empty responses, etc.)`;
+    } else {
+      apiErrorSection.hidden = true;
+    }
+  } catch (error) {
+    console.warn('Failed to load API error info:', error);
+  }
+}
+
+async function retryApiErrors() {
+  if (!runId) return;
+  
+  retryApiErrorsBtn.disabled = true;
+  retryApiErrorsBtn.textContent = 'Retrying...';
+  
+  try {
+    const response = await fetch(`${buildRunApiPath(runId)}/retry-api-errors`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to start retry');
+    }
+    
+    const data = await response.json();
+    
+    if (data.api_errors_found === 0) {
+      showToast('No API errors to retry', 'info');
+      retryApiErrorsBtn.textContent = 'No API Errors';
+      return;
+    }
+    
+    showToast(`Retrying ${data.api_errors_found} API errors...`, 'success');
+    retryApiErrorsBtn.textContent = 'Retrying...';
+    
+    // Wait for retry to complete via WebSocket, with fallback polling
+    const retryRunId = data.retry_run_id;
+    await waitForRunCompletion(retryRunId, retryApiErrorsBtn, 'Retry API Errors');
+  } catch (error) {
+    console.error('Retry failed:', error);
+    showToast(`Retry failed: ${error.message}`, 'error');
+    retryApiErrorsBtn.disabled = false;
+    retryApiErrorsBtn.textContent = 'Retry API Errors';
+  }
+}
+
+// Helper function to wait for run completion with WebSocket + polling fallback
+async function waitForRunCompletion(retryRunId, btn, btnText) {
+  return new Promise((resolve) => {
+    let completed = false;
+    let wsConnected = false;
+    
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${wsProtocol}//${location.host}/runs/${retryRunId}/stream`);
+    
+    const navigateToRun = () => {
+      if (completed) return;
+      completed = true;
+      ws.close();
+      showToast('Retry complete! Opening new run...', 'success');
+      window.location.href = `/ui/run.html?run_id=${encodeURIComponent(retryRunId)}`;
+      resolve();
+    };
+    
+    const handleError = (msg) => {
+      if (completed) return;
+      completed = true;
+      ws.close();
+      showToast(msg, 'error');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = btnText;
+      }
+      resolve();
+    };
+    
+    ws.onopen = () => {
+      wsConnected = true;
+    };
+    
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'complete') {
+          navigateToRun();
+        } else if (msg.type === 'error') {
+          handleError(`Retry failed: ${msg.error || msg.message || 'Unknown error'}`);
+        }
+      } catch (e) {
+        console.error('WebSocket message parse error:', e);
+      }
+    };
+    
+    ws.onerror = (e) => {
+      console.error('WebSocket error:', e);
+      // Don't fail immediately, let onclose handle it
+    };
+    
+    ws.onclose = (e) => {
+      if (completed) return;
+      // If closed without completing, start polling as fallback
+      if (e.code === 4404) {
+        handleError('Run not found - retry may have failed to start');
+      } else if (!wsConnected) {
+        // WebSocket never connected, use polling
+        console.log('WebSocket failed to connect, using polling fallback');
+        pollForRun(retryRunId, navigateToRun, handleError);
+      } else {
+        // WebSocket closed unexpectedly, use polling
+        console.log('WebSocket closed unexpectedly, using polling fallback');
+        pollForRun(retryRunId, navigateToRun, handleError);
+      }
+    };
+    
+    // Timeout fallback after 5 minutes
+    setTimeout(() => {
+      if (!completed) {
+        handleError('Retry timed out after 5 minutes');
+      }
+    }, 300000);
+  });
+}
+
+// Poll for run existence as fallback
+async function pollForRun(runId, onSuccess, onError) {
+  const maxAttempts = 60;
+  const interval = 2000;
+  
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const response = await fetch(`/runs/${runId}`);
+      if (response.ok) {
+        onSuccess();
+        return;
+      }
+    } catch (e) {
+      // Ignore fetch errors, keep polling
+    }
+    await new Promise(r => setTimeout(r, interval));
+  }
+  onError('Retry timed out - run not found after 2 minutes');
+}
+
+// Bind retry button
+retryApiErrorsBtn?.addEventListener('click', retryApiErrors);
+
+async function retrySingleAttempt(taskId, model, sampleIndex) {
+  if (!runId || !taskId) return;
+  
+  const btn = document.querySelector(`tr[data-task="${taskId}"][data-model="${model}"][data-sample-index="${sampleIndex}"] .retry-single-btn`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Retrying...';
+  }
+  
+  try {
+    const response = await fetch(`${buildRunApiPath(runId)}/retry-single`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        task_id: taskId,
+        model: model || null,
+        sample_index: sampleIndex ?? null,
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to start retry');
+    }
+    
+    const data = await response.json();
+    
+    if (data.api_errors_found === 0) {
+      showToast('No matching API error to retry', 'info');
+      if (btn) {
+        btn.textContent = 'No Error';
+      }
+      return;
+    }
+    
+    showToast(`Retrying ${taskId}...`, 'success');
+    
+    // Wait for retry to complete via WebSocket, with fallback polling
+    const retryRunId = data.retry_run_id;
+    await waitForRunCompletion(retryRunId, btn, 'Retry');
+  } catch (error) {
+    console.error('Single retry failed:', error);
+    showToast(`Retry failed: ${error.message}`, 'error');
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+    }
   }
 }
 
@@ -315,18 +536,37 @@ function renderAttempts(summary) {
     row.classList.add('fade-in');
     row.dataset.task = attempt.task_id;
     row.dataset.status = attempt.status?.toLowerCase() || '';
+    row.dataset.model = attempt.model || '';
+    row.dataset.sampleIndex = attempt.sample_index ?? 0;
     
     const { label, className, chip } = mapStatus(attempt.status);
     const language = getTaskLanguage(attempt.task_id, TASK_LANGUAGE);
+    const statusLower = attempt.status?.toLowerCase() || '';
+    const canRetry = ['error', 'fail', 'failed', 'api_error', 'exception'].includes(statusLower);
+    
+    const errorText = attempt.error || '';
+    const errorTruncated = errorText.length > 80 ? errorText.substring(0, 80) + '...' : errorText;
+    const errorDisplay = errorText ? `<span class="error-text" title="${escapeAttr(errorText)}">${escapeHtml(errorTruncated)}</span>` : '-';
     
     row.innerHTML = `
       <td>${renderTaskName(attempt.task_id, TASK_LANGUAGE)}</td>
       <td class="status-cell ${className}"><span class="status-chip ${chip}">${label}</span></td>
+      <td class="error-cell">${errorDisplay}</td>
       <td>${formatNumber(attempt.duration_seconds)}</td>
       <td>${extractTokens(attempt.usage, 'prompt')}</td>
       <td>${extractTokens(attempt.usage, 'completion')}</td>
       <td>${formatCost(attempt.cost_usd)}</td>
+      <td class="actions-cell">${canRetry ? '<button class="ghost retry-single-btn" title="Retry this attempt">Retry</button>' : ''}</td>
     `;
+    
+    // Add click handler for retry button
+    const retryBtn = row.querySelector('.retry-single-btn');
+    if (retryBtn) {
+      retryBtn.addEventListener('click', (e) => {
+        e.stopPropagation(); // Don't trigger row click
+        retrySingleAttempt(attempt.task_id, attempt.model, attempt.sample_index);
+      });
+    }
     
     row.addEventListener('click', () => {
       if (selectedRow) {

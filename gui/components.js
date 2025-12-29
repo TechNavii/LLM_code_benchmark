@@ -64,6 +64,9 @@ export function mapStatus(status) {
   if (['fail', 'failed'].includes(normalized)) {
     return { label: 'FAIL', className: 'status-fail', chip: 'fail' };
   }
+  if (normalized === 'api_error') {
+    return { label: 'API ERROR', className: 'status-api-error', chip: 'api-error' };
+  }
   if (['error', 'exception'].includes(normalized)) {
     return { label: 'ERROR', className: 'status-fail', chip: 'fail' };
   }
@@ -187,14 +190,23 @@ function sortTable(tbody, columnIndex, direction, comparator) {
   rows.sort((a, b) => {
     const aCell = a.cells[columnIndex];
     const bCell = b.cells[columnIndex];
-    const aVal = aCell?.textContent?.trim() || '';
-    const bVal = bCell?.textContent?.trim() || '';
+    // Use data-sort-value if available, otherwise use text content
+    const aVal = aCell?.dataset?.sortValue ?? aCell?.textContent?.trim() || '';
+    const bVal = bCell?.dataset?.sortValue ?? bCell?.textContent?.trim() || '';
     
     if (comparator) {
       return comparator(aVal, bVal, direction);
     }
     
-    // Try numeric comparison first
+    // Check if values look like ISO timestamps (YYYY-MM-DD or starts with run_)
+    const isTimestamp = /^\d{4}-\d{2}-\d{2}|^run_\d{8}T/.test(aVal) && /^\d{4}-\d{2}-\d{2}|^run_\d{8}T/.test(bVal);
+    if (isTimestamp) {
+      // ISO timestamps sort correctly as strings
+      const result = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+      return direction === 'asc' ? result : -result;
+    }
+    
+    // Try numeric comparison
     const aNum = parseFloat(aVal.replace(/[$,%]/g, ''));
     const bNum = parseFloat(bVal.replace(/[$,%]/g, ''));
     
@@ -244,6 +256,7 @@ export function createFilterBar(container, options = {}) {
       <option value="passed">Passed</option>
       <option value="failed">Failed</option>
       <option value="error">Error</option>
+      <option value="api_error">API Error</option>
     `;
     statusGroup.appendChild(statusSelect);
     wrapper.appendChild(statusGroup);

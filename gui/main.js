@@ -115,8 +115,125 @@ if (historyPaginationContainer) {
 
 // Make tables sortable
 if (resultsTable) makeSortable(resultsTable);
-if (historyTable) makeSortable(historyTable);
+// historyTable uses custom sorting that works with pagination (see setupHistorySorting)
 if (leaderboardTable) makeSortable(leaderboardTable);
+
+// Setup history table sorting that works with pagination
+let historySortColumn = 1; // Default: sort by timestamp (column 1)
+let historySortDirection = 'desc'; // Default: newest first
+
+function setupHistorySorting() {
+  if (!historyTable) {
+    console.warn('History table not found for sorting setup');
+    return;
+  }
+  
+  const headers = historyTable.querySelectorAll('thead th');
+  if (!headers.length) {
+    console.warn('No headers found in history table');
+    return;
+  }
+  
+  headers.forEach((header, index) => {
+    if (header.classList.contains('no-sort') || header.classList.contains('actions-header')) return;
+    
+    header.classList.add('sortable');
+    header.style.cursor = 'pointer';
+    
+    // Only add sort icon if not already present
+    if (!header.querySelector('.sort-icon')) {
+      const sortIcon = document.createElement('span');
+      sortIcon.className = 'sort-icon';
+      sortIcon.textContent = ' ⇅';
+      header.appendChild(sortIcon);
+    }
+    
+    header.addEventListener('click', () => {
+      // Toggle direction if same column, otherwise default to desc for new column
+      if (historySortColumn === index) {
+        historySortDirection = historySortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        historySortColumn = index;
+        historySortDirection = 'desc';
+      }
+      
+      // Update header styles - mark active column
+      headers.forEach(h => {
+        const icon = h.querySelector('.sort-icon');
+        if (icon) {
+          icon.classList.remove('asc', 'desc');
+          icon.textContent = ' ⇅';
+        }
+      });
+      const activeIcon = header.querySelector('.sort-icon');
+      if (activeIcon) {
+        activeIcon.classList.add(historySortDirection);
+        activeIcon.textContent = historySortDirection === 'asc' ? ' ↑' : ' ↓';
+      }
+      
+      // Sort the data
+      sortHistoryData(index, historySortDirection);
+      
+      // Re-render from page 1
+      if (historyPagination) {
+        historyPagination.update(historyData.length, 1);
+      }
+      renderHistoryPage(1, 0);
+    });
+  });
+  
+  console.log('History table sorting initialized with', headers.length, 'columns');
+}
+
+function sortHistoryData(columnIndex, direction) {
+  // Map column index to data field name
+  const sortKeys = ['run_id', 'timestamp_utc', 'model_id', 'accuracy', 'total_cost_usd', 'total_duration_seconds', 'error_count'];
+  const key = sortKeys[columnIndex];
+  
+  if (!key) {
+    console.warn('No sort key for column index:', columnIndex);
+    return;
+  }
+  
+  if (!historyData || !historyData.length) {
+    console.warn('No history data to sort');
+    return;
+  }
+  
+  console.log('Sorting history by', key, direction);
+  
+  historyData.sort((a, b) => {
+    let aVal = a[key];
+    let bVal = b[key];
+    
+    // Handle null/undefined - put them at the end
+    if (aVal == null && bVal == null) return 0;
+    if (aVal == null) return 1;
+    if (bVal == null) return -1;
+    
+    // Numeric comparison for numbers
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return direction === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+    
+    // String comparison (works for ISO timestamps too)
+    aVal = String(aVal);
+    bVal = String(bVal);
+    
+    if (direction === 'asc') {
+      return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+    } else {
+      return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+    }
+  });
+}
+
+// Initialize sorting after DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', setupHistorySorting);
+} else {
+  setupHistorySorting();
+}
 
 // Export buttons
 exportCsvBtn?.addEventListener('click', () => {
@@ -807,7 +924,7 @@ async function checkModelCapabilities() {
 
 async function refreshHistory() {
   if (!historyBody) return;
-  showTableSkeleton(historyBody, 5, 6);
+  showTableSkeleton(historyBody, 5, 8);
   
   try {
     const response = await fetch('/runs?limit=200');
@@ -819,7 +936,7 @@ async function refreshHistory() {
     renderHistoryPage(1, 0);
   } catch (error) {
     console.error('Failed to refresh history:', error);
-    historyBody.innerHTML = '<tr><td colspan="6" class="empty-state">Failed to load history</td></tr>';
+    historyBody.innerHTML = '<tr><td colspan="7" class="empty-state">Failed to load history</td></tr>';
   }
 }
 
@@ -831,7 +948,7 @@ function renderHistoryPage(page, offset) {
   const pageData = allHistoryData.slice(offset, offset + pageSize);
   
   if (!pageData.length) {
-    historyBody.innerHTML = '<tr><td colspan="6" class="empty-state">No runs yet</td></tr>';
+    historyBody.innerHTML = '<tr><td colspan="7" class="empty-state">No runs yet</td></tr>';
     return;
   }
   
@@ -842,15 +959,112 @@ function renderHistoryPage(page, offset) {
     const accuracy = (run.accuracy ?? 0) * 100;
     const displayRunId = formatRunId(run.run_id);
     const runHref = buildRunDetailHref(run.run_id);
+    const errorCount = run.error_count ?? 0;
+    const errorClass = errorCount > 0 ? 'status-fail' : '';
+    
+    const timestampDisplay = run.timestamp_utc ? formatTimestamp(run.timestamp_utc) : '-';
+    const timestampSort = run.timestamp_utc || '';
     
     row.innerHTML = `
       <td class="breakable"><a href="${runHref}" target="_blank" rel="noopener noreferrer" title="Open run ${run.run_id}">${displayRunId}</a></td>
-      <td>${run.timestamp_utc || '-'}</td>
+      <td data-sort-value="${timestampSort}">${timestampDisplay}</td>
       <td class="breakable">${run.model_id || '-'}</td>
       <td>${accuracy.toFixed(2)}%</td>
       <td>$${(run.total_cost_usd ?? 0).toFixed(6)}</td>
       <td>${run.total_duration_seconds != null ? run.total_duration_seconds.toFixed(2) : '-'}</td>
+      <td class="${errorClass}">${errorCount > 0 ? errorCount + ' error(s)' : '-'}</td>
+      <td class="actions-cell" data-run-id="${run.run_id}"><span class="loading-dots">...</span></td>
     `;
     historyBody.appendChild(row);
   });
+  
+  // Check each run for incomplete attempts and update actions cell
+  checkRunsForIncomplete(pageData);
+}
+
+async function checkRunsForIncomplete(runs) {
+  // Check all runs in parallel for faster loading
+  const checks = runs.map(async (run) => {
+    const cell = document.querySelector(`.actions-cell[data-run-id="${run.run_id}"]`);
+    if (!cell) return;
+    
+    try {
+      const response = await fetch(`/runs/${run.run_id}/incomplete`);
+      if (!response.ok) {
+        cell.textContent = '-';
+        return;
+      }
+      
+      const data = await response.json();
+      if (data.incomplete_count > 0) {
+        cell.innerHTML = `<button class="resume-btn" onclick="resumeRun('${run.run_id}', ${data.incomplete_count})" title="Resume ${data.incomplete_count} incomplete attempt(s)">Resume (${data.incomplete_count})</button>`;
+      } else {
+        cell.textContent = '-';
+      }
+    } catch (err) {
+      cell.textContent = '-';
+    }
+  });
+  
+  await Promise.all(checks);
+}
+
+async function resumeRun(runId, incompleteCount) {
+  if (!confirm(`Resume ${incompleteCount} incomplete attempt(s) for run ${runId}?`)) {
+    return;
+  }
+  
+  // Find the button and disable it
+  const btn = document.querySelector(`.actions-cell[data-run-id="${runId}"] .resume-btn`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Resuming...';
+  }
+  
+  try {
+    const response = await fetch(`/runs/${runId}/resume`, { method: 'POST' });
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.detail || 'Failed to resume');
+    }
+    
+    // Open the run detail page
+    const runHref = buildRunDetailHref(runId);
+    window.open(runHref, '_blank');
+    
+    // Update button to show in-progress
+    if (btn) {
+      btn.textContent = 'In Progress...';
+    }
+    
+    // Connect to WebSocket for progress
+    connectToResumeStream(runId);
+    
+  } catch (err) {
+    console.error('Resume error:', err);
+    alert(`Failed to resume: ${err.message}`);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = `Resume (${incompleteCount})`;
+    }
+  }
+}
+
+function connectToResumeStream(runId) {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${protocol}//${window.location.host}/runs/${runId}/stream`);
+  
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'complete' || data.type === 'error') {
+      ws.close();
+      // Refresh history to update the actions column
+      refreshHistory();
+    }
+  };
+  
+  ws.onerror = () => {
+    ws.close();
+    refreshHistory();
+  };
 }

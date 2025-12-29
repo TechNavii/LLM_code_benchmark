@@ -28,10 +28,13 @@ class HarnessSettings(BaseSettings):
     runs_root: Path = ROOT / "runs"
     expert_qa_judge_model: str | None = "openai/gpt-5-mini"
     # Retry tuning (can be overridden via env)
-    completion_max_retries: int = 6
-    completion_retry_backoff_seconds: float = 4.0
-    qa_completion_max_retries: int = 6
-    qa_retry_backoff_seconds: float = 4.0
+    completion_max_retries: int = 12
+    completion_retry_backoff_seconds: float = 10.0
+    completion_max_backoff_seconds: float = 120.0  # Cap exponential backoff
+    qa_completion_max_retries: int = 10
+    qa_retry_backoff_seconds: float = 10.0
+    # API call timeout (per request, not total retries)
+    api_call_timeout_seconds: int = 300  # 5 minutes per API call
 
     model_config = {
         "env_file": ROOT / ".env",

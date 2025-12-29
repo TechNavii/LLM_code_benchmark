@@ -54,6 +54,9 @@ const modelCapabilitiesNote = document.querySelector('#qa-model-capabilities');
 const exportCsvBtn = document.querySelector('#qa-export-csv-btn');
 const exportJsonBtn = document.querySelector('#qa-export-json-btn');
 const exportHistoryCsvBtn = document.querySelector('#qa-export-history-csv');
+const qaApiErrorSection = document.querySelector('#qa-api-error-section');
+const qaApiErrorCount = document.querySelector('#qa-api-error-count');
+const qaRetryApiErrorsBtn = document.querySelector('#qa-retry-api-errors-btn');
 
 // ============================================================================
 // State
@@ -116,8 +119,125 @@ if (historyPaginationContainer) {
 
 // Make tables sortable
 if (resultsTable) makeSortable(resultsTable);
-if (historyTable) makeSortable(historyTable);
+// historyTable uses custom sorting that works with pagination (see setupHistorySorting)
 if (leaderboardTable) makeSortable(leaderboardTable);
+
+// Setup history table sorting that works with pagination
+let historySortColumn = 1; // Default: sort by timestamp (column 1)
+let historySortDirection = 'desc'; // Default: newest first
+
+function setupHistorySorting() {
+  if (!historyTable) {
+    console.warn('History table not found for sorting setup');
+    return;
+  }
+  
+  const headers = historyTable.querySelectorAll('thead th');
+  if (!headers.length) {
+    console.warn('No headers found in history table');
+    return;
+  }
+  
+  headers.forEach((header, index) => {
+    if (header.classList.contains('no-sort') || header.classList.contains('actions-header')) return;
+    
+    header.classList.add('sortable');
+    header.style.cursor = 'pointer';
+    
+    // Only add sort icon if not already present
+    if (!header.querySelector('.sort-icon')) {
+      const sortIcon = document.createElement('span');
+      sortIcon.className = 'sort-icon';
+      sortIcon.textContent = ' ⇅';
+      header.appendChild(sortIcon);
+    }
+    
+    header.addEventListener('click', () => {
+      // Toggle direction if same column, otherwise default to desc for new column
+      if (historySortColumn === index) {
+        historySortDirection = historySortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        historySortColumn = index;
+        historySortDirection = 'desc';
+      }
+      
+      // Update header styles - mark active column
+      headers.forEach(h => {
+        const icon = h.querySelector('.sort-icon');
+        if (icon) {
+          icon.classList.remove('asc', 'desc');
+          icon.textContent = ' ⇅';
+        }
+      });
+      const activeIcon = header.querySelector('.sort-icon');
+      if (activeIcon) {
+        activeIcon.classList.add(historySortDirection);
+        activeIcon.textContent = historySortDirection === 'asc' ? ' ↑' : ' ↓';
+      }
+      
+      // Sort the data
+      sortHistoryData(index, historySortDirection);
+      
+      // Re-render from page 1
+      if (historyPagination) {
+        historyPagination.update(historyData.length, 1);
+      }
+      renderHistoryPage(1, 0);
+    });
+  });
+  
+  console.log('History table sorting initialized with', headers.length, 'columns');
+}
+
+function sortHistoryData(columnIndex, direction) {
+  // Map column index to data field name
+  const sortKeys = ['run_id', 'timestamp_utc', 'model_id', 'accuracy', 'total_cost_usd', 'total_duration_seconds', 'error_count'];
+  const key = sortKeys[columnIndex];
+  
+  if (!key) {
+    console.warn('No sort key for column index:', columnIndex);
+    return;
+  }
+  
+  if (!historyData || !historyData.length) {
+    console.warn('No history data to sort');
+    return;
+  }
+  
+  console.log('Sorting history by', key, direction);
+  
+  historyData.sort((a, b) => {
+    let aVal = a[key];
+    let bVal = b[key];
+    
+    // Handle null/undefined - put them at the end
+    if (aVal == null && bVal == null) return 0;
+    if (aVal == null) return 1;
+    if (bVal == null) return -1;
+    
+    // Numeric comparison for numbers
+    if (typeof aVal === 'number' && typeof bVal === 'number') {
+      return direction === 'asc' ? aVal - bVal : bVal - aVal;
+    }
+    
+    // String comparison (works for ISO timestamps too)
+    aVal = String(aVal);
+    bVal = String(bVal);
+    
+    if (direction === 'asc') {
+      return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+    } else {
+      return aVal > bVal ? -1 : aVal < bVal ? 1 : 0;
+    }
+  });
+}
+
+// Initialize sorting after DOM is ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', setupHistorySorting);
+} else {
+  setupHistorySorting();
+}
 
 // Export buttons
 exportCsvBtn?.addEventListener('click', () => {
@@ -163,6 +283,9 @@ modelInput?.addEventListener('input', () => {
   if (capabilityTimer) clearTimeout(capabilityTimer);
   capabilityTimer = setTimeout(checkModelCapabilities, 600);
 });
+
+// Retry API errors button
+qaRetryApiErrorsBtn?.addEventListener('click', retryQaApiErrors);
 
 // ============================================================================
 // Keyboard Shortcuts
@@ -415,6 +538,7 @@ function listenToRun(runId) {
         progressBar?.hide();
         refreshLeaderboard();
         refreshHistory();
+        loadQaApiErrorInfo(runId);
         break;
       case 'error':
         currentRun.completed = true;
@@ -502,6 +626,8 @@ function updateAttemptRow(event) {
     row.classList.add('fade-in');
     row.dataset.question = String(event.question_number || '');
     row.dataset.status = event.status?.toLowerCase() || '';
+    row.dataset.model = event.model || '';
+    row.dataset.sampleIndex = event.sample_index ?? 0;
     
     const levelLabel = levelKey && levelKey !== 'base' ? levelKey : '—';
     const cellData = [
@@ -516,6 +642,7 @@ function updateAttemptRow(event) {
       { text: '', className: 'breakable' },
       { text: '', className: 'breakable' },
       { text: '' },
+      { text: '', className: 'actions-cell' },  // Actions column
     ];
     cellData.forEach((cell) => {
       const td = document.createElement('td');
@@ -569,7 +696,31 @@ function updateAttemptRow(event) {
     : '';
   const judgeError = event.judge_error ? `Judge error: ${event.judge_error}` : '';
   const errorMessage = event.error || '';
-  cells[10].textContent = [errorMessage, judgeInfo, judgeError].filter(Boolean).join(' | ');
+  const combinedError = [errorMessage, judgeInfo, judgeError].filter(Boolean).join(' | ');
+  cells[10].textContent = combinedError;
+  cells[10].className = combinedError ? 'error-cell' : '';
+  if (combinedError) {
+    cells[10].title = combinedError;
+  }
+  
+  // Update Actions column with retry button for any failed status
+  const statusLower = event.status?.toLowerCase() || '';
+  const canRetry = ['error', 'fail', 'failed', 'api_error', 'exception'].includes(statusLower);
+  if (cells[11]) {
+    if (canRetry && !cells[11].querySelector('.retry-single-btn')) {
+      const retryBtn = document.createElement('button');
+      retryBtn.className = 'ghost retry-single-btn';
+      retryBtn.title = 'Retry this attempt';
+      retryBtn.textContent = 'Retry';
+      retryBtn.addEventListener('click', () => {
+        retryQaSingleAttempt(event.question_number, event.model, event.sample_index);
+      });
+      cells[11].innerHTML = '';
+      cells[11].appendChild(retryBtn);
+    } else if (!canRetry) {
+      cells[11].innerHTML = '';
+    }
+  }
 }
 
 function renderRun(summary) {
@@ -809,7 +960,7 @@ async function refreshHistory() {
     historyPagination?.update(allHistoryData.length, 1);
     renderHistoryPage(1, 0);
   } catch (error) {
-    historyBody.innerHTML = `<tr><td colspan="6" class="empty-state">Failed to load history: ${error.message}</td></tr>`;
+    historyBody.innerHTML = `<tr><td colspan="7" class="empty-state">Failed to load history: ${error.message}</td></tr>`;
   }
 }
 
@@ -821,25 +972,288 @@ function renderHistoryPage(page, offset) {
   const pageData = allHistoryData.slice(offset, offset + pageSize);
   
   if (!pageData.length) {
-    historyBody.innerHTML = '<tr><td colspan="6" class="empty-state">No question runs yet.</td></tr>';
+    historyBody.innerHTML = '<tr><td colspan="7" class="empty-state">No question runs yet.</td></tr>';
     return;
   }
   
   pageData.forEach((row) => {
     const tr = document.createElement('tr');
+    tr.classList.add('clickable-row');
+    tr.dataset.runId = row.run_id;
+    const errorCount = row.error_count ?? 0;
+    
+    // First cell is a link
+    const runIdTd = document.createElement('td');
+    runIdTd.className = 'breakable';
+    const runIdLink = document.createElement('a');
+    runIdLink.href = '#';
+    runIdLink.textContent = row.run_id;
+    runIdLink.title = `Load run ${row.run_id}`;
+    runIdLink.addEventListener('click', (e) => {
+      e.preventDefault();
+      loadQaRunDetails(row.run_id);
+    });
+    runIdTd.appendChild(runIdLink);
+    tr.appendChild(runIdTd);
+    
+    // Timestamp cell with sort value
+    const timestampTd = document.createElement('td');
+    timestampTd.textContent = formatTimestamp(row.timestamp_utc);
+    timestampTd.dataset.sortValue = row.timestamp_utc || '';
+    tr.appendChild(timestampTd);
+    
+    // Rest of the cells
     const cells = [
-      row.run_id,
-      formatTimestamp(row.timestamp_utc),
-      row.model_id || '—',
-      row.accuracy != null ? `${(row.accuracy * 100).toFixed(2)}%` : '—',
-      row.total_cost_usd != null ? `$${Number(row.total_cost_usd).toFixed(6)}` : '—',
-      row.total_duration_seconds != null ? Number(row.total_duration_seconds).toFixed(2) : '—',
+      { text: row.model_id || '—', className: '' },
+      { text: row.accuracy != null ? `${(row.accuracy * 100).toFixed(2)}%` : '—', className: '' },
+      { text: row.total_cost_usd != null ? `$${Number(row.total_cost_usd).toFixed(6)}` : '—', className: '' },
+      { text: row.total_duration_seconds != null ? Number(row.total_duration_seconds).toFixed(2) : '—', className: '' },
+      { text: errorCount > 0 ? `${errorCount} error(s)` : '—', className: errorCount > 0 ? 'status-fail' : '' },
     ];
-    cells.forEach((text) => {
+    cells.forEach((cell) => {
       const td = document.createElement('td');
-      td.textContent = text;
+      td.textContent = cell.text;
+      if (cell.className) td.className = cell.className;
       tr.appendChild(td);
     });
+    
+    // Make row clickable to load run details
+    tr.addEventListener('click', (e) => {
+      if (e.target.tagName !== 'A') {
+        loadQaRunDetails(row.run_id);
+      }
+    });
+    
     historyBody.appendChild(tr);
   });
+}
+
+async function loadQaRunDetails(runId) {
+  showResultsPlaceholder('Loading run details…', runId);
+  
+  try {
+    const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}`);
+    if (!response.ok) {
+      showToast(`Failed to load run: ${response.statusText}`, 'error');
+      return;
+    }
+    
+    const data = await response.json();
+    const summary = data.summary;
+    
+    // Reset state and render the run
+    currentRun = {
+      runId,
+      rows: new Map(),
+      completed: true,
+      totalQuestions: 0,
+      completedQuestions: 0,
+    };
+    
+    renderRun(summary);
+    showToast('Run details loaded', 'success', 2000);
+    
+    // Check for API errors
+    loadQaApiErrorInfo(runId);
+    
+  } catch (error) {
+    console.error('Failed to load QA run details:', error);
+    showToast(`Failed to load run: ${error.message}`, 'error');
+  }
+}
+
+// ============================================================================
+// API Error Retry
+// ============================================================================
+
+async function loadQaApiErrorInfo(runId) {
+  if (!runId || !qaApiErrorSection) return;
+  
+  try {
+    const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}/api-errors`);
+    if (!response.ok) {
+      qaApiErrorSection.hidden = true;
+      return;
+    }
+    
+    const data = await response.json();
+    if (data.api_error_count > 0) {
+      qaApiErrorSection.hidden = false;
+      qaApiErrorCount.textContent = `${data.api_error_count} API error(s) detected (rate limits, empty responses, etc.)`;
+      qaApiErrorSection.dataset.runId = runId;
+    } else {
+      qaApiErrorSection.hidden = true;
+    }
+  } catch (error) {
+    console.warn('Failed to load QA API error info:', error);
+    qaApiErrorSection.hidden = true;
+  }
+}
+
+async function retryQaApiErrors() {
+  const runId = qaApiErrorSection?.dataset.runId;
+  if (!runId) {
+    showToast('No run selected for retry', 'error');
+    return;
+  }
+  
+  qaRetryApiErrorsBtn.disabled = true;
+  qaRetryApiErrorsBtn.textContent = 'Retrying...';
+  
+  try {
+    const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}/retry-api-errors`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to start retry');
+    }
+    
+    const data = await response.json();
+    
+    if (data.api_errors_found === 0) {
+      showToast('No API errors to retry', 'info');
+      qaRetryApiErrorsBtn.textContent = 'No API Errors';
+      return;
+    }
+    
+    showToast(`Retrying ${data.api_errors_found} API errors...`, 'success');
+    
+    // Store original run ID and listen to retry progress
+    const originalRunId = data.original_run_id || runId;
+    const retryRunId = data.retry_run_id;
+    
+    qaApiErrorSection.hidden = true;
+    showResultsPlaceholder('Retrying failed API calls…', retryRunId);
+    
+    // Create a WebSocket to track retry progress
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${wsProtocol}//${location.host}/qa/runs/${retryRunId}/stream`);
+    
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'complete') {
+        ws.close();
+        showToast('Retry complete! Reloading results...', 'success');
+        // Reload the original run to see updated results
+        setTimeout(() => loadQaRunDetails(originalRunId), 500);
+      } else if (msg.type === 'error') {
+        ws.close();
+        showToast(`Retry error: ${msg.error}`, 'error');
+        qaRetryApiErrorsBtn.disabled = false;
+        qaRetryApiErrorsBtn.textContent = 'Retry API Errors';
+      }
+    };
+    
+    ws.onerror = () => {
+      showToast('Connection error during retry', 'error');
+      qaRetryApiErrorsBtn.disabled = false;
+      qaRetryApiErrorsBtn.textContent = 'Retry API Errors';
+    };
+    
+  } catch (error) {
+    console.error('QA Retry failed:', error);
+    showToast(`Retry failed: ${error.message}`, 'error');
+    qaRetryApiErrorsBtn.disabled = false;
+    qaRetryApiErrorsBtn.textContent = 'Retry API Errors';
+  }
+}
+
+async function retryQaSingleAttempt(questionNumber, model, sampleIndex) {
+  const runId = qaApiErrorSection?.dataset.runId || currentRun?.runId;
+  if (!runId || questionNumber == null) {
+    showToast('No run or question selected for retry', 'error');
+    return;
+  }
+  
+  // Find and disable the button
+  const rows = resultsBody?.querySelectorAll('tr') || [];
+  let targetBtn = null;
+  rows.forEach(row => {
+    if (row.dataset.question === String(questionNumber) && 
+        row.dataset.model === model &&
+        row.dataset.sampleIndex == sampleIndex) {
+      targetBtn = row.querySelector('.retry-single-btn');
+    }
+  });
+  
+  if (targetBtn) {
+    targetBtn.disabled = true;
+    targetBtn.textContent = 'Retrying...';
+  }
+  
+  try {
+    const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}/retry-single`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        question_number: questionNumber,
+        model: model || null,
+        sample_index: sampleIndex ?? null,
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to start retry');
+    }
+    
+    const data = await response.json();
+    
+    if (data.api_errors_found === 0) {
+      showToast('No matching API error to retry', 'info');
+      if (targetBtn) {
+        targetBtn.textContent = 'No Error';
+      }
+      return;
+    }
+    
+    showToast(`Retrying question ${questionNumber}...`, 'success');
+    
+    // Store the original run ID to reload after retry completes
+    const originalRunId = data.original_run_id || runId;
+    
+    // Listen to the retry progress, then reload original run when complete
+    const retryRunId = data.retry_run_id;
+    showResultsPlaceholder(`Retrying question ${questionNumber}…`, retryRunId);
+    
+    // Create a WebSocket to track retry progress
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${wsProtocol}//${location.host}/qa/runs/${retryRunId}/stream`);
+    
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'complete') {
+        ws.close();
+        showToast('Retry complete! Reloading results...', 'success');
+        // Reload the original run to see updated results
+        setTimeout(() => loadQaRunDetails(originalRunId), 500);
+      } else if (msg.type === 'error') {
+        ws.close();
+        showToast(`Retry error: ${msg.error}`, 'error');
+        if (targetBtn) {
+          targetBtn.disabled = false;
+          targetBtn.textContent = 'Retry';
+        }
+      }
+    };
+    
+    ws.onerror = () => {
+      showToast('Connection error during retry', 'error');
+      if (targetBtn) {
+        targetBtn.disabled = false;
+        targetBtn.textContent = 'Retry';
+      }
+    };
+    
+  } catch (error) {
+    console.error('QA single retry failed:', error);
+    showToast(`Retry failed: ${error.message}`, 'error');
+    if (targetBtn) {
+      targetBtn.disabled = false;
+      targetBtn.textContent = 'Retry';
+    }
+  }
 }

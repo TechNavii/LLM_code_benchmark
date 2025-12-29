@@ -132,23 +132,36 @@ def list_runs(limit: int = 50) -> List[Dict[str, Optional[float]]]:
             RunRecord.accuracy,
             RunRecord.total_cost,
             RunRecord.total_duration,
+            RunRecord.summary_json,
         )
         .order_by(RunRecord.timestamp_utc.desc())
         .limit(limit)
     )
     with get_session() as session:
         rows = session.execute(stmt).all()
-    return [
-        {
+    
+    results = []
+    for row in rows:
+        # Count errors from summary
+        error_count = 0
+        try:
+            summary = json.loads(row.summary_json) if row.summary_json else {}
+            attempts = summary.get("attempts", [])
+            failed_statuses = {"error", "fail", "failed", "api_error", "exception"}
+            error_count = sum(1 for a in attempts if a.get("status", "").lower() in failed_statuses)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        
+        results.append({
             "id": row.id,
             "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
             "model_id": row.model_id,
             "accuracy": row.accuracy,
             "total_cost": row.total_cost,
             "total_duration": row.total_duration,
-        }
-        for row in rows
-    ]
+            "error_count": error_count,
+        })
+    return results
 
 
 def get_run(run_id: str) -> Dict | None:

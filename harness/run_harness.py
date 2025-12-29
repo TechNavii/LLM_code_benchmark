@@ -30,7 +30,13 @@ except ImportError:  # pragma: no cover - optional for offline dry runs
 ROOT = Path(__file__).resolve().parents[1]
 
 from harness.config import get_settings
-from harness.exceptions import HarnessError
+from harness.exceptions import (
+    HarnessError,
+    APIError,
+    RateLimitError,
+    EmptyResponseError,
+    ProviderError,
+)
 from harness.secure_execution import secure_run
 
 
@@ -541,6 +547,52 @@ def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> s
 # Number of times to retry transient completion failures before giving up.
 MAX_COMPLETION_RETRIES = SETTINGS.completion_max_retries
 RETRY_BACKOFF_SECONDS = SETTINGS.completion_retry_backoff_seconds
+MAX_BACKOFF_SECONDS = SETTINGS.completion_max_backoff_seconds
+
+
+def _parse_retry_after(response: "requests.Response") -> Optional[float]:
+    """Parse Retry-After header from response, returning seconds to wait."""
+    retry_after = response.headers.get("Retry-After")
+    if not retry_after:
+        return None
+    try:
+        return float(retry_after)
+    except ValueError:
+        pass
+    # Try parsing as HTTP-date (RFC 7231)
+    try:
+        from email.utils import parsedate_to_datetime
+        retry_dt = parsedate_to_datetime(retry_after)
+        delay = (retry_dt - dt.datetime.now(dt.timezone.utc)).total_seconds()
+        return max(0.0, delay)
+    except (ValueError, TypeError):
+        return None
+
+
+def _classify_error(
+    status: int,
+    error_message: str,
+    retry_after: Optional[float] = None,
+    is_empty_content: bool = False,
+) -> HarnessError:
+    """Classify an API error into the appropriate exception type."""
+    if is_empty_content:
+        return EmptyResponseError("OpenRouter returned empty content", retry_after=retry_after)
+    if status == 429:
+        return RateLimitError(
+            f"OpenRouter rate limited ({status}): {error_message}",
+            retry_after=retry_after,
+        )
+    if status >= 500:
+        return ProviderError(
+            f"OpenRouter server error ({status}): {error_message}",
+            retry_after=retry_after,
+        )
+    # For other transient errors (network issues, upstream failures)
+    lowered = error_message.lower()
+    if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+        return ProviderError(f"Provider error: {error_message}", retry_after=retry_after)
+    return HarnessError(f"OpenRouter request failed ({status}): {error_message}")
 
 
 def call_openrouter(
@@ -600,18 +652,26 @@ def call_openrouter(
     backoff = RETRY_BACKOFF_SECONDS
 
     for attempt in range(MAX_COMPLETION_RETRIES):
+        should_retry = False
+        retry_after: Optional[float] = None
+
         try:
             start_time = time.perf_counter()
-            response = requests.post(url, headers=headers, json=payload, timeout=120)
+            response = requests.post(url, headers=headers, json=payload, timeout=SETTINGS.api_call_timeout_seconds)
             duration = time.perf_counter() - start_time
+        except requests.exceptions.Timeout as exc:  # pragma: no cover - timeout
+            last_error = ProviderError(f"OpenRouter request timed out after {SETTINGS.api_call_timeout_seconds}s: {exc}")
+            should_retry = True
         except requests.exceptions.RequestException as exc:  # pragma: no cover - network failures
-            last_error = HarnessError(f"OpenRouter request failed: {exc}")
+            last_error = ProviderError(f"OpenRouter request failed: {exc}")
             should_retry = True
         else:
             status = response.status_code
+            retry_after = _parse_retry_after(response)
+
             if status >= 500:
                 error_message = response.text.strip()
-                last_error = HarnessError(f"OpenRouter request failed ({status}): {error_message}")
+                last_error = _classify_error(status, error_message, retry_after)
                 should_retry = True
             elif status >= 400:
                 error_message = response.text.strip()
@@ -628,7 +688,7 @@ def call_openrouter(
                     )
                 # Treat 429 (rate limit) as a transient error that can be retried
                 if status == 429:
-                    last_error = HarnessError(f"OpenRouter request failed ({status}): {error_message}")
+                    last_error = _classify_error(status, error_message, retry_after)
                     should_retry = True
                 else:
                     raise HarnessError(
@@ -642,7 +702,7 @@ def call_openrouter(
                     body_preview = response.text.strip()
                     if len(body_preview) > 512:
                         body_preview = f"{body_preview[:512]}..."
-                    last_error = HarnessError(
+                    last_error = ProviderError(
                         "OpenRouter returned a non-JSON response payload. "
                         f"status={status} content-type={content_type} preview={body_preview!r}"
                     )
@@ -669,10 +729,16 @@ def call_openrouter(
                             lowered = message.lower()
                             if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
                                 is_transient = True
-                            last_error = HarnessError(f"Provider error ({code}): {message or 'unknown error'}")
+                            # Use appropriate error type based on code
+                            if code_int == 429:
+                                last_error = RateLimitError(f"Provider rate limited ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                            elif is_transient:
+                                last_error = ProviderError(f"Provider error ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                            else:
+                                last_error = HarnessError(f"Provider error ({code}): {message or 'unknown error'}")
                             should_retry = is_transient
                         else:
-                            last_error = HarnessError(f"Unexpected OpenRouter response payload: {data}")
+                            last_error = ProviderError(f"Unexpected OpenRouter response payload: {data}")
                             should_retry = True
                     else:
                         first = choices[0] if choices else {}
@@ -694,21 +760,30 @@ def call_openrouter(
                             if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
                                 is_transient = True
 
-                            last_error = HarnessError(
-                                f"OpenRouter provider error ({code}): {message or 'unknown error'}"
-                            )
+                            # Use appropriate error type based on code
+                            if code_int == 429:
+                                last_error = RateLimitError(f"OpenRouter provider rate limited ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                            elif is_transient:
+                                last_error = ProviderError(f"OpenRouter provider error ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                            else:
+                                last_error = HarnessError(f"OpenRouter provider error ({code}): {message or 'unknown error'}")
                             should_retry = is_transient
                         else:
                             cleaned = (content or "").strip()
                             if cleaned:
                                 return cleaned, data, duration
                             # Empty content with no explicit error: retry once or twice
-                            last_error = HarnessError("OpenRouter returned empty content")
+                            last_error = EmptyResponseError("OpenRouter returned empty content")
                             should_retry = True
 
         if attempt < MAX_COMPLETION_RETRIES - 1 and should_retry:
-            time.sleep(backoff)
-            backoff *= 2
+            # Use Retry-After header if available, otherwise use exponential backoff
+            if retry_after is not None and retry_after > 0:
+                wait_time = min(retry_after, MAX_BACKOFF_SECONDS)
+            else:
+                wait_time = min(backoff, MAX_BACKOFF_SECONDS)
+            time.sleep(wait_time)
+            backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)
             continue
         break
 
@@ -1422,6 +1497,18 @@ def evaluate_attempt(
                 thinking_level=thinking_level if "reasoning" in supported_params else None,
                 model_info=model_info,
             )
+    except APIError as exc:
+        # API errors (rate limits, empty responses, provider failures) are transient
+        # and should not count against LLM evaluation
+        error_type = type(exc).__name__
+        attempt_summary.update({
+            "status": "api_error",
+            "error": str(exc),
+            "error_type": error_type,
+            "is_transient": True,
+        })
+        store_text(attempt_dir / "error.log", f"[{error_type}] {exc}")
+        return attempt_summary
     except HarnessError as exc:
         attempt_summary.update({"error": str(exc)})
         store_text(attempt_dir / "error.log", str(exc))
@@ -1496,31 +1583,43 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
             return 1.0
         return 1.0 - math.comb(total - correct, k) / math.comb(total, k)
 
+    # Convert to list to allow multiple iterations
+    attempts_list = list(attempts)
+
+    # Count api_errors separately for reporting
+    api_error_count = sum(1 for a in attempts_list if a.get("status") == "api_error")
+
     metrics: Dict[str, Dict[str, Optional[float]]] = {
         "model_accuracy": {},
         "model_attempt_success": {},
     }
     pass_at_1: Dict[str, Optional[float]] = {}
     pass_at_k: Dict[str, Optional[float]] = {}
+    api_errors_by_model: Dict[str, int] = {}
 
     for model in models:
-        model_attempts = [a for a in attempts if a["model"] == model]
-        if not model_attempts:
+        model_attempts = [a for a in attempts_list if a["model"] == model]
+        # Exclude api_error attempts from LLM evaluation metrics
+        evaluable_attempts = [a for a in model_attempts if a.get("status") != "api_error"]
+        api_errors_by_model[model] = len(model_attempts) - len(evaluable_attempts)
+
+        if not evaluable_attempts:
             metrics["model_accuracy"][model] = None
             metrics["model_attempt_success"][model] = None
             pass_at_1[model] = None
             pass_at_k[model] = None
             continue
 
-        # Attempt-level success rate
-        successes = sum(1 for a in model_attempts if a["status"] == "passed")
-        metrics["model_attempt_success"][model] = successes / len(model_attempts)
+        # Attempt-level success rate (excluding api_error)
+        successes = sum(1 for a in evaluable_attempts if a["status"] == "passed")
+        metrics["model_attempt_success"][model] = successes / len(evaluable_attempts)
 
         task_pass_at_1: List[float] = []
         task_pass_at_k: List[float] = []
 
         for task in tasks:
-            task_attempts = [a for a in model_attempts if a["task_id"] == task]
+            # Exclude api_error attempts from pass@k calculation
+            task_attempts = [a for a in evaluable_attempts if a["task_id"] == task]
             if not task_attempts:
                 continue
             total = len(task_attempts)
@@ -1549,6 +1648,8 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
     metrics["pass_at_1"] = pass_at_1
     metrics["pass_at_k"] = pass_at_k
     metrics["overall"] = overall
+    metrics["api_errors_excluded"] = api_error_count
+    metrics["api_errors_by_model"] = api_errors_by_model
     return metrics
 
 
@@ -1594,15 +1695,20 @@ def compute_metrics_by_thinking_level(
     for model, level_map in per_model_level.items():
         result[model] = {}
         for level, level_attempts in level_map.items():
-            # Attempt-level counts
-            total = len(level_attempts)
-            passed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "passed")
-            failed = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "failed")
-            errored = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "error")
+            # Attempt-level counts (including api_error for transparency)
+            total_all = len(level_attempts)
+            api_errored = sum(1 for x in level_attempts if (x.get("status") or "").lower() == "api_error")
 
-            # Task-level pass@k accuracy for this level
+            # Exclude api_error from LLM evaluation metrics
+            evaluable_attempts = [x for x in level_attempts if (x.get("status") or "").lower() != "api_error"]
+            total = len(evaluable_attempts)
+            passed = sum(1 for x in evaluable_attempts if (x.get("status") or "").lower() == "passed")
+            failed = sum(1 for x in evaluable_attempts if (x.get("status") or "").lower() == "failed")
+            errored = sum(1 for x in evaluable_attempts if (x.get("status") or "").lower() == "error")
+
+            # Task-level pass@k accuracy for this level (excluding api_error)
             tasks_for_level: Dict[str, List[Dict]] = {}
-            for x in level_attempts:
+            for x in evaluable_attempts:
                 tid = x.get("task_id")
                 if not tid:
                     continue
@@ -1612,10 +1718,10 @@ def compute_metrics_by_thinking_level(
             pass_at_k_values: List[float] = []
             for tid in task_ids:
                 attempts_for_task = tasks_for_level[tid]
-                total = len(attempts_for_task)
+                task_total = len(attempts_for_task)
                 correct = sum(1 for a in attempts_for_task if (a.get("status") or "").lower() == "passed")
-                pass_at_1_values.append(_estimate_pass_at_k(total, correct, 1) or 0.0)
-                pass_at_k_values.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
+                pass_at_1_values.append(_estimate_pass_at_k(task_total, correct, 1) or 0.0)
+                pass_at_k_values.append(_estimate_pass_at_k(task_total, correct, min(samples, task_total)) or 0.0)
 
             task_count = len(task_ids)
             model_accuracy = (sum(pass_at_k_values) / task_count) if task_count else None
@@ -1625,9 +1731,11 @@ def compute_metrics_by_thinking_level(
 
             result[model][level] = {
                 "attempts": total,
+                "attempts_including_api_errors": total_all,
                 "passed": passed,
                 "failed": failed,
                 "error": errored,
+                "api_error": api_errored,
                 "model_attempt_success": attempt_success,
                 "model_accuracy": model_accuracy,
                 "pass_at_1": pass_at_1,
@@ -1731,8 +1839,624 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         action="store_false",
         help="Disable rewrite fallback for malformed diffs",
     )
+    parser.add_argument(
+        "--resume-from",
+        dest="resume_from",
+        type=Path,
+        help="Resume from a previous run by re-running only api_error attempts. "
+             "Provide run directory path (e.g., runs/run_20251222T193052Z_a2ca88)",
+    )
+    parser.add_argument(
+        "--retry-api-errors",
+        dest="retry_api_errors",
+        action="store_true",
+        help="When used with --resume-from, retry only api_error attempts",
+    )
+    parser.add_argument(
+        "--resume-incomplete",
+        dest="resume_incomplete",
+        action="store_true",
+        help="When used with --resume-from, resume only incomplete attempts (started but didn't finish)",
+    )
     parser.set_defaults(allow_incomplete_diffs=None, allow_diff_rewrite_fallback=None)
     return parser.parse_args(argv)
+
+
+def load_failed_attempts(run_dir: Path) -> List[Dict]:
+    """Load attempts from a previous run that failed (error, fail, api_error).
+
+    Supports both completed runs (with attempts.json/summary.json) and
+    incomplete runs (by scanning attempt directories).
+    """
+    failed_statuses = {"error", "fail", "failed", "api_error", "exception"}
+    attempts_file = run_dir / "attempts.json"
+    summary_file = run_dir / "summary.json"
+
+    if attempts_file.exists():
+        with attempts_file.open("r", encoding="utf-8") as f:
+            attempts = json.load(f)
+        return [a for a in attempts if a.get("status", "").lower() in failed_statuses]
+
+    if summary_file.exists():
+        with summary_file.open("r", encoding="utf-8") as f:
+            summary = json.load(f)
+            attempts = summary.get("attempts", [])
+        return [a for a in attempts if a.get("status", "").lower() in failed_statuses]
+
+    return []
+
+
+def load_api_error_attempts(run_dir: Path) -> List[Dict]:
+    """Load attempts from a previous run that had api_error status.
+
+    Supports both completed runs (with attempts.json/summary.json) and
+    incomplete runs (by scanning error.log files in attempt directories).
+    """
+    attempts_file = run_dir / "attempts.json"
+    summary_file = run_dir / "summary.json"
+
+    if attempts_file.exists():
+        with attempts_file.open("r", encoding="utf-8") as f:
+            attempts = json.load(f)
+        # Filter to only api_error attempts
+        return [a for a in attempts if a.get("status") == "api_error"]
+
+    if summary_file.exists():
+        with summary_file.open("r", encoding="utf-8") as f:
+            summary = json.load(f)
+            attempts = summary.get("attempts", [])
+        # Filter to only api_error attempts
+        return [a for a in attempts if a.get("status") == "api_error"]
+
+    # For incomplete runs, scan attempt directories for error.log files
+    # that contain API error patterns
+    api_error_patterns = [
+        "RateLimitError",
+        "EmptyResponseError",
+        "ProviderError",
+        "rate limit",
+        "429",
+        "empty content",
+        "OpenRouter request failed (429)",
+        "OpenRouter returned empty content",
+    ]
+
+    api_error_attempts: List[Dict] = []
+    for attempt_dir in run_dir.iterdir():
+        if not attempt_dir.is_dir():
+            continue
+        error_log = attempt_dir / "error.log"
+        if not error_log.exists():
+            continue
+
+        error_content = error_log.read_text(encoding="utf-8")
+        is_api_error = any(pattern in error_content for pattern in api_error_patterns)
+        if not is_api_error:
+            continue
+
+        # Parse attempt info from directory name
+        # Format: {task_id}__{model}__sample{N}__lvl_{level}
+        dir_name = attempt_dir.name
+        parts = dir_name.split("__")
+        if len(parts) >= 3:
+            task_id = parts[0]
+            model = parts[1].replace("_", "/")  # Reverse the / -> _ conversion
+            sample_match = re.search(r"sample(\d+)", parts[2])
+            sample_index = int(sample_match.group(1)) if sample_match else 0
+            level_match = re.search(r"lvl_(.+)", dir_name)
+            thinking_level = level_match.group(1) if level_match else None
+            if thinking_level == "base":
+                thinking_level = None
+
+            api_error_attempts.append({
+                "task_id": task_id,
+                "model": model,
+                "sample_index": sample_index,
+                "thinking_level_requested": thinking_level,
+                "status": "api_error",
+                "error": error_content.strip(),
+                "attempt_dir": str(attempt_dir.relative_to(run_dir)),
+            })
+
+    if not api_error_attempts and not any(run_dir.iterdir()):
+        raise HarnessError(
+            f"Cannot find attempts.json, summary.json, or attempt directories in {run_dir}. "
+            "Make sure the run directory is correct."
+        )
+
+    return api_error_attempts
+
+
+def retry_api_error_attempts(
+    *,
+    original_run_dir: Path,
+    temperature: float = 0.0,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    preferred_provider: Optional[str] = None,
+    include_tests: bool = False,
+    install_deps: bool = False,
+    output_dir: Path = RUN_ARTIFACTS,
+    allow_incomplete_diffs: Optional[bool] = None,
+    allow_diff_rewrite_fallback: Optional[bool] = None,
+    progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
+    filter_task_id: Optional[str] = None,
+    filter_model: Optional[str] = None,
+    filter_sample_index: Optional[int] = None,
+    run_id: Optional[str] = None,
+) -> Dict:
+    """
+    Retry only the api_error attempts from a previous run.
+    Creates a new run directory with retried attempts merged with successful ones.
+    
+    Optional filters:
+      filter_task_id: Only retry attempts for this specific task
+      filter_model: Only retry attempts for this specific model
+      filter_sample_index: Only retry attempts with this sample index
+    """
+    api_error_attempts = load_api_error_attempts(original_run_dir)
+    if not api_error_attempts:
+        print(f"No api_error attempts found in {original_run_dir}. Nothing to retry.")
+        return {"retried": 0, "message": "No api_error attempts to retry"}
+
+    # Apply filters if specified
+    if filter_task_id is not None:
+        api_error_attempts = [a for a in api_error_attempts if a.get("task_id") == filter_task_id]
+    if filter_model is not None:
+        api_error_attempts = [a for a in api_error_attempts if a.get("model") == filter_model]
+    if filter_sample_index is not None:
+        api_error_attempts = [a for a in api_error_attempts if a.get("sample_index") == filter_sample_index]
+
+    if not api_error_attempts:
+        print(f"No api_error attempts match the filter criteria. Nothing to retry.")
+        return {"retried": 0, "message": "No matching api_error attempts to retry"}
+
+    print(f"Found {len(api_error_attempts)} api_error attempts to retry")
+
+    # Create new run directory (use provided run_id if given)
+    output_dir = Path(output_dir)
+    RUN_ARTIFACTS.mkdir(exist_ok=True)
+    if run_id:
+        run_dir = output_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        run_dir = create_run_directory(output_dir)
+        run_id = run_dir.name
+
+    # Collect unique models for metadata fetch
+    models = list({a["model"] for a in api_error_attempts})
+    model_metadata = fetch_model_metadata(models)
+
+    if allow_incomplete_diffs is None:
+        allow_incomplete_diffs = DEFAULT_ALLOW_INCOMPLETE_DIFFS
+    if allow_diff_rewrite_fallback is None:
+        allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
+
+    retried_attempts: List[Dict] = []
+
+    for i, original_attempt in enumerate(api_error_attempts, 1):
+        task_id = original_attempt["task_id"]
+        model = original_attempt["model"]
+        sample_index = original_attempt.get("sample_index", 0)
+        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get("thinking_level_requested")
+
+        print(f"[{i}/{len(api_error_attempts)}] Retrying {task_id} with {model} (sample {sample_index})")
+
+        try:
+            metadata = load_metadata(task_id)
+        except HarnessError as e:
+            print(f"  Skipping: {e}")
+            continue
+
+        attempt_summary = evaluate_attempt(
+            task_id=task_id,
+            metadata=metadata,
+            model=model,
+            sample_index=sample_index,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            preferred_provider=preferred_provider or original_attempt.get("provider"),
+            thinking_level=thinking_level,
+            model_metadata=model_metadata,
+            include_tests=include_tests,
+            install_deps_flag=install_deps,
+            response_override=None,
+            allow_incomplete_diffs=allow_incomplete_diffs,
+            allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
+            run_dir=run_dir,
+        )
+        retried_attempts.append(attempt_summary)
+        update_task_latest(task_id, attempt_summary)
+
+        if progress_callback:
+            progress_callback(model=model, task_id=task_id, sample_index=sample_index, summary=attempt_summary)
+
+        status = attempt_summary.get("status", "unknown")
+        print(f"  Result: {status}")
+
+    # Compute metrics for retried attempts
+    tasks = list({a["task_id"] for a in retried_attempts})
+    status_counts = Counter(a.get("status") for a in retried_attempts)
+
+    summary = {
+        "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "original_run_dir": str(original_run_dir),
+        "retry_mode": True,
+        "retried_count": len(retried_attempts),
+        "original_api_errors": len(api_error_attempts),
+        "tasks": tasks,
+        "models": models,
+        "attempts": retried_attempts,
+        "status_counts": dict(status_counts),
+        "metrics": compute_metrics(retried_attempts, models, tasks, 1),
+    }
+
+    # Save results
+    store_text(run_dir / "summary.json", json.dumps(summary, indent=2))
+    store_text(run_dir / "attempts.json", json.dumps(retried_attempts, indent=2))
+
+    # Print summary
+    print(f"\nRetry complete. Results saved to {run_dir}")
+    print(f"  Retried: {len(retried_attempts)} attempts")
+    print(f"  Status breakdown: {dict(status_counts)}")
+
+    return summary
+
+
+def retry_failed_attempts(
+    *,
+    original_run_dir: Path,
+    temperature: float = 0.0,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    preferred_provider: Optional[str] = None,
+    include_tests: bool = False,
+    install_deps: bool = False,
+    output_dir: Path = RUN_ARTIFACTS,
+    allow_incomplete_diffs: Optional[bool] = None,
+    allow_diff_rewrite_fallback: Optional[bool] = None,
+    progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
+    filter_task_id: Optional[str] = None,
+    filter_model: Optional[str] = None,
+    filter_sample_index: Optional[int] = None,
+    run_id: Optional[str] = None,
+) -> Dict:
+    """
+    Retry any failed attempts (error, fail, api_error) from a previous run.
+    Creates a new run directory with retried attempts.
+    """
+    failed_attempts = load_failed_attempts(original_run_dir)
+    if not failed_attempts:
+        print(f"No failed attempts found in {original_run_dir}. Nothing to retry.")
+        return {"retried": 0, "message": "No failed attempts to retry"}
+
+    # Apply filters if specified
+    if filter_task_id is not None:
+        failed_attempts = [a for a in failed_attempts if a.get("task_id") == filter_task_id]
+    if filter_model is not None:
+        failed_attempts = [a for a in failed_attempts if a.get("model") == filter_model]
+    if filter_sample_index is not None:
+        failed_attempts = [a for a in failed_attempts if a.get("sample_index") == filter_sample_index]
+
+    if not failed_attempts:
+        print(f"No failed attempts match the filter criteria. Nothing to retry.")
+        return {"retried": 0, "message": "No matching failed attempts to retry"}
+
+    print(f"Found {len(failed_attempts)} failed attempts to retry")
+
+    # Create new run directory (use provided run_id if given)
+    output_dir = Path(output_dir)
+    RUN_ARTIFACTS.mkdir(exist_ok=True)
+    if run_id:
+        run_dir = output_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        run_dir = create_run_directory(output_dir)
+        run_id = run_dir.name
+
+    # Collect unique models for metadata fetch
+    models = list({a["model"] for a in failed_attempts})
+    model_metadata = fetch_model_metadata(models)
+
+    if allow_incomplete_diffs is None:
+        allow_incomplete_diffs = DEFAULT_ALLOW_INCOMPLETE_DIFFS
+    if allow_diff_rewrite_fallback is None:
+        allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
+
+    retried_attempts: List[Dict] = []
+
+    for i, original_attempt in enumerate(failed_attempts, 1):
+        task_id = original_attempt["task_id"]
+        model = original_attempt["model"]
+        sample_index = original_attempt.get("sample_index", 0)
+        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get("thinking_level_requested")
+
+        print(f"[{i}/{len(failed_attempts)}] Retrying {task_id} with {model} (sample {sample_index})")
+
+        try:
+            metadata = load_metadata(task_id)
+        except HarnessError as e:
+            print(f"  Skipping: {e}")
+            continue
+
+        attempt_summary = evaluate_attempt(
+            task_id=task_id,
+            metadata=metadata,
+            model=model,
+            sample_index=sample_index,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            preferred_provider=preferred_provider or original_attempt.get("provider"),
+            thinking_level=thinking_level,
+            model_metadata=model_metadata,
+            include_tests=include_tests,
+            install_deps_flag=install_deps,
+            response_override=None,
+            allow_incomplete_diffs=allow_incomplete_diffs,
+            allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
+            run_dir=run_dir,
+        )
+        retried_attempts.append(attempt_summary)
+        update_task_latest(task_id, attempt_summary)
+
+        if progress_callback:
+            progress_callback(model=model, task_id=task_id, sample_index=sample_index, summary=attempt_summary)
+
+        status = attempt_summary.get("status", "unknown")
+        print(f"  Result: {status}")
+
+    # Compute metrics for retried attempts
+    tasks = list({a["task_id"] for a in retried_attempts})
+    status_counts = Counter(a.get("status") for a in retried_attempts)
+
+    summary = {
+        "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "original_run_dir": str(original_run_dir),
+        "retry_mode": True,
+        "retried_count": len(retried_attempts),
+        "original_failed": len(failed_attempts),
+        "tasks": tasks,
+        "models": models,
+        "attempts": retried_attempts,
+        "status_counts": dict(status_counts),
+        "metrics": compute_metrics(retried_attempts, models, tasks, 1),
+    }
+
+    # Save results
+    store_text(run_dir / "summary.json", json.dumps(summary, indent=2))
+    store_text(run_dir / "attempts.json", json.dumps(retried_attempts, indent=2))
+
+    # Print summary
+    print(f"\nRetry complete. Results saved to {run_dir}")
+    print(f"  Retried: {len(retried_attempts)} attempts")
+    print(f"  Status breakdown: {dict(status_counts)}")
+
+    return summary
+
+
+def load_incomplete_attempts(run_dir: Path) -> List[Dict]:
+    """Load attempts from a run that were started but didn't complete.
+    
+    An incomplete attempt has:
+    - prompt.txt exists (attempt started)
+    - No response.txt/response.json (API call didn't finish)
+    - No status in summary.json for this attempt
+    
+    Returns list of dicts with task_id, model, sample_index, thinking_level info.
+    """
+    incomplete: List[Dict] = []
+    
+    # Get completed attempts from summary if it exists
+    summary_file = run_dir / "summary.json"
+    completed_keys: set = set()
+    
+    if summary_file.exists():
+        with summary_file.open("r", encoding="utf-8") as f:
+            summary = json.load(f)
+        for a in summary.get("attempts", []):
+            key = (
+                a.get("task_id"),
+                a.get("model"),
+                a.get("sample_index", 0),
+                a.get("thinking_level_applied") or a.get("thinking_level_requested") or "base"
+            )
+            completed_keys.add(key)
+    
+    # Scan attempt directories
+    for attempt_dir in run_dir.iterdir():
+        if not attempt_dir.is_dir():
+            continue
+        
+        # Parse directory name: task_id__model__sampleNN__lvl_level
+        dir_name = attempt_dir.name
+        
+        # Check if this is an attempt directory (has prompt.txt)
+        prompt_file = attempt_dir / "prompt.txt"
+        if not prompt_file.exists():
+            continue
+            
+        # Check if incomplete (no response.txt or response.json)
+        response_txt = attempt_dir / "response.txt"
+        response_json = attempt_dir / "response.json"
+        
+        if response_txt.exists() or response_json.exists():
+            continue  # This attempt completed
+        
+        # Parse attempt info from directory name
+        # Format: task_id__model__sampleNN__lvl_level
+        parts = dir_name.split("__")
+        if len(parts) < 3:
+            continue
+            
+        task_id = parts[0]
+        model_part = parts[1].replace("_", "/")  # Restore / from _
+        
+        sample_index = 0
+        thinking_level = "base"
+        
+        for part in parts[2:]:
+            if part.startswith("sample"):
+                try:
+                    sample_index = int(part.replace("sample", ""))
+                except ValueError:
+                    pass
+            elif part.startswith("lvl_"):
+                thinking_level = part.replace("lvl_", "").replace("_", "/")
+        
+        # Check if already completed
+        key = (task_id, model_part, sample_index, thinking_level)
+        if key in completed_keys:
+            continue
+        
+        incomplete.append({
+            "task_id": task_id,
+            "model": model_part,
+            "sample_index": sample_index,
+            "thinking_level": thinking_level if thinking_level != "base" else None,
+            "attempt_dir": str(attempt_dir),
+        })
+    
+    return incomplete
+
+
+def resume_incomplete_run(
+    *,
+    run_dir: Path,
+    temperature: float = 0.0,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    preferred_provider: Optional[str] = None,
+    include_tests: bool = False,
+    install_deps: bool = False,
+    allow_incomplete_diffs: Optional[bool] = None,
+    allow_diff_rewrite_fallback: Optional[bool] = None,
+    progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
+) -> Dict:
+    """
+    Resume an incomplete run by retrying attempts that didn't finish.
+    Updates the original run directory with completed attempts.
+    """
+    incomplete_attempts = load_incomplete_attempts(run_dir)
+    
+    if not incomplete_attempts:
+        print(f"No incomplete attempts found in {run_dir}.")
+        
+        # Check if there's a summary.json
+        summary_file = run_dir / "summary.json"
+        if summary_file.exists():
+            with summary_file.open("r", encoding="utf-8") as f:
+                return json.load(f)
+        
+        return {"resumed": 0, "message": "No incomplete attempts to resume"}
+    
+    print(f"Found {len(incomplete_attempts)} incomplete attempts to resume")
+    
+    # Load existing summary or create new one
+    summary_file = run_dir / "summary.json"
+    existing_attempts: List[Dict] = []
+    existing_summary: Dict = {}
+    
+    if summary_file.exists():
+        with summary_file.open("r", encoding="utf-8") as f:
+            existing_summary = json.load(f)
+            existing_attempts = existing_summary.get("attempts", [])
+    
+    # Collect unique models and tasks
+    models = list({a["model"] for a in incomplete_attempts})
+    tasks = list({a["task_id"] for a in incomplete_attempts})
+    model_metadata = fetch_model_metadata(models)
+    
+    if allow_incomplete_diffs is None:
+        allow_incomplete_diffs = DEFAULT_ALLOW_INCOMPLETE_DIFFS
+    if allow_diff_rewrite_fallback is None:
+        allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
+    
+    new_attempts: List[Dict] = []
+    
+    for i, incomplete in enumerate(incomplete_attempts, 1):
+        task_id = incomplete["task_id"]
+        model = incomplete["model"]
+        sample_index = incomplete["sample_index"]
+        thinking_level = incomplete.get("thinking_level")
+        
+        print(f"[{i}/{len(incomplete_attempts)}] Resuming {task_id} with {model} (sample {sample_index})")
+        
+        try:
+            metadata = load_metadata(task_id)
+        except HarnessError as e:
+            print(f"  Skipping: {e}")
+            continue
+        
+        attempt_summary = evaluate_attempt(
+            task_id=task_id,
+            metadata=metadata,
+            model=model,
+            sample_index=sample_index,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            preferred_provider=preferred_provider,
+            thinking_level=thinking_level,
+            model_metadata=model_metadata,
+            include_tests=include_tests,
+            install_deps_flag=install_deps,
+            response_override=None,
+            allow_incomplete_diffs=allow_incomplete_diffs,
+            allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
+            run_dir=run_dir,
+        )
+        new_attempts.append(attempt_summary)
+        update_task_latest(task_id, attempt_summary)
+        
+        if progress_callback:
+            progress_callback(model=model, task_id=task_id, sample_index=sample_index, summary=attempt_summary)
+        
+        status = attempt_summary.get("status", "unknown")
+        print(f"  Result: {status}")
+    
+    # Merge with existing attempts
+    all_attempts = existing_attempts + new_attempts
+    all_tasks = list({a["task_id"] for a in all_attempts})
+    all_models = list({a["model"] for a in all_attempts})
+    
+    # Compute metrics
+    status_counts = Counter(a.get("status") for a in all_attempts)
+    
+    # Update or create summary
+    run_id = run_dir.name
+    summary = {
+        "timestamp_utc": existing_summary.get("timestamp_utc", dt.datetime.now(dt.timezone.utc).isoformat()),
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "tasks": all_tasks,
+        "models": all_models,
+        "samples": existing_summary.get("samples", 1),
+        "temperature": existing_summary.get("temperature", temperature),
+        "max_tokens": existing_summary.get("max_tokens", max_tokens),
+        "attempts": all_attempts,
+        "status_counts": dict(status_counts),
+        "metrics": compute_metrics(all_attempts, all_models, all_tasks, existing_summary.get("samples", 1)),
+        "resumed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "resumed_count": len(new_attempts),
+    }
+    
+    # Preserve other fields from existing summary
+    for key in ["provider", "include_tests", "install_deps", "allow_incomplete_diffs", 
+                "allow_diff_rewrite_fallback", "thinking_level", "sweep_thinking_levels",
+                "include_thinking_variants", "requested_models"]:
+        if key in existing_summary:
+            summary[key] = existing_summary[key]
+    
+    # Save updated summary
+    store_text(summary_file, json.dumps(summary, indent=2))
+    store_text(run_dir / "attempts.json", json.dumps(all_attempts, indent=2))
+    
+    print(f"\nResume complete. Results saved to {run_dir}")
+    print(f"  Resumed: {len(new_attempts)} attempts")
+    print(f"  Total: {len(all_attempts)} attempts")
+    print(f"  Status breakdown: {dict(status_counts)}")
+    
+    return summary
 
 
 def resolve_task_list(args: argparse.Namespace) -> List[str]:
@@ -1971,9 +2695,7 @@ def run_tasks(
 
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
-    tasks = resolve_task_list(args)
-    models = args.models
-    samples = max(1, args.samples)
+
     allow_incomplete_diffs = (
         DEFAULT_ALLOW_INCOMPLETE_DIFFS
         if args.allow_incomplete_diffs is None
@@ -1984,6 +2706,49 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.allow_diff_rewrite_fallback is None
         else args.allow_diff_rewrite_fallback
     )
+
+    # Handle resume/retry mode
+    if args.resume_from:
+        run_dir = Path(args.resume_from)
+        if not run_dir.exists():
+            raise HarnessError(f"Run directory not found: {run_dir}")
+
+        def progress_callback(model: str, task_id: str, sample_index: int, summary: Dict) -> None:
+            print(f"[{model}] {task_id} sample {sample_index}: {summary['status']}")
+
+        if args.resume_incomplete:
+            # Resume incomplete attempts (started but didn't finish)
+            summary = resume_incomplete_run(
+                run_dir=run_dir,
+                temperature=args.temperature,
+                max_tokens=args.max_tokens,
+                preferred_provider=args.provider,
+                include_tests=args.include_tests,
+                install_deps=args.install_deps,
+                allow_incomplete_diffs=allow_incomplete_diffs,
+                allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
+                progress_callback=progress_callback,
+            )
+        else:
+            # Default: retry api_error attempts
+            summary = retry_api_error_attempts(
+                original_run_dir=run_dir,
+                temperature=args.temperature,
+                max_tokens=args.max_tokens,
+                preferred_provider=args.provider,
+                include_tests=args.include_tests,
+                install_deps=args.install_deps,
+                output_dir=args.output_dir,
+                allow_incomplete_diffs=allow_incomplete_diffs,
+                allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
+                progress_callback=progress_callback,
+            )
+        return 0
+
+    # Normal mode - require tasks
+    tasks = resolve_task_list(args)
+    models = args.models
+    samples = max(1, args.samples)
 
     if args.response_file and (len(tasks) != 1 or len(models) != 1 or samples != 1):
         raise HarnessError("--response-file is only supported for single-task, single-model, single-sample runs.")

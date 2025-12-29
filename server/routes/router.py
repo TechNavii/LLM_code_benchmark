@@ -11,7 +11,16 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from harness.config import get_settings as get_harness_settings
-from harness.run_harness import run_tasks, fetch_model_metadata
+from harness.run_harness import (
+    run_tasks,
+    fetch_model_metadata,
+    retry_api_error_attempts,
+    load_api_error_attempts,
+    load_failed_attempts,
+    retry_failed_attempts,
+    load_incomplete_attempts,
+    resume_incomplete_run,
+)
 from server import database
 from server.config import get_settings
 from server.monitoring import timed
@@ -256,6 +265,318 @@ def get_model_capabilities(model_id: str) -> Dict[str, Any]:
     }
 
 
+class RetryApiErrorsResponse(BaseModel):
+    retry_run_id: str
+    original_run_id: str
+    api_errors_found: int
+    message: str
+
+
+class ApiErrorsInfoResponse(BaseModel):
+    run_id: str
+    api_error_count: int
+    api_errors: List[Dict[str, Any]]
+
+
+class RetrySingleAttemptRequest(BaseModel):
+    task_id: str
+    model: Optional[str] = None
+    sample_index: Optional[int] = None
+
+
+@router.get("/runs/{run_id}/api-errors", response_model=ApiErrorsInfoResponse, tags=["runs"])
+def get_api_errors(run_id: str) -> ApiErrorsInfoResponse:
+    """Get information about api_error attempts in a run."""
+    summary = database.get_run(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    run_dir = Path(settings.runs_root) / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        api_errors = load_api_error_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
+
+    return ApiErrorsInfoResponse(
+        run_id=run_id,
+        api_error_count=len(api_errors),
+        api_errors=[
+            {
+                "task_id": e.get("task_id"),
+                "model": e.get("model"),
+                "sample_index": e.get("sample_index"),
+                "thinking_level": e.get("thinking_level_requested"),
+                "error": e.get("error", "")[:200],  # Truncate error message
+            }
+            for e in api_errors
+        ],
+    )
+
+
+@router.post("/runs/{run_id}/retry-api-errors", response_model=RetryApiErrorsResponse, tags=["runs"])
+async def retry_api_errors(run_id: str) -> RetryApiErrorsResponse:
+    """Retry only the api_error attempts from a previous run."""
+    summary = database.get_run(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    run_dir = Path(settings.runs_root) / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        api_errors = load_api_error_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
+
+    if not api_errors:
+        return RetryApiErrorsResponse(
+            retry_run_id="",
+            original_run_id=run_id,
+            api_errors_found=0,
+            message="No api_error attempts found to retry",
+        )
+
+    # Generate new run ID for retry
+    retry_run_id = progress_manager.generate_run_id()
+    await progress_manager.start_run(
+        retry_run_id,
+        {
+            "original_run_id": run_id,
+            "retry_mode": True,
+            "api_errors_to_retry": len(api_errors),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    )
+
+    output_dir = Path(settings.runs_root)
+
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+        payload = {
+            "model": model,
+            "task_id": task_id,
+            "sample_index": sample_index,
+            "status": summary.get("status"),
+            "duration_seconds": summary.get("duration_seconds"),
+            "error": summary.get("error"),
+        }
+        progress_manager.publish_attempt(retry_run_id, payload)
+
+    async def runner() -> None:
+        try:
+            result = await asyncio.to_thread(
+                retry_api_error_attempts,
+                original_run_dir=run_dir,
+                output_dir=output_dir,
+                progress_callback=progress_proxy,
+                run_id=retry_run_id,
+            )
+        except Exception as exc:
+            logger.exception("retry.failed", run_id=retry_run_id, error=str(exc))
+            progress_manager.fail(retry_run_id, str(exc))
+        else:
+            database.save_run(result)
+            progress_manager.complete(retry_run_id, result)
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return RetryApiErrorsResponse(
+        retry_run_id=retry_run_id,
+        original_run_id=run_id,
+        api_errors_found=len(api_errors),
+        message=f"Retrying {len(api_errors)} api_error attempts",
+    )
+
+
+@router.post("/runs/{run_id}/retry-single", response_model=RetryApiErrorsResponse, tags=["runs"])
+async def retry_single_attempt(run_id: str, request: RetrySingleAttemptRequest) -> RetryApiErrorsResponse:
+    """Retry a single failed attempt from a previous run."""
+    summary = database.get_run(run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    run_dir = Path(settings.runs_root) / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        all_failed = load_failed_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load failed attempts: {exc}")
+
+    # Filter to find the specific attempt
+    filtered = [
+        e for e in all_failed
+        if e.get("task_id") == request.task_id
+        and (request.model is None or e.get("model") == request.model)
+        and (request.sample_index is None or e.get("sample_index") == request.sample_index)
+    ]
+
+    if not filtered:
+        raise HTTPException(status_code=404, detail="Specified attempt not found or not a failed attempt")
+
+    retry_run_id = progress_manager.generate_run_id()
+    await progress_manager.start_run(
+        retry_run_id,
+        {
+            "original_run_id": run_id,
+            "retry_mode": True,
+            "single_retry": True,
+            "task_id": request.task_id,
+            "api_errors_to_retry": len(filtered),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    )
+
+    output_dir = Path(settings.runs_root)
+
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+        payload = {
+            "model": model,
+            "task_id": task_id,
+            "sample_index": sample_index,
+            "status": summary.get("status"),
+            "duration_seconds": summary.get("duration_seconds"),
+            "error": summary.get("error"),
+        }
+        progress_manager.publish_attempt(retry_run_id, payload)
+
+    async def runner() -> None:
+        try:
+            result = await asyncio.to_thread(
+                retry_failed_attempts,
+                original_run_dir=run_dir,
+                output_dir=output_dir,
+                progress_callback=progress_proxy,
+                filter_task_id=request.task_id,
+                filter_model=request.model,
+                filter_sample_index=request.sample_index,
+                run_id=retry_run_id,
+            )
+        except Exception as exc:
+            logger.exception("retry.single.failed", run_id=retry_run_id, error=str(exc))
+            progress_manager.fail(retry_run_id, str(exc))
+        else:
+            database.save_run(result)
+            progress_manager.complete(retry_run_id, result)
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return RetryApiErrorsResponse(
+        retry_run_id=retry_run_id,
+        original_run_id=run_id,
+        api_errors_found=len(filtered),
+        message=f"Retrying {len(filtered)} failed attempt(s) for task {request.task_id}",
+    )
+
+
+class IncompleteAttemptsResponse(BaseModel):
+    run_id: str
+    incomplete_count: int
+    incomplete_attempts: List[Dict[str, Any]]
+
+
+class ResumeIncompleteResponse(BaseModel):
+    run_id: str
+    incomplete_count: int
+    message: str
+
+
+@router.get("/runs/{run_id}/incomplete", response_model=IncompleteAttemptsResponse)
+async def get_incomplete_attempts(run_id: str) -> IncompleteAttemptsResponse:
+    """Get incomplete attempts for a run (started but didn't finish)."""
+    run_dir = Path(settings.runs_root) / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        incomplete = load_incomplete_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load incomplete attempts: {exc}")
+
+    return IncompleteAttemptsResponse(
+        run_id=run_id,
+        incomplete_count=len(incomplete),
+        incomplete_attempts=incomplete,
+    )
+
+
+@router.post("/runs/{run_id}/resume", response_model=ResumeIncompleteResponse)
+async def resume_run(run_id: str) -> ResumeIncompleteResponse:
+    """Resume incomplete attempts for a run."""
+    run_dir = Path(settings.runs_root) / run_id
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        incomplete = load_incomplete_attempts(run_dir)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load incomplete attempts: {exc}")
+
+    if not incomplete:
+        raise HTTPException(status_code=400, detail="No incomplete attempts to resume")
+
+    # Start resume in progress manager
+    await progress_manager.start_run(
+        run_id,
+        {
+            "resume_mode": True,
+            "incomplete_to_resume": len(incomplete),
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+    )
+
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+        progress_manager.publish_attempt(
+            run_id,
+            {
+                "task_id": task_id,
+                "model": model,
+                "sample_index": sample_index,
+                "status": summary.get("status"),
+                "duration_seconds": summary.get("duration_seconds"),
+                "error": summary.get("error"),
+            },
+        )
+
+    async def runner() -> None:
+        try:
+            result = await asyncio.to_thread(
+                resume_incomplete_run,
+                run_dir=run_dir,
+                temperature=DEFAULT_TEMPERATURE,
+                max_tokens=DEFAULT_MAX_TOKENS,
+                include_tests=HARNESS_SETTINGS.include_tests_by_default,
+                install_deps=HARNESS_SETTINGS.install_deps_by_default,
+                allow_incomplete_diffs=DEFAULT_ALLOW_INCOMPLETE_DIFFS,
+                allow_diff_rewrite_fallback=DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK,
+                progress_callback=progress_proxy,
+            )
+        except Exception as exc:
+            logger.exception("resume.failed", run_id=run_id, error=str(exc))
+            progress_manager.fail(run_id, str(exc))
+        else:
+            database.save_run(result)
+            progress_manager.complete(run_id, result)
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return ResumeIncompleteResponse(
+        run_id=run_id,
+        incomplete_count=len(incomplete),
+        message=f"Resuming {len(incomplete)} incomplete attempt(s)",
+    )
+
+
 @router.websocket("/runs/{run_id}/stream")
 async def run_stream(websocket: WebSocket, run_id: str) -> None:
     await websocket.accept()
@@ -297,3 +618,5 @@ RunLaunchResponse.model_rebuild()
 RunDetailResponse.model_rebuild()
 RunSummary.model_rebuild()
 RunListResponse.model_rebuild()
+IncompleteAttemptsResponse.model_rebuild()
+ResumeIncompleteResponse.model_rebuild()
