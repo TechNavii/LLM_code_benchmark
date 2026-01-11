@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main, master]
 
+# Cancel in-progress runs for the same branch/PR to reduce CI load
+# New pushes to the same branch will cancel older in-progress runs
+concurrency:
+  group: quality-gates-${{ github.ref }}
+  cancel-in-progress: true
+
 # Permissions for PR comments, check annotations, and dependency review
 permissions:
   contents: read

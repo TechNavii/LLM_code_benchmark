@@ -615,7 +615,7 @@
         "Avoid canceling scheduled deep scans unless explicitly desired",
         "Keep configuration brownfield-safe and easy to reason about"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }

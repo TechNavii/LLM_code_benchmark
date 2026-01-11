@@ -13,10 +13,11 @@ on:
         default: true
         type: boolean
 
-# Cancel any in-progress runs of this workflow
+# Concurrency control: only cancel redundant runs for manual dispatches
+# Scheduled runs use a unique group to avoid being canceled
 concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   deep-security-scans:
