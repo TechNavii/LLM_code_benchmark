@@ -394,45 +394,42 @@ class TestCrossThreadPublishing:
         await asyncio.sleep(0.05)
         await pm.unsubscribe(run_id, stable_queue)
 
-    def test_thread_pool_publish_stress(self) -> None:
+    @pytest.mark.asyncio
+    async def test_thread_pool_publish_stress(self) -> None:
         """Use thread pool to simulate heavy concurrent publishing."""
+        pm = CodeProgressManager()
+        run_id = "pool_stress"
+        num_workers = 8
+        events_per_worker = 50
 
-        async def run() -> None:
-            pm = CodeProgressManager()
-            run_id = "pool_stress"
-            num_workers = 8
-            events_per_worker = 50
+        await pm.start_run(run_id, {})
+        queue = await pm.subscribe(run_id)
+        await asyncio.wait_for(queue.get(), timeout=1.0)  # init
 
-            await pm.start_run(run_id, {})
-            queue = await pm.subscribe(run_id)
-            await asyncio.wait_for(queue.get(), timeout=1.0)  # init
+        def worker(worker_id: int) -> int:
+            for i in range(events_per_worker):
+                pm.publish_attempt(run_id, {"worker": worker_id, "i": i})
+            return worker_id
 
-            def worker(worker_id: int) -> int:
-                for i in range(events_per_worker):
-                    pm.publish_attempt(run_id, {"worker": worker_id, "i": i})
-                return worker_id
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as pool:
+            futures = [pool.submit(worker, i) for i in range(num_workers)]
+            concurrent.futures.wait(futures)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as pool:
-                futures = [pool.submit(worker, i) for i in range(num_workers)]
-                concurrent.futures.wait(futures)
+        await asyncio.sleep(0.3)
 
-            await asyncio.sleep(0.3)
+        # Count received
+        count = 0
+        while not queue.empty():
+            event = queue.get_nowait()
+            if event["type"] == "attempt":
+                count += 1
 
-            # Count received
-            count = 0
-            while not queue.empty():
-                event = queue.get_nowait()
-                if event["type"] == "attempt":
-                    count += 1
+        expected = num_workers * events_per_worker
+        assert count == expected, f"Expected {expected} events, got {count}"
 
-            expected = num_workers * events_per_worker
-            assert count == expected, f"Expected {expected} events, got {count}"
-
-            pm.complete(run_id, {})
-            await asyncio.sleep(0.05)
-            await pm.unsubscribe(run_id, queue)
-
-        asyncio.run(run())
+        pm.complete(run_id, {})
+        await asyncio.sleep(0.05)
+        await pm.unsubscribe(run_id, queue)
 
 
 class TestQAProgressManagerStress:

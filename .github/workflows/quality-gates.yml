@@ -91,7 +91,7 @@ jobs:
         run: ./scripts/typecheck.sh
 
       - name: Run tests with coverage (strict warnings)
-        run: ./scripts/test.sh -W error::DeprecationWarning -W error::PendingDeprecationWarning
+        run: ./scripts/test.sh -W error::DeprecationWarning -W error::PendingDeprecationWarning -W error::RuntimeWarning -W error::ResourceWarning
         env:
           CI: true
 

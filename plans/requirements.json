@@ -616,6 +616,97 @@
         "Keep configuration brownfield-safe and easy to reason about"
       ],
       "passes": true
+    },
+    {
+      "id": "quality-014-warning-free-test-suite",
+      "priority": 45,
+      "category": "quality",
+      "description": "Make the default test suite warning-free (or explicitly justified) to prevent hidden runtime bugs",
+      "steps": [
+        "Update CI to fail on RuntimeWarning/ResourceWarning that indicate real bugs (e.g., un-awaited coroutines, unclosed resources)",
+        "Add targeted warning filters only for known third-party noise with explicit justification",
+        "Ensure local test runs remain developer-friendly while CI is strict",
+        "Keep the policy scoped to the repository test suite (exclude tasks/* suites)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "quality-015-actionlint-workflows",
+      "priority": 46,
+      "category": "quality",
+      "description": "Add workflow linting (actionlint) to catch GitHub Actions YAML issues early",
+      "steps": [
+        "Add actionlint (or equivalent) to validate .github/workflows/*.yml",
+        "Run it in CI on PRs and pushes (fast, no network calls beyond fetching the linter)",
+        "Keep the rules brownfield-safe (warn-only initially if needed)",
+        "Ensure workflow linting respects repository constraints (no tasks/* suites, no runs/ artifacts)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-007-os-matrix",
+      "priority": 47,
+      "category": "ci",
+      "description": "Run CI validators on an OS matrix to ensure cross-platform script compatibility",
+      "steps": [
+        "Run the default quality-gates workflow on ubuntu-latest and macos-latest",
+        "Ensure caching remains effective and keys include OS + Python version + lock hashes",
+        "Fix any POSIX/bash portability issues surfaced by macOS",
+        "Keep Windows optional unless explicitly required"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-009-dependabot-updates",
+      "priority": 48,
+      "category": "security",
+      "description": "Add Dependabot for GitHub Actions and Python dependency updates",
+      "steps": [
+        "Configure Dependabot to update GitHub Actions workflow versions",
+        "Configure Dependabot to update pip-tools lockfiles (or equivalent) on a weekly cadence",
+        "Ensure updates run validators in CI and include clear changelog summaries",
+        "Keep tasks/* workspace deps excluded"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-010-gha-permissions-hardening",
+      "priority": 49,
+      "category": "security",
+      "description": "Harden GitHub Actions workflows with least-privilege permissions",
+      "steps": [
+        "Set workflow-level and job-level permissions blocks explicitly (default read-only unless required)",
+        "Restrict token permissions for commenting/reporting steps to PR-only contexts",
+        "Avoid long-lived secrets in workflows; prefer OIDC where applicable",
+        "Add a periodic review checklist for workflow permissions"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-016-env-example-sync",
+      "priority": 50,
+      "category": "quality",
+      "description": "Keep .env.example synchronized with server/harness settings",
+      "steps": [
+        "Add a script that introspects pydantic-settings models and verifies required env vars exist in .env.example",
+        "Fail CI if a required variable is missing or if .env.example contains unknown/stale keys (allowlist where needed)",
+        "Ensure the check does not reveal real secrets (only key names)",
+        "Keep the check fast and deterministic"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-014-test-order-determinism",
+      "priority": 51,
+      "category": "tests",
+      "description": "Detect hidden test-order dependencies",
+      "steps": [
+        "Add a CI job that runs pytest with randomized test order (seeded) to catch order-dependent tests",
+        "Keep runtime bounded (e.g., nightly or separate job) if it materially slows PR checks",
+        "Ensure randomness is reproducible via logged seeds",
+        "Exclude tasks/* suites and keep tmp/workdir isolation intact"
+      ],
+      "passes": false
     }
   ]
 }
