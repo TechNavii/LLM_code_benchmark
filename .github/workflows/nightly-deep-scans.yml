@@ -25,6 +25,7 @@ permissions:
   contents: read
   # Note: If issue creation for critical findings is enabled,
   # add 'issues: write' permission here
+  # Branch protection check needs to read repository settings
 
 jobs:
   deep-security-scans:
@@ -1076,3 +1077,75 @@ jobs:
             .benchmarks/
             benchmark-output.txt
           retention-days: 30
+
+  # ==========================================
+  # Branch Protection Verification
+  # ==========================================
+  branch-protection-check:
+    name: Branch Protection Check
+    runs-on: ubuntu-latest
+    # Only run on scheduled runs (not manual triggers without specific intent)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Check branch protection settings
+        id: check-protection
+        env:
+          # Use GITHUB_TOKEN for API access (read-only)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Warn-only mode for brownfield safety
+          WARN_ONLY: "true"
+        run: |
+          echo "Checking branch protection settings for main branch..."
+          echo ""
+
+          # Install jq if not available
+          which jq || sudo apt-get install -y jq
+
+          # Run the check script
+          ./scripts/check-branch-protection.sh main 2>&1 | tee protection-check.txt
+
+          # Capture exit code
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "Branch protection check completed."
+
+      - name: Generate protection check summary
+        if: always()
+        run: |
+          {
+            echo "## Branch Protection Verification"
+            echo ""
+            echo "Verifies that the \`main\` branch has proper protection rules as documented in \`docs/BRANCH_PROTECTION.md\`."
+            echo ""
+            if [ -f protection-check.txt ]; then
+              echo '```'
+              cat protection-check.txt
+              echo '```'
+            else
+              echo "No protection check output found."
+            fi
+            echo ""
+            echo "**Exit Code:** ${{ steps.check-protection.outputs.exit_code }}"
+            echo ""
+            if [ "${{ steps.check-protection.outputs.exit_code }}" = "0" ]; then
+              echo "✅ Branch protection is properly configured!"
+            elif [ "${{ steps.check-protection.outputs.exit_code }}" = "1" ]; then
+              echo "⚠️ Branch protection needs configuration. See \`docs/BRANCH_PROTECTION.md\`."
+            else
+              echo "ℹ️ Unable to verify branch protection (may need additional permissions)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload protection check results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: branch-protection-check
+          path: protection-check.txt
+          retention-days: 7
