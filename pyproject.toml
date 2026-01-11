@@ -1,3 +1,7 @@
+[project]
+# Define explicit Python version support
+requires-python = ">=3.11"
+
 [tool.ruff]
 # Scope to lintScope directories
 extend-exclude = [

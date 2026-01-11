@@ -10,6 +10,10 @@ VENV_DIR="${REPO_ROOT}/.venv"
 
 cd "${REPO_ROOT}"
 
+# Check Python version meets requirements
+source "${SCRIPT_DIR}/check-python-version.sh"
+check_python_version python3
+
 # Ensure virtualenv exists
 if [ ! -d "${VENV_DIR}" ]; then
     echo "Creating virtualenv at ${VENV_DIR}..."

@@ -238,7 +238,7 @@
         "Ensure dependencies are installed per-Python-version (cache keys include python version)",
         "Avoid relying on developer machine global site-packages"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-006-no-debug-output",

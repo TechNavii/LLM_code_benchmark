@@ -11,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11"]
+        # Enforce supported Python versions (defined in pyproject.toml: requires-python = ">=3.11")
+        python-version: ["3.11", "3.12"]
 
     steps:
       - name: Checkout code
