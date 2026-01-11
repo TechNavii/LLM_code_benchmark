@@ -54,8 +54,10 @@ Review these items quarterly (or after significant workflow changes):
 - [ ] Secrets are scoped to specific environments if applicable
 
 ### Action Version Audit
-- [ ] All third-party actions use pinned versions (SHA or tag)
-- [ ] Dependabot is configured to update action versions
+- [ ] All third-party actions are pinned to commit SHAs (40-char hex)
+- [ ] Version tags are documented in comments (e.g., `@abc123  # v4`)
+- [ ] `./scripts/check-pinned-actions.sh` passes with no findings
+- [ ] Dependabot is configured to update action SHAs
 - [ ] Actions from untrusted sources are avoided or audited
 
 ### Context Restrictions
@@ -72,6 +74,51 @@ When creating new workflows:
 3. Prefer read permissions over write permissions
 4. Use job-level permissions if different jobs need different access
 5. Test with restricted permissions before expanding
+
+## GitHub Actions SHA Pinning
+
+All GitHub Actions in this repository must be pinned to immutable commit SHAs to reduce supply-chain risk. Version tags like `@v4` can be changed by the action maintainer at any time, potentially introducing malicious code. SHA pinning ensures you're always running exactly the code you reviewed.
+
+### Format
+
+```yaml
+# Correct: SHA-pinned with version comment
+uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+# Incorrect: version tag (mutable)
+uses: actions/checkout@v4
+```
+
+### How to Pin an Action
+
+1. Find the commit SHA for the desired version:
+   ```bash
+   gh api repos/OWNER/REPO/git/refs/tags/TAG --jq '.object.sha'
+   ```
+
+2. If the result is a tag object (not a commit), dereference it:
+   ```bash
+   gh api repos/OWNER/REPO/git/tags/TAG_SHA --jq '.object.sha'
+   ```
+
+3. Update the workflow with the SHA and add a version comment
+
+### Keeping SHAs Updated
+
+Dependabot is configured to automatically update SHA-pinned actions when new versions are released. It will:
+- Detect that actions are pinned to SHAs
+- Find new releases and their corresponding SHAs
+- Create PRs to update to the new SHAs
+
+See `.github/dependabot.yml` for the update schedule (weekly on Mondays).
+
+### CI Enforcement
+
+The `./scripts/check-pinned-actions.sh` script runs in CI and fails if any action uses a version tag instead of a SHA. This prevents accidental introduction of unpinned actions.
+
+### Exceptions
+
+Exceptions to SHA pinning require explicit justification and should be documented. Currently, no exceptions are allowed.
 
 ## Security Best Practices
 

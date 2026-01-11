@@ -707,6 +707,136 @@
         "Exclude tasks/* suites and keep tmp/workdir isolation intact"
       ],
       "passes": true
+    },
+    {
+      "id": "security-011-pin-github-actions-shas",
+      "priority": 52,
+      "category": "security",
+      "description": "Pin GitHub Actions to commit SHAs to reduce CI supply-chain risk",
+      "steps": [
+        "Replace version tags in workflow uses: lines with immutable commit SHAs (tooling-assisted pinning recommended)",
+        "Add a CI check that fails when new unpinned actions are introduced",
+        "Ensure Dependabot (or an explicit workflow) keeps pinned SHAs updated",
+        "Allow exceptions only with explicit justification"
+      ],
+      "passes": true
+    },
+    {
+      "id": "security-012-ossf-scorecard",
+      "priority": 53,
+      "category": "security",
+      "description": "Add OSSF Scorecard scanning for repo supply-chain best practices",
+      "steps": [
+        "Run OSSF Scorecard on a schedule and on default-branch changes",
+        "Upload results (e.g., SARIF) and track score deltas over time",
+        "Start warn-only, then enforce a baseline once noise is understood",
+        "Keep the scan scoped to the repo (exclude tasks/* workspaces where applicable)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-013-python-require-hashes",
+      "priority": 54,
+      "category": "security",
+      "description": "Enable hash-checked Python installs (pip --require-hashes) for stronger dependency integrity",
+      "steps": [
+        "Generate lockfiles with hashes (pip-compile --generate-hashes) for server/, harness/, and dev tooling",
+        "Update validator/bootstrap scripts to install from hashed lockfiles using --require-hashes",
+        "Add a CI check that fails on missing hashes or unpinned direct URL dependencies",
+        "Keep tasks/* workspace deps excluded"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-015-openapi-fuzz-schemathesis",
+      "priority": 55,
+      "category": "tests",
+      "description": "Add OpenAPI-driven API fuzz tests to catch 500s and validation edge cases",
+      "steps": [
+        "Use Schemathesis (or equivalent) against the generated OpenAPI schema to generate HTTP requests",
+        "Run in a nightly workflow (or separate CI job) with bounded examples/timeouts",
+        "Focus on 5xx/crash detection and request validation edge cases for both code and QA routers",
+        "Keep tests hermetic (no external network) and exclude tasks/* suites"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-016-gui-headless-smoke",
+      "priority": 56,
+      "category": "tests",
+      "description": "Add headless browser smoke tests for gui/ to catch routing/JS regressions",
+      "steps": [
+        "Use Playwright (or equivalent) to load /ui and /qa/ui against a test server instance",
+        "Assert key DOM elements render and critical JS does not throw",
+        "Optionally verify a WebSocket connection can be established (mocked/init-only)",
+        "Keep runtime fast and collect artifacts (trace/screenshot) on failure"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-017-harness-server-e2e-dryrun",
+      "priority": 57,
+      "category": "tests",
+      "description": "Add an end-to-end dry-run test wiring harness CLI ↔ server API without real LLM calls",
+      "steps": [
+        "Start the FastAPI app in a subprocess (ephemeral port, temp DB) from the test suite",
+        "Run the harness in a dry-run mode (or with a fake model provider) and assert completion",
+        "Verify expected DB rows/artifacts are created and progress endpoints behave",
+        "Ensure the test is hermetic and does not require OPENROUTER_API_KEY"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-017-log-redaction",
+      "priority": 58,
+      "category": "quality",
+      "description": "Prevent accidental leakage of secrets/PII in logs",
+      "steps": [
+        "Add centralized log redaction for common secret patterns (API keys, Bearer tokens)",
+        "Add tests asserting secrets are redacted in representative logging paths",
+        "Ensure GUI debug logging remains gated and does not include tokens",
+        "Keep redaction deterministic and avoid false-positive over-redaction where practical"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-018-performance-regression-budgets",
+      "priority": 59,
+      "category": "quality",
+      "description": "Add lightweight performance regression checks for critical paths",
+      "steps": [
+        "Add a small benchmark suite for hot paths (patch normalization, DB queries, progress dispatch)",
+        "Run benchmarks in nightly CI with brownfield-friendly baselines and slack",
+        "Fail only on significant regressions to avoid flakiness",
+        "Keep the suite deterministic and resource-bounded"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-008-branch-protection-requirements",
+      "priority": 60,
+      "category": "ci",
+      "description": "Define and verify branch protection expectations for main",
+      "steps": [
+        "Define required status checks (quality-gates, secret-scanning, codeql) and review requirements",
+        "Optionally add a CI check that warns when branch protection is misconfigured (GitHub API)",
+        "Ensure merge strategies align with the security posture (e.g., disallow force-push)",
+        "Define an emergency override procedure with follow-up requirements"
+      ],
+      "passes": false
+    },
+    {
+      "id": "foundation-005-devcontainer",
+      "priority": 61,
+      "category": "foundation",
+      "description": "Provide an optional devcontainer for a reproducible development environment",
+      "steps": [
+        "Add a .devcontainer configuration that can run the full validator suite",
+        "Ensure it uses the same pinned Python versions and locked dependencies as CI",
+        "Keep it optional and avoid impacting non-container workflows",
+        "Ensure it works on macOS/Linux hosts"
+      ],
+      "passes": false
     }
   ]
 }

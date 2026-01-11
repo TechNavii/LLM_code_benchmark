@@ -4,6 +4,9 @@
 version: 2
 updates:
   # GitHub Actions version updates
+  # Actions are pinned to commit SHAs for supply-chain security.
+  # Dependabot automatically updates SHA-pinned actions to new SHAs
+  # when new versions are released, maintaining both security and freshness.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
