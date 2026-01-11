@@ -23,6 +23,9 @@ env/
 build/
 dist/
 *.egg-info/
+htmlcov/
+.coverage
+.coverage.*
 
 # Node / JavaScript
 node_modules/

@@ -160,7 +160,7 @@
         "Require that new/changed code does not reduce coverage (e.g., diff coverage or incremental thresholds)",
         "Publish coverage in CI (summary + optional upload to a coverage service)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-001-quality-gates",
