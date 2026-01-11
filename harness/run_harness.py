@@ -7,6 +7,7 @@ import argparse
 import difflib
 import datetime as dt
 import json
+import logging
 import math
 import os
 import re
@@ -28,6 +29,14 @@ except ImportError:  # pragma: no cover - optional for offline dry runs
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+logger = logging.getLogger(__name__)
+
+
+def _cli_echo(message: str, *, error: bool = False) -> None:
+    stream = sys.stderr if error else sys.stdout
+    stream.write(f"{message}\n")
+
 
 from harness.config import get_settings
 from harness.exceptions import (
@@ -131,7 +140,9 @@ def _is_probably_valid_patch(patch: str) -> bool:
     add_lines = sum(1 for line in lines if line.startswith("+") and not line.startswith("+++"))
     remove_lines = sum(1 for line in lines if line.startswith("-") and not line.startswith("---"))
     hunk_lines = sum(1 for line in lines if line.startswith("@@"))
-    header_lines = sum(1 for line in lines if line.startswith("diff --git") or line.startswith("--- ") or line.startswith("+++ "))
+    header_lines = sum(
+        1 for line in lines if line.startswith("diff --git") or line.startswith("--- ") or line.startswith("+++ ")
+    )
 
     if header_lines >= 2 and (add_lines or remove_lines or hunk_lines):
         return True
@@ -196,7 +207,12 @@ def _normalize_patch_format(patch: str) -> tuple[str, bool]:
             while j < len(lines):
                 candidate = lines[j]
                 candidate_stripped = candidate.lstrip()
-                if candidate_stripped.startswith("@@") or candidate_stripped.startswith("diff --git") or candidate_stripped.startswith("--- ") or candidate_stripped.startswith("+++ "):
+                if (
+                    candidate_stripped.startswith("@@")
+                    or candidate_stripped.startswith("diff --git")
+                    or candidate_stripped.startswith("--- ")
+                    or candidate_stripped.startswith("+++ ")
+                ):
                     break
                 if candidate.startswith(" "):
                     measured_old += 1
@@ -239,7 +255,7 @@ def _normalize_patch_format(patch: str) -> tuple[str, bool]:
                     old_len = parsed_old_len_val
                 if measured_new == 0 and parsed_new_len_val is not None:
                     new_len = parsed_new_len_val
-                suffix = stripped[match.end():].strip()
+                suffix = stripped[match.end() :].strip()
             else:
                 synthetic_headers = True
                 suffix = stripped[2:].strip()
@@ -267,7 +283,7 @@ def _normalize_patch_format(patch: str) -> tuple[str, bool]:
             i += 1
             continue
 
-        if in_hunk and not line.startswith(('+', '-', ' ', '\\')):
+        if in_hunk and not line.startswith(("+", "-", " ", "\\")):
             line = f" {line}"
 
         normalized.append(line)
@@ -302,6 +318,16 @@ def _normalize_model_id(model: str) -> str:
     return model
 
 
+def _is_lmstudio_model(model: str) -> bool:
+    return model.startswith("lmstudio/")
+
+
+def _normalize_lmstudio_model_id(model: str) -> str:
+    if model.startswith("lmstudio/"):
+        return model.split("lmstudio/", 1)[1]
+    return model
+
+
 def _store_model_metadata(
     registry: Dict[str, Dict[str, Any]],
     model_id: str,
@@ -330,13 +356,16 @@ def fetch_model_metadata(models: List[str]) -> Dict[str, Dict[str, Any]]:
             timeout=60,
         )
         response.raise_for_status()
-    except Exception:
+        data = response.json()
+    except requests.exceptions.RequestException as exc:
+        logger.warning("Failed to fetch OpenRouter model metadata: %s", exc)
         return {}
-
-    data = response.json()
+    except ValueError as exc:
+        logger.warning("OpenRouter returned non-JSON response for models list: %s", exc)
+        return {}
     registry: Dict[str, Dict[str, Any]] = {}
-    for entry in data.get('data', []):
-        model_id = entry.get('id')
+    for entry in data.get("data", []):
+        model_id = entry.get("id")
         if not model_id:
             continue
         is_thinking_variant = model_id.endswith(":thinking")
@@ -347,10 +376,10 @@ def fetch_model_metadata(models: List[str]) -> Dict[str, Dict[str, Any]]:
         if not should_include:
             continue
 
-        model_pricing = entry.get('pricing') or {}
+        model_pricing = entry.get("pricing") or {}
         try:
-            prompt_rate = float(model_pricing.get('prompt', 0))
-            completion_rate = float(model_pricing.get('completion', 0))
+            prompt_rate = float(model_pricing.get("prompt", 0))
+            completion_rate = float(model_pricing.get("completion", 0))
         except (TypeError, ValueError):
             prompt_rate = 0.0
             completion_rate = 0.0
@@ -544,6 +573,7 @@ def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> s
 
     return prompt
 
+
 # Number of times to retry transient completion failures before giving up.
 MAX_COMPLETION_RETRIES = SETTINGS.completion_max_retries
 RETRY_BACKOFF_SECONDS = SETTINGS.completion_retry_backoff_seconds
@@ -562,6 +592,7 @@ def _parse_retry_after(response: "requests.Response") -> Optional[float]:
     # Try parsing as HTTP-date (RFC 7231)
     try:
         from email.utils import parsedate_to_datetime
+
         retry_dt = parsedate_to_datetime(retry_after)
         delay = (retry_dt - dt.datetime.now(dt.timezone.utc)).total_seconds()
         return max(0.0, delay)
@@ -616,6 +647,7 @@ def call_openrouter(
         "HTTP-Referer": "benchmark-harness",
         "Content-Type": "application/json",
     }
+
     def wrap_content(content: str):
         return [{"type": "text", "text": content}]
 
@@ -637,9 +669,7 @@ def call_openrouter(
     supported_params: set[str] = set()
     if model_info:
         supported_params = {
-            param.lower()
-            for param in model_info.get("supported_parameters", [])
-            if isinstance(param, str)
+            param.lower() for param in model_info.get("supported_parameters", []) if isinstance(param, str)
         }
     if thinking_level and "reasoning" in supported_params:
         reasoning_payload = _compose_reasoning_payload(thinking_level)
@@ -660,7 +690,9 @@ def call_openrouter(
             response = requests.post(url, headers=headers, json=payload, timeout=SETTINGS.api_call_timeout_seconds)
             duration = time.perf_counter() - start_time
         except requests.exceptions.Timeout as exc:  # pragma: no cover - timeout
-            last_error = ProviderError(f"OpenRouter request timed out after {SETTINGS.api_call_timeout_seconds}s: {exc}")
+            last_error = ProviderError(
+                f"OpenRouter request timed out after {SETTINGS.api_call_timeout_seconds}s: {exc}"
+            )
             should_retry = True
         except requests.exceptions.RequestException as exc:  # pragma: no cover - network failures
             last_error = ProviderError(f"OpenRouter request failed: {exc}")
@@ -691,9 +723,7 @@ def call_openrouter(
                     last_error = _classify_error(status, error_message, retry_after)
                     should_retry = True
                 else:
-                    raise HarnessError(
-                        f"OpenRouter request failed ({status}): {error_message}"
-                    )
+                    raise HarnessError(f"OpenRouter request failed ({status}): {error_message}")
             else:
                 try:
                     data = response.json()
@@ -727,13 +757,29 @@ def call_openrouter(
                             except (TypeError, ValueError):
                                 is_transient = False
                             lowered = message.lower()
-                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                            if any(
+                                k in lowered
+                                for k in (
+                                    "network",
+                                    "upstream",
+                                    "temporar",
+                                    "timeout",
+                                    "try again",
+                                    "rate limit",
+                                    "too many",
+                                )
+                            ):
                                 is_transient = True
                             # Use appropriate error type based on code
                             if code_int == 429:
-                                last_error = RateLimitError(f"Provider rate limited ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = RateLimitError(
+                                    f"Provider rate limited ({code}): {message or 'unknown error'}",
+                                    retry_after=retry_after,
+                                )
                             elif is_transient:
-                                last_error = ProviderError(f"Provider error ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = ProviderError(
+                                    f"Provider error ({code}): {message or 'unknown error'}", retry_after=retry_after
+                                )
                             else:
                                 last_error = HarnessError(f"Provider error ({code}): {message or 'unknown error'}")
                             should_retry = is_transient
@@ -757,16 +803,35 @@ def call_openrouter(
                             except (TypeError, ValueError):
                                 is_transient = False
                             lowered = message.lower()
-                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                            if any(
+                                k in lowered
+                                for k in (
+                                    "network",
+                                    "upstream",
+                                    "temporar",
+                                    "timeout",
+                                    "try again",
+                                    "rate limit",
+                                    "too many",
+                                )
+                            ):
                                 is_transient = True
 
                             # Use appropriate error type based on code
                             if code_int == 429:
-                                last_error = RateLimitError(f"OpenRouter provider rate limited ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = RateLimitError(
+                                    f"OpenRouter provider rate limited ({code}): {message or 'unknown error'}",
+                                    retry_after=retry_after,
+                                )
                             elif is_transient:
-                                last_error = ProviderError(f"OpenRouter provider error ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = ProviderError(
+                                    f"OpenRouter provider error ({code}): {message or 'unknown error'}",
+                                    retry_after=retry_after,
+                                )
                             else:
-                                last_error = HarnessError(f"OpenRouter provider error ({code}): {message or 'unknown error'}")
+                                last_error = HarnessError(
+                                    f"OpenRouter provider error ({code}): {message or 'unknown error'}"
+                                )
                             should_retry = is_transient
                         else:
                             cleaned = (content or "").strip()
@@ -791,6 +856,88 @@ def call_openrouter(
     raise last_error
 
 
+def call_lmstudio(
+    prompt: str,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+) -> tuple[str, Dict, float]:
+    if requests is None:
+        raise HarnessError("The 'requests' library is required to call LM Studio.")
+
+    base_url = SETTINGS.lmstudio_base_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You produce clean, minimal patches."},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    try:
+        start_time = time.perf_counter()
+        response = requests.post(url, headers=headers, json=payload, timeout=SETTINGS.api_call_timeout_seconds)
+        duration = time.perf_counter() - start_time
+    except requests.exceptions.Timeout as exc:  # pragma: no cover
+        raise ProviderError(f"LM Studio request timed out after {SETTINGS.api_call_timeout_seconds}s: {exc}") from exc
+    except requests.exceptions.RequestException as exc:  # pragma: no cover
+        raise ProviderError(f"LM Studio request failed: {exc}") from exc
+
+    status = response.status_code
+    if status >= 500:
+        raise ProviderError(f"LM Studio server error ({status}): {response.text.strip()}")
+    if status >= 400:
+        message = response.text.strip()
+        try:
+            error_payload = response.json()
+        except ValueError:
+            error_payload = None
+        if isinstance(error_payload, dict):
+            message = (
+                error_payload.get("error", {}).get("message")
+                or error_payload.get("message")
+                or error_payload.get("detail")
+                or message
+            )
+        raise HarnessError(f"LM Studio request failed ({status}): {message}")
+
+    try:
+        data = response.json()
+    except (requests.exceptions.JSONDecodeError, ValueError):
+        content_type = response.headers.get("content-type", "unknown")
+        body_preview = response.text.strip()
+        if len(body_preview) > 512:
+            body_preview = f"{body_preview[:512]}..."
+        raise ProviderError(
+            "LM Studio returned a non-JSON response payload. "
+            f"status={status} content-type={content_type} preview={body_preview!r}"
+        )
+
+    choices = data.get("choices") if isinstance(data, dict) else None
+    first = choices[0] if isinstance(choices, list) and choices else {}
+    message_obj = (first or {}).get("message") or {}
+    content = message_obj.get("content", "")
+    if isinstance(content, list):
+        parts: List[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+        content = "".join(parts)
+
+    cleaned = str(content or "").strip()
+    if not cleaned:
+        raise EmptyResponseError("LM Studio returned empty content")
+
+    return cleaned, data, duration
+
+
 def extract_patch(raw_response: str, allow_incomplete_diffs: bool = False) -> str:
     fence = "```diff"
     if fence not in raw_response:
@@ -806,7 +953,7 @@ def extract_patch(raw_response: str, allow_incomplete_diffs: bool = False) -> st
         except ValueError:
             break
         # Check if this ``` is at the start of a line (preceded by newline or at start)
-        if candidate == 0 or raw_response[candidate - 1] == '\n':
+        if candidate == 0 or raw_response[candidate - 1] == "\n":
             end = candidate
             break
         search_pos = candidate + 3
@@ -815,21 +962,19 @@ def extract_patch(raw_response: str, allow_incomplete_diffs: bool = False) -> st
             raise HarnessError("Model response does not contain closing ``` fence.") from None
         fallback_patch = _extract_incomplete_patch(raw_response[start:])
         if not fallback_patch or not _is_probably_valid_patch(fallback_patch):
-            raise HarnessError(
-                "Model response diff block is incomplete or untrustworthy (missing closing ``` fence)."
-            )
+            raise HarnessError("Model response diff block is incomplete or untrustworthy (missing closing ``` fence).")
         return fallback_patch
     patch = raw_response[start:end]
     return patch.strip() + "\n"
 
 
 def clean_patch_text(patch_text: str) -> tuple[str, bool, bool]:
-    ansi_escape = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
-    cleaned = ansi_escape.sub('', patch_text)
-    if '\x1b' in cleaned:
-        raise HarnessError('Patch contains unsupported control characters.')
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+    cleaned = ansi_escape.sub("", patch_text)
+    if "\x1b" in cleaned:
+        raise HarnessError("Patch contains unsupported control characters.")
     cleaned, synthetic_headers = _normalize_patch_format(cleaned)
-    git_style = cleaned.startswith('--- a/') or cleaned.startswith('diff --git')
+    git_style = cleaned.startswith("--- a/") or cleaned.startswith("diff --git")
     return cleaned, git_style, synthetic_headers
 
 
@@ -900,7 +1045,7 @@ def _normalize_patch_path(path: str) -> Optional[str]:
         path = path[2:]
     path = path.lstrip("./")
     if path.startswith("workspace/"):
-        path = path[len("workspace/"):]
+        path = path[len("workspace/") :]
     return path.lstrip("./")
 
 
@@ -910,14 +1055,14 @@ def _extract_full_file_rewrites(cleaned_patch: str) -> Optional[Dict[str, str]]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        if line.startswith('diff --git'):
+        if line.startswith("diff --git"):
             i += 1
             continue
-        if not line.startswith('--- '):
+        if not line.startswith("--- "):
             i += 1
             continue
         i += 1
-        if i >= len(lines) or not lines[i].startswith('+++ '):
+        if i >= len(lines) or not lines[i].startswith("+++ "):
             return None
         new_path = lines[i][4:].strip()
         i += 1
@@ -925,24 +1070,24 @@ def _extract_full_file_rewrites(cleaned_patch: str) -> Optional[Dict[str, str]]:
         has_minus = False
         while i < len(lines):
             current = lines[i]
-            if current.startswith('diff --git') or current.startswith('--- '):
+            if current.startswith("diff --git") or current.startswith("--- "):
                 break
-            if current.startswith('@@'):
+            if current.startswith("@@"):
                 i += 1
                 continue
-            if current.startswith('-') and not current.startswith('---'):
+            if current.startswith("-") and not current.startswith("---"):
                 has_minus = True
                 i += 1
                 continue
-            if current.startswith('+') and not current.startswith('+++'):
+            if current.startswith("+") and not current.startswith("+++"):
                 content_lines.append(current[1:])
                 i += 1
                 continue
-            if current.startswith(' '):
+            if current.startswith(" "):
                 content_lines.append(current[1:])
                 i += 1
                 continue
-            if current.startswith('\\'):
+            if current.startswith("\\"):
                 i += 1
                 continue
             i += 1
@@ -951,14 +1096,16 @@ def _extract_full_file_rewrites(cleaned_patch: str) -> Optional[Dict[str, str]]:
         target_path = _normalize_patch_path(new_path)
         if target_path is None:
             return None
-        content = '\n'.join(content_lines)
+        content = "\n".join(content_lines)
         if content_lines:
-            content += '\n'
+            content += "\n"
         rewrites[target_path] = content
     return rewrites or None
 
 
-HUNK_HEADER_RE = re.compile(r'^@@ -(?P<old_start>\d+)(?:,(?P<old_len>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_len>\d+))? @@')
+HUNK_HEADER_RE = re.compile(
+    r"^@@ -(?P<old_start>\d+)(?:,(?P<old_len>\d+))? \+(?P<new_start>\d+)(?:,(?P<new_len>\d+))? @@"
+)
 
 
 def _parse_unified_diff(cleaned_patch: str):
@@ -967,36 +1114,36 @@ def _parse_unified_diff(cleaned_patch: str):
     i = 0
     while i < len(lines):
         line = lines[i]
-        if line.startswith('diff --git'):
+        if line.startswith("diff --git"):
             i += 1
             continue
-        if not line.startswith('--- '):
+        if not line.startswith("--- "):
             i += 1
             continue
         old_path = line[4:].strip()
         i += 1
-        if i >= len(lines) or not lines[i].startswith('+++ '):
+        if i >= len(lines) or not lines[i].startswith("+++ "):
             return None
         new_path = lines[i][4:].strip()
         i += 1
         hunks = []
         while i < len(lines):
             current = lines[i]
-            if current.startswith('diff --git') or current.startswith('--- '):
+            if current.startswith("diff --git") or current.startswith("--- "):
                 break
-            if current.startswith('@@'):
+            if current.startswith("@@"):
                 match = HUNK_HEADER_RE.match(current)
                 if not match:
                     return None
-                start_old = int(match.group('old_start'))
-                len_old = int(match.group('old_len') or '1')
-                start_new = int(match.group('new_start'))
-                len_new = int(match.group('new_len') or '1')
+                start_old = int(match.group("old_start"))
+                len_old = int(match.group("old_len") or "1")
+                start_new = int(match.group("new_start"))
+                len_new = int(match.group("new_len") or "1")
                 i += 1
                 hunk_lines: List[str] = []
                 while i < len(lines):
                     candidate = lines[i]
-                    if candidate.startswith('diff --git') or candidate.startswith('--- ') or candidate.startswith('@@'):
+                    if candidate.startswith("diff --git") or candidate.startswith("--- ") or candidate.startswith("@@"):
                         break
                     hunk_lines.append(candidate)
                     i += 1
@@ -1032,20 +1179,20 @@ def _apply_parsed_unified_diff(file_diffs, workspace_path: Path) -> Optional[Lis
                 orig_index = zero_based
             for line in hunk_lines:
                 if not line:
-                    result_lines.append('')
+                    result_lines.append("")
                     continue
                 tag = line[0]
-                text = line[1:] if len(line) > 1 else ''
-                if tag == ' ':
+                text = line[1:] if len(line) > 1 else ""
+                if tag == " ":
                     result_lines.append(text)
                     if orig_index < len(original_lines):
                         orig_index += 1
-                elif tag == '-':
+                elif tag == "-":
                     if orig_index < len(original_lines):
                         orig_index += 1
-                elif tag == '+':
+                elif tag == "+":
                     result_lines.append(text)
-                elif tag == '\\':
+                elif tag == "\\":
                     continue
                 else:
                     continue
@@ -1066,43 +1213,43 @@ def _parse_loose_unified_diff(cleaned_patch: str):
     i = 0
     while i < len(lines):
         line = lines[i]
-        if line.startswith('diff --git'):
+        if line.startswith("diff --git"):
             i += 1
             continue
-        if not line.startswith('--- '):
+        if not line.startswith("--- "):
             i += 1
             continue
         old_path = line[4:].strip()
         i += 1
-        if i >= len(lines) or not lines[i].startswith('+++ '):
+        if i >= len(lines) or not lines[i].startswith("+++ "):
             return None
         new_path = lines[i][4:].strip()
         i += 1
         hunks = []
         while i < len(lines):
             current = lines[i]
-            if current.startswith('diff --git') or current.startswith('--- '):
+            if current.startswith("diff --git") or current.startswith("--- "):
                 break
-            if current.startswith('@@'):
+            if current.startswith("@@"):
                 header = current
                 i += 1
                 hunk_ops: List[Tuple[str, str]] = []
                 while i < len(lines):
                     candidate = lines[i]
-                    if candidate.startswith('diff --git') or candidate.startswith('--- ') or candidate.startswith('@@'):
+                    if candidate.startswith("diff --git") or candidate.startswith("--- ") or candidate.startswith("@@"):
                         break
-                    if candidate.startswith('\\'):
+                    if candidate.startswith("\\"):
                         i += 1
                         continue
                     if not candidate:
-                        hunk_ops.append((' ', ''))
+                        hunk_ops.append((" ", ""))
                         i += 1
                         continue
                     prefix = candidate[0]
-                    if prefix in {'+', '-', ' '}:
+                    if prefix in {"+", "-", " "}:
                         hunk_ops.append((prefix, candidate[1:]))
                     else:
-                        hunk_ops.append((' ', candidate))
+                        hunk_ops.append((" ", candidate))
                     i += 1
                 if hunk_ops:
                     hunks.append((header, hunk_ops))
@@ -1120,7 +1267,7 @@ def _find_subsequence(haystack: List[str], needle: List[str], start: int) -> Opt
         return None
     start = max(start, 0)
     for idx in range(start, end_limit + 1):
-        if haystack[idx:idx + len(needle)] == needle:
+        if haystack[idx : idx + len(needle)] == needle:
             return idx
     return None
 
@@ -1128,7 +1275,7 @@ def _find_subsequence(haystack: List[str], needle: List[str], start: int) -> Opt
 _COMPARE_STRATEGIES: Tuple[Callable[[str], str], ...] = (
     lambda s: s,
     lambda s: s.expandtabs(4),
-    lambda s: re.sub(r'\s+', ' ', s.strip()),
+    lambda s: re.sub(r"\s+", " ", s.strip()),
 )
 
 
@@ -1162,7 +1309,7 @@ def _locate_hunk(updated_lines: List[str], pattern: List[str], search_start: int
         if upper_bound < 0:
             return None
         for idx in range(lower_bound, upper_bound):
-            segment = "\n".join(updated_lines[idx: idx + window])
+            segment = "\n".join(updated_lines[idx : idx + window])
             ratio = difflib.SequenceMatcher(None, pattern_text, segment).ratio()
             if ratio > best_ratio:
                 best_ratio = ratio
@@ -1196,21 +1343,21 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
         updated_lines = original_lines[:]
         search_start = 0
         for _header, hunk_ops in hunks:
-            if not any(tag in ('+', '-') for tag, _ in hunk_ops):
+            if not any(tag in ("+", "-") for tag, _ in hunk_ops):
                 continue
-            pattern = [text for tag, text in hunk_ops if tag in (' ', '-')]
+            pattern = [text for tag, text in hunk_ops if tag in (" ", "-")]
             start_index = _locate_hunk(updated_lines, pattern, search_start)
             if start_index is None:
-                if all(tag == '-' for tag, _ in hunk_ops if tag in (' ', '-')):
+                if all(tag == "-" for tag, _ in hunk_ops if tag in (" ", "-")):
                     start_index = search_start
                 else:
                     return None
             new_segment: List[str] = []
             cursor = start_index
             for tag, text in hunk_ops:
-                if tag == ' ':
-                    if text == '':
-                        while cursor < len(updated_lines) and updated_lines[cursor].strip() == '':
+                if tag == " ":
+                    if text == "":
+                        while cursor < len(updated_lines) and updated_lines[cursor].strip() == "":
                             new_segment.append(updated_lines[cursor])
                             cursor += 1
                         continue
@@ -1225,14 +1372,14 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
                             cursor = search_cursor + 1
                             found = True
                             break
-                        if existing_line.strip() == '':
+                        if existing_line.strip() == "":
                             temp_buffer.append(existing_line)
                             search_cursor += 1
                             continue
                         break
                     if not found:
                         return None
-                elif tag == '-':
+                elif tag == "-":
                     temp_segment: List[str] = []
                     temp_cursor = cursor
                     removed = False
@@ -1243,7 +1390,7 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
                             new_segment.extend(temp_segment)
                             removed = True
                             break
-                        if existing_line.strip() == '':
+                        if existing_line.strip() == "":
                             temp_segment.append(existing_line)
                             temp_cursor += 1
                             continue
@@ -1251,7 +1398,7 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
                     if not removed:
                         # minus line not present; leave original text untouched
                         continue
-                elif tag == '+':
+                elif tag == "+":
                     new_segment.append(text)
                     if cursor < len(updated_lines) and _lines_equivalent(text, updated_lines[cursor]):
                         cursor += 1
@@ -1354,18 +1501,14 @@ def apply_patch(
                 allow_strict_parse=not synthetic_headers,
             )
             if rewritten_files:
-                attempt_summary['diff_rewrite_fallback_used'] = True
-                attempt_summary['diff_rewrite_files'] = sorted(rewritten_files)
+                attempt_summary["diff_rewrite_fallback_used"] = True
+                attempt_summary["diff_rewrite_files"] = sorted(rewritten_files)
                 store_text(
                     attempt_dir / "diff_rewrite_fallback.log",
                     "Applied diff rewrite fallback to:\n" + "\n".join(sorted(rewritten_files)),
                 )
                 return
-        raise HarnessError(
-            "Patch failed dry-run validation:\n"
-            f"STDOUT:\n{stdout_text}\n"
-            f"STDERR:\n{stderr_text}"
-        )
+        raise HarnessError("Patch failed dry-run validation:\n" f"STDOUT:\n{stdout_text}\n" f"STDERR:\n{stderr_text}")
 
     apply_process = _run_patch_command(patch_args, patch_bytes, workspace_path)
     if apply_process.returncode != 0:
@@ -1441,6 +1584,7 @@ def evaluate_attempt(
     run_dir: Path,
 ) -> Dict:
     prompt = build_prompt(task_id, metadata, include_tests=include_tests)
+
     # Use the requested thinking level for artifact directory suffix so that
     # base/low/medium/high attempts never collide, even when reasoning is unsupported.
     def _sanitize_level_for_dir(level: Optional[str]) -> str:
@@ -1471,11 +1615,7 @@ def evaluate_attempt(
     }
 
     model_info = model_metadata.get(model) or {}
-    supported_params = {
-        param.lower()
-        for param in model_info.get("supported_parameters", [])
-        if isinstance(param, str)
-    }
+    supported_params = {param.lower() for param in model_info.get("supported_parameters", []) if isinstance(param, str)}
     if thinking_level:
         attempt_summary["thinking_level_requested"] = thinking_level
         attempt_summary["thinking_level_supported"] = "reasoning" in supported_params
@@ -1488,25 +1628,35 @@ def evaluate_attempt(
             response_meta = None
             api_latency = None
         else:
-            raw_response, response_meta, api_latency = call_openrouter(
-                prompt,
-                model,
-                temperature,
-                max_tokens,
-                preferred_provider,
-                thinking_level=thinking_level if "reasoning" in supported_params else None,
-                model_info=model_info,
-            )
+            if _is_lmstudio_model(model):
+                raw_response, response_meta, api_latency = call_lmstudio(
+                    prompt,
+                    _normalize_lmstudio_model_id(model),
+                    temperature,
+                    max_tokens,
+                )
+            else:
+                raw_response, response_meta, api_latency = call_openrouter(
+                    prompt,
+                    model,
+                    temperature,
+                    max_tokens,
+                    preferred_provider,
+                    thinking_level=thinking_level if "reasoning" in supported_params else None,
+                    model_info=model_info,
+                )
     except APIError as exc:
         # API errors (rate limits, empty responses, provider failures) are transient
         # and should not count against LLM evaluation
         error_type = type(exc).__name__
-        attempt_summary.update({
-            "status": "api_error",
-            "error": str(exc),
-            "error_type": error_type,
-            "is_transient": True,
-        })
+        attempt_summary.update(
+            {
+                "status": "api_error",
+                "error": str(exc),
+                "error_type": error_type,
+                "is_transient": True,
+            }
+        )
         store_text(attempt_dir / "error.log", f"[{error_type}] {exc}")
         return attempt_summary
     except HarnessError as exc:
@@ -1517,7 +1667,7 @@ def evaluate_attempt(
     store_text(attempt_dir / "response.txt", raw_response)
     if response_meta is not None:
         store_text(attempt_dir / "response.json", json.dumps(response_meta, indent=2))
-        usage = response_meta.get('usage')
+        usage = response_meta.get("usage")
 
     workspace_path: Optional[Path] = None
     try:
@@ -1553,7 +1703,9 @@ def evaluate_attempt(
                 "return_code": process.returncode,
                 "eval_command": command,
                 "eval_timeout_seconds": timeout,
-                "eval_working_dir": str((workspace_path / working_dir).resolve()) if working_dir else str(workspace_path),
+                "eval_working_dir": str((workspace_path / working_dir).resolve())
+                if working_dir
+                else str(workspace_path),
                 "eval_env_overrides": env_updates or {},
                 "stdout_excerpt": stdout_text[:2000],
                 "stderr_excerpt": stderr_text[:2000],
@@ -1567,10 +1719,11 @@ def evaluate_attempt(
         if workspace_path is not None:
             shutil.rmtree(workspace_path.parent, ignore_errors=True)
 
-    attempt_summary['usage'] = usage
-    attempt_summary['api_latency_seconds'] = api_latency
-    attempt_summary['duration_seconds'] = time.perf_counter() - attempt_timer
+    attempt_summary["usage"] = usage
+    attempt_summary["api_latency_seconds"] = api_latency
+    attempt_summary["duration_seconds"] = time.perf_counter() - attempt_timer
     return attempt_summary
+
 
 def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str], samples: int) -> Dict:
     def _estimate_pass_at_k(total: int, correct: int, k: int) -> Optional[float]:
@@ -1627,9 +1780,7 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
             task_pass_at_1.append(_estimate_pass_at_k(total, correct, 1) or 0.0)
             task_pass_at_k.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
 
-        metrics["model_accuracy"][model] = (
-            sum(task_pass_at_k) / len(task_pass_at_k) if task_pass_at_k else None
-        )
+        metrics["model_accuracy"][model] = sum(task_pass_at_k) / len(task_pass_at_k) if task_pass_at_k else None
         pass_at_1[model] = sum(task_pass_at_1) / len(task_pass_at_1) if task_pass_at_1 else None
         pass_at_k[model] = sum(task_pass_at_k) / len(task_pass_at_k) if task_pass_at_k else None
 
@@ -1813,7 +1964,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--response-file", type=Path, help="Replay a stored model response (single-task runs only)")
     parser.add_argument("--dry-run", action="store_true", help="Print prompts only, skip model calls and evaluation")
     parser.add_argument("--include-tests", action="store_true", help="Include test files in the model prompt context")
-    parser.add_argument("--install-deps", action="store_true", help="Install requirements.txt inside each attempt workspace")
+    parser.add_argument(
+        "--install-deps", action="store_true", help="Install requirements.txt inside each attempt workspace"
+    )
     parser.add_argument("--output-dir", type=Path, default=RUN_ARTIFACTS, help="Directory to write run artifacts")
     parser.add_argument(
         "--allow-incomplete-diffs",
@@ -1844,7 +1997,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         dest="resume_from",
         type=Path,
         help="Resume from a previous run by re-running only api_error attempts. "
-             "Provide run directory path (e.g., runs/run_20251222T193052Z_a2ca88)",
+        "Provide run directory path (e.g., runs/run_20251222T193052Z_a2ca88)",
     )
     parser.add_argument(
         "--retry-api-errors",
@@ -1948,15 +2101,17 @@ def load_api_error_attempts(run_dir: Path) -> List[Dict]:
             if thinking_level == "base":
                 thinking_level = None
 
-            api_error_attempts.append({
-                "task_id": task_id,
-                "model": model,
-                "sample_index": sample_index,
-                "thinking_level_requested": thinking_level,
-                "status": "api_error",
-                "error": error_content.strip(),
-                "attempt_dir": str(attempt_dir.relative_to(run_dir)),
-            })
+            api_error_attempts.append(
+                {
+                    "task_id": task_id,
+                    "model": model,
+                    "sample_index": sample_index,
+                    "thinking_level_requested": thinking_level,
+                    "status": "api_error",
+                    "error": error_content.strip(),
+                    "attempt_dir": str(attempt_dir.relative_to(run_dir)),
+                }
+            )
 
     if not api_error_attempts and not any(run_dir.iterdir()):
         raise HarnessError(
@@ -1987,7 +2142,7 @@ def retry_api_error_attempts(
     """
     Retry only the api_error attempts from a previous run.
     Creates a new run directory with retried attempts merged with successful ones.
-    
+
     Optional filters:
       filter_task_id: Only retry attempts for this specific task
       filter_model: Only retry attempts for this specific model
@@ -1995,7 +2150,7 @@ def retry_api_error_attempts(
     """
     api_error_attempts = load_api_error_attempts(original_run_dir)
     if not api_error_attempts:
-        print(f"No api_error attempts found in {original_run_dir}. Nothing to retry.")
+        logger.info("No api_error attempts found in %s. Nothing to retry.", original_run_dir)
         return {"retried": 0, "message": "No api_error attempts to retry"}
 
     # Apply filters if specified
@@ -2007,10 +2162,10 @@ def retry_api_error_attempts(
         api_error_attempts = [a for a in api_error_attempts if a.get("sample_index") == filter_sample_index]
 
     if not api_error_attempts:
-        print(f"No api_error attempts match the filter criteria. Nothing to retry.")
+        logger.info("No api_error attempts match the filter criteria. Nothing to retry.")
         return {"retried": 0, "message": "No matching api_error attempts to retry"}
 
-    print(f"Found {len(api_error_attempts)} api_error attempts to retry")
+    logger.info("Found %d api_error attempts to retry", len(api_error_attempts))
 
     # Create new run directory (use provided run_id if given)
     output_dir = Path(output_dir)
@@ -2037,14 +2192,23 @@ def retry_api_error_attempts(
         task_id = original_attempt["task_id"]
         model = original_attempt["model"]
         sample_index = original_attempt.get("sample_index", 0)
-        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get("thinking_level_requested")
+        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get(
+            "thinking_level_requested"
+        )
 
-        print(f"[{i}/{len(api_error_attempts)}] Retrying {task_id} with {model} (sample {sample_index})")
+        logger.info(
+            "[%d/%d] Retrying %s with %s (sample %s)",
+            i,
+            len(api_error_attempts),
+            task_id,
+            model,
+            sample_index,
+        )
 
         try:
             metadata = load_metadata(task_id)
         except HarnessError as e:
-            print(f"  Skipping: {e}")
+            logger.warning("Skipping %s: %s", task_id, e)
             continue
 
         attempt_summary = evaluate_attempt(
@@ -2071,7 +2235,7 @@ def retry_api_error_attempts(
             progress_callback(model=model, task_id=task_id, sample_index=sample_index, summary=attempt_summary)
 
         status = attempt_summary.get("status", "unknown")
-        print(f"  Result: {status}")
+        logger.info("Result: %s", status)
 
     # Compute metrics for retried attempts
     tasks = list({a["task_id"] for a in retried_attempts})
@@ -2096,10 +2260,9 @@ def retry_api_error_attempts(
     store_text(run_dir / "summary.json", json.dumps(summary, indent=2))
     store_text(run_dir / "attempts.json", json.dumps(retried_attempts, indent=2))
 
-    # Print summary
-    print(f"\nRetry complete. Results saved to {run_dir}")
-    print(f"  Retried: {len(retried_attempts)} attempts")
-    print(f"  Status breakdown: {dict(status_counts)}")
+    logger.info("Retry complete. Results saved to %s", run_dir)
+    logger.info("Retried: %d attempts", len(retried_attempts))
+    logger.info("Status breakdown: %s", dict(status_counts))
 
     return summary
 
@@ -2127,7 +2290,7 @@ def retry_failed_attempts(
     """
     failed_attempts = load_failed_attempts(original_run_dir)
     if not failed_attempts:
-        print(f"No failed attempts found in {original_run_dir}. Nothing to retry.")
+        logger.info("No failed attempts found in %s. Nothing to retry.", original_run_dir)
         return {"retried": 0, "message": "No failed attempts to retry"}
 
     # Apply filters if specified
@@ -2139,10 +2302,10 @@ def retry_failed_attempts(
         failed_attempts = [a for a in failed_attempts if a.get("sample_index") == filter_sample_index]
 
     if not failed_attempts:
-        print(f"No failed attempts match the filter criteria. Nothing to retry.")
+        logger.info("No failed attempts match the filter criteria. Nothing to retry.")
         return {"retried": 0, "message": "No matching failed attempts to retry"}
 
-    print(f"Found {len(failed_attempts)} failed attempts to retry")
+    logger.info("Found %d failed attempts to retry", len(failed_attempts))
 
     # Create new run directory (use provided run_id if given)
     output_dir = Path(output_dir)
@@ -2169,14 +2332,23 @@ def retry_failed_attempts(
         task_id = original_attempt["task_id"]
         model = original_attempt["model"]
         sample_index = original_attempt.get("sample_index", 0)
-        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get("thinking_level_requested")
+        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get(
+            "thinking_level_requested"
+        )
 
-        print(f"[{i}/{len(failed_attempts)}] Retrying {task_id} with {model} (sample {sample_index})")
+        logger.info(
+            "[%d/%d] Retrying %s with %s (sample %s)",
+            i,
+            len(failed_attempts),
+            task_id,
+            model,
+            sample_index,
+        )
 
         try:
             metadata = load_metadata(task_id)
         except HarnessError as e:
-            print(f"  Skipping: {e}")
+            logger.warning("Skipping %s: %s", task_id, e)
             continue
 
         attempt_summary = evaluate_attempt(
@@ -2203,7 +2375,7 @@ def retry_failed_attempts(
             progress_callback(model=model, task_id=task_id, sample_index=sample_index, summary=attempt_summary)
 
         status = attempt_summary.get("status", "unknown")
-        print(f"  Result: {status}")
+        logger.info("Result: %s", status)
 
     # Compute metrics for retried attempts
     tasks = list({a["task_id"] for a in retried_attempts})
@@ -2228,30 +2400,29 @@ def retry_failed_attempts(
     store_text(run_dir / "summary.json", json.dumps(summary, indent=2))
     store_text(run_dir / "attempts.json", json.dumps(retried_attempts, indent=2))
 
-    # Print summary
-    print(f"\nRetry complete. Results saved to {run_dir}")
-    print(f"  Retried: {len(retried_attempts)} attempts")
-    print(f"  Status breakdown: {dict(status_counts)}")
+    logger.info("Retry complete. Results saved to %s", run_dir)
+    logger.info("Retried: %d attempts", len(retried_attempts))
+    logger.info("Status breakdown: %s", dict(status_counts))
 
     return summary
 
 
 def load_incomplete_attempts(run_dir: Path) -> List[Dict]:
     """Load attempts from a run that were started but didn't complete.
-    
+
     An incomplete attempt has:
     - prompt.txt exists (attempt started)
     - No response.txt/response.json (API call didn't finish)
     - No status in summary.json for this attempt
-    
+
     Returns list of dicts with task_id, model, sample_index, thinking_level info.
     """
     incomplete: List[Dict] = []
-    
+
     # Get completed attempts from summary if it exists
     summary_file = run_dir / "summary.json"
     completed_keys: set = set()
-    
+
     if summary_file.exists():
         with summary_file.open("r", encoding="utf-8") as f:
             summary = json.load(f)
@@ -2260,42 +2431,42 @@ def load_incomplete_attempts(run_dir: Path) -> List[Dict]:
                 a.get("task_id"),
                 a.get("model"),
                 a.get("sample_index", 0),
-                a.get("thinking_level_applied") or a.get("thinking_level_requested") or "base"
+                a.get("thinking_level_applied") or a.get("thinking_level_requested") or "base",
             )
             completed_keys.add(key)
-    
+
     # Scan attempt directories
     for attempt_dir in run_dir.iterdir():
         if not attempt_dir.is_dir():
             continue
-        
+
         # Parse directory name: task_id__model__sampleNN__lvl_level
         dir_name = attempt_dir.name
-        
+
         # Check if this is an attempt directory (has prompt.txt)
         prompt_file = attempt_dir / "prompt.txt"
         if not prompt_file.exists():
             continue
-            
+
         # Check if incomplete (no response.txt or response.json)
         response_txt = attempt_dir / "response.txt"
         response_json = attempt_dir / "response.json"
-        
+
         if response_txt.exists() or response_json.exists():
             continue  # This attempt completed
-        
+
         # Parse attempt info from directory name
         # Format: task_id__model__sampleNN__lvl_level
         parts = dir_name.split("__")
         if len(parts) < 3:
             continue
-            
+
         task_id = parts[0]
         model_part = parts[1].replace("_", "/")  # Restore / from _
-        
+
         sample_index = 0
         thinking_level = "base"
-        
+
         for part in parts[2:]:
             if part.startswith("sample"):
                 try:
@@ -2304,20 +2475,22 @@ def load_incomplete_attempts(run_dir: Path) -> List[Dict]:
                     pass
             elif part.startswith("lvl_"):
                 thinking_level = part.replace("lvl_", "").replace("_", "/")
-        
+
         # Check if already completed
         key = (task_id, model_part, sample_index, thinking_level)
         if key in completed_keys:
             continue
-        
-        incomplete.append({
-            "task_id": task_id,
-            "model": model_part,
-            "sample_index": sample_index,
-            "thinking_level": thinking_level if thinking_level != "base" else None,
-            "attempt_dir": str(attempt_dir),
-        })
-    
+
+        incomplete.append(
+            {
+                "task_id": task_id,
+                "model": model_part,
+                "sample_index": sample_index,
+                "thinking_level": thinking_level if thinking_level != "base" else None,
+                "attempt_dir": str(attempt_dir),
+            }
+        )
+
     return incomplete
 
 
@@ -2338,56 +2511,63 @@ def resume_incomplete_run(
     Updates the original run directory with completed attempts.
     """
     incomplete_attempts = load_incomplete_attempts(run_dir)
-    
+
     if not incomplete_attempts:
-        print(f"No incomplete attempts found in {run_dir}.")
-        
+        logger.info("No incomplete attempts found in %s.", run_dir)
+
         # Check if there's a summary.json
         summary_file = run_dir / "summary.json"
         if summary_file.exists():
             with summary_file.open("r", encoding="utf-8") as f:
                 return json.load(f)
-        
+
         return {"resumed": 0, "message": "No incomplete attempts to resume"}
-    
-    print(f"Found {len(incomplete_attempts)} incomplete attempts to resume")
-    
+
+    logger.info("Found %d incomplete attempts to resume", len(incomplete_attempts))
+
     # Load existing summary or create new one
     summary_file = run_dir / "summary.json"
     existing_attempts: List[Dict] = []
     existing_summary: Dict = {}
-    
+
     if summary_file.exists():
         with summary_file.open("r", encoding="utf-8") as f:
             existing_summary = json.load(f)
             existing_attempts = existing_summary.get("attempts", [])
-    
+
     # Collect unique models and tasks
     models = list({a["model"] for a in incomplete_attempts})
     tasks = list({a["task_id"] for a in incomplete_attempts})
     model_metadata = fetch_model_metadata(models)
-    
+
     if allow_incomplete_diffs is None:
         allow_incomplete_diffs = DEFAULT_ALLOW_INCOMPLETE_DIFFS
     if allow_diff_rewrite_fallback is None:
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
-    
+
     new_attempts: List[Dict] = []
-    
+
     for i, incomplete in enumerate(incomplete_attempts, 1):
         task_id = incomplete["task_id"]
         model = incomplete["model"]
         sample_index = incomplete["sample_index"]
         thinking_level = incomplete.get("thinking_level")
-        
-        print(f"[{i}/{len(incomplete_attempts)}] Resuming {task_id} with {model} (sample {sample_index})")
-        
+
+        logger.info(
+            "[%d/%d] Resuming %s with %s (sample %s)",
+            i,
+            len(incomplete_attempts),
+            task_id,
+            model,
+            sample_index,
+        )
+
         try:
             metadata = load_metadata(task_id)
         except HarnessError as e:
-            print(f"  Skipping: {e}")
+            logger.warning("Skipping %s: %s", task_id, e)
             continue
-        
+
         attempt_summary = evaluate_attempt(
             task_id=task_id,
             metadata=metadata,
@@ -2407,21 +2587,21 @@ def resume_incomplete_run(
         )
         new_attempts.append(attempt_summary)
         update_task_latest(task_id, attempt_summary)
-        
+
         if progress_callback:
             progress_callback(model=model, task_id=task_id, sample_index=sample_index, summary=attempt_summary)
-        
+
         status = attempt_summary.get("status", "unknown")
-        print(f"  Result: {status}")
-    
+        logger.info("Result: %s", status)
+
     # Merge with existing attempts
     all_attempts = existing_attempts + new_attempts
     all_tasks = list({a["task_id"] for a in all_attempts})
     all_models = list({a["model"] for a in all_attempts})
-    
+
     # Compute metrics
     status_counts = Counter(a.get("status") for a in all_attempts)
-    
+
     # Update or create summary
     run_id = run_dir.name
     summary = {
@@ -2439,23 +2619,31 @@ def resume_incomplete_run(
         "resumed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
         "resumed_count": len(new_attempts),
     }
-    
+
     # Preserve other fields from existing summary
-    for key in ["provider", "include_tests", "install_deps", "allow_incomplete_diffs", 
-                "allow_diff_rewrite_fallback", "thinking_level", "sweep_thinking_levels",
-                "include_thinking_variants", "requested_models"]:
+    for key in [
+        "provider",
+        "include_tests",
+        "install_deps",
+        "allow_incomplete_diffs",
+        "allow_diff_rewrite_fallback",
+        "thinking_level",
+        "sweep_thinking_levels",
+        "include_thinking_variants",
+        "requested_models",
+    ]:
         if key in existing_summary:
             summary[key] = existing_summary[key]
-    
+
     # Save updated summary
     store_text(summary_file, json.dumps(summary, indent=2))
     store_text(run_dir / "attempts.json", json.dumps(all_attempts, indent=2))
-    
-    print(f"\nResume complete. Results saved to {run_dir}")
-    print(f"  Resumed: {len(new_attempts)} attempts")
-    print(f"  Total: {len(all_attempts)} attempts")
-    print(f"  Status breakdown: {dict(status_counts)}")
-    
+
+    logger.info("Resume complete. Results saved to %s", run_dir)
+    logger.info("Resumed: %d attempts", len(new_attempts))
+    logger.info("Total: %d attempts", len(all_attempts))
+    logger.info("Status breakdown: %s", dict(status_counts))
+
     return summary
 
 
@@ -2472,7 +2660,6 @@ def resolve_task_list(args: argparse.Namespace) -> List[str]:
             return tasks
         return args.tasks
     raise HarnessError("No tasks specified. Use --task <id> or --tasks all/ID ...")
-
 
 
 def run_tasks(
@@ -2571,7 +2758,9 @@ def run_tasks(
                     attempts.append(attempt_summary)
                     update_task_latest(task_id, attempt_summary)
                     if progress_callback:
-                        progress_callback(model=model, task_id=task_id, sample_index=sample_idx, summary=attempt_summary)
+                        progress_callback(
+                            model=model, task_id=task_id, sample_index=sample_idx, summary=attempt_summary
+                        )
                     if attempt_summary.get("diff_rewrite_fallback_used"):
                         patch_fallbacks_used.append(attempt_summary["attempt_dir"])
 
@@ -2587,19 +2776,19 @@ def run_tasks(
     total_cost = 0.0
 
     for attempt in attempts:
-        duration = attempt.get('duration_seconds')
+        duration = attempt.get("duration_seconds")
         if duration is not None:
             total_duration += duration
-        api_latency = attempt.get('api_latency_seconds')
+        api_latency = attempt.get("api_latency_seconds")
         if api_latency is not None:
             total_api_latency += api_latency
-        usage = attempt.get('usage') or {}
-        prompt_tokens = usage.get('prompt_tokens')
+        usage = attempt.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens")
         if prompt_tokens is None:
-            prompt_tokens = usage.get('input_tokens')
-        completion_tokens = usage.get('completion_tokens')
+            prompt_tokens = usage.get("input_tokens")
+        completion_tokens = usage.get("completion_tokens")
         if completion_tokens is None:
-            completion_tokens = usage.get('output_tokens')
+            completion_tokens = usage.get("output_tokens")
 
         if prompt_tokens is not None:
             prompt_tokens = int(prompt_tokens)
@@ -2608,14 +2797,14 @@ def run_tasks(
             completion_tokens = int(completion_tokens)
             total_completion_tokens += completion_tokens
 
-        pricing = model_metadata.get(attempt['model'])
+        pricing = model_metadata.get(attempt["model"])
         if pricing and (prompt_tokens is not None or completion_tokens is not None):
             attempt_cost = 0.0
             if prompt_tokens is not None:
-                attempt_cost += prompt_tokens * pricing['prompt']
+                attempt_cost += prompt_tokens * pricing["prompt"]
             if completion_tokens is not None:
-                attempt_cost += completion_tokens * pricing['completion']
-            attempt['cost_usd'] = attempt_cost
+                attempt_cost += completion_tokens * pricing["completion"]
+            attempt["cost_usd"] = attempt_cost
             total_cost += attempt_cost
 
     status_counts = Counter(attempt.get("status") for attempt in attempts)
@@ -2692,14 +2881,11 @@ def run_tasks(
     return summary
 
 
-
 def main(argv: Optional[List[str]] = None) -> int:
     args = parse_args(argv)
 
     allow_incomplete_diffs = (
-        DEFAULT_ALLOW_INCOMPLETE_DIFFS
-        if args.allow_incomplete_diffs is None
-        else args.allow_incomplete_diffs
+        DEFAULT_ALLOW_INCOMPLETE_DIFFS if args.allow_incomplete_diffs is None else args.allow_incomplete_diffs
     )
     allow_diff_rewrite_fallback = (
         DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
@@ -2714,7 +2900,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise HarnessError(f"Run directory not found: {run_dir}")
 
         def progress_callback(model: str, task_id: str, sample_index: int, summary: Dict) -> None:
-            print(f"[{model}] {task_id} sample {sample_index}: {summary['status']}")
+            _cli_echo(f"[{model}] {task_id} sample {sample_index}: {summary['status']}")
 
         if args.resume_incomplete:
             # Resume incomplete attempts (started but didn't finish)
@@ -2757,12 +2943,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         for task_id in tasks:
             metadata = load_metadata(task_id)
             prompt = build_prompt(task_id, metadata, include_tests=args.include_tests)
-            print(f"===== Prompt for {task_id} =====")
-            print(prompt)
+            _cli_echo(f"===== Prompt for {task_id} =====")
+            _cli_echo(prompt)
         return 0
 
     def progress_callback(model: str, task_id: str, sample_index: int, summary: Dict) -> None:
-        print(f"[{model}] {task_id} sample {sample_index}: {summary['status']}")
+        _cli_echo(f"[{model}] {task_id} sample {sample_index}: {summary['status']}")
 
     summary = run_tasks(
         tasks=tasks,
@@ -2782,7 +2968,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         allow_diff_rewrite_fallback=allow_diff_rewrite_fallback,
         progress_callback=progress_callback,
     )
-    print(f"Run artifacts stored in {summary['run_dir']}")
+    _cli_echo(f"Run artifacts stored in {summary['run_dir']}")
     return 0
 
 
@@ -2790,5 +2976,5 @@ if __name__ == "__main__":  # pragma: no cover - CLI entrypoint
     try:
         raise SystemExit(main())
     except HarnessError as exc:
-        print(f"Harness error: {exc}", file=sys.stderr)
+        _cli_echo(f"Harness error: {exc}", error=True)
         raise SystemExit(1)

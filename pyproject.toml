@@ -11,6 +11,12 @@ extend-exclude = [
 # Start with a minimal, high-signal ruleset for brownfield
 line-length = 120
 
+[tool.ruff.format]
+# Use ruff's formatter with the same line-length and exclusions
+line-ending = "auto"
+quote-style = "double"
+indent-style = "space"
+
 [tool.ruff.lint]
 # Start with a focused ruleset to avoid massive refactoring
 select = [

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import structlog
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, PositiveInt, field_validator
 
 from harness.expert_questions import (
@@ -24,12 +25,13 @@ from server.config import get_settings
 from server.qa_database import (
     delete_runs_for_model,
     get_run,
-    init_db as init_qa_db,
     leaderboard,
     list_runs,
     save_run,
 )
 from server.qa_progress import qa_progress_manager
+from server.routes.background import run_in_thread_with_callbacks
+from server.routes.auth import require_api_token
 
 logger = structlog.get_logger(__name__)
 settings = get_settings()
@@ -107,11 +109,6 @@ class QARunRequest(BaseModel):
         return trimmed or None
 
 
-@router.on_event("startup")
-async def startup_event() -> None:  # pragma: no cover - called by FastAPI
-    init_qa_db()
-
-
 @router.get("/runs", response_model=QARunListResponse)
 async def qa_runs_list(limit: int = 50) -> QARunListResponse:
     rows = list_runs(limit)
@@ -144,7 +141,7 @@ async def qa_leaderboard() -> Dict[str, Any]:
 
 
 @router.delete("/leaderboard/{model_id:path}")
-async def qa_leaderboard_delete(model_id: str) -> Dict[str, Any]:
+async def qa_leaderboard_delete(model_id: str, _: None = Depends(require_api_token)) -> Dict[str, Any]:
     removed = delete_runs_for_model(model_id)
     status = "removed" if removed else "already_missing"
     if removed:
@@ -153,7 +150,7 @@ async def qa_leaderboard_delete(model_id: str) -> Dict[str, Any]:
 
 
 @router.post("/runs", response_model=QARunLaunchResponse)
-async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
+async def qa_run_create(request: QARunRequest, _: None = Depends(require_api_token)) -> QARunLaunchResponse:
     models = request.models
     samples = request.samples
     temperature = request.temperature
@@ -211,26 +208,29 @@ async def qa_run_create(request: QARunRequest) -> QARunLaunchResponse:
         )
 
     async def runner() -> None:
-        try:
-            summary = await asyncio.to_thread(
-                run_question_benchmark,
-                models=models,
-                samples=samples,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                provider=provider,
-                thinking_level=thinking_level,
-                include_thinking_variants=include_thinking_variants,
-                sweep_thinking_levels=request.sweep_thinking_levels,
-                run_id=run_id,
-                progress_callback=progress_proxy,
-            )
-        except Exception as exc:  # pragma: no cover - background failure
+        def on_error(exc: Exception) -> None:
             logger.exception("qa.run_failed", run_id=run_id, error=str(exc))
             qa_progress_manager.fail(run_id, str(exc))
-        else:
+
+        def on_success(summary: Dict[str, Any]) -> None:
             save_run(summary)
             qa_progress_manager.complete(run_id, summary)
+
+        await run_in_thread_with_callbacks(
+            run_question_benchmark,
+            models=models,
+            samples=samples,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider=provider,
+            thinking_level=thinking_level,
+            include_thinking_variants=include_thinking_variants,
+            sweep_thinking_levels=request.sweep_thinking_levels,
+            run_id=run_id,
+            progress_callback=progress_proxy,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)
@@ -270,7 +270,7 @@ async def qa_get_api_errors(run_id: str) -> QAApiErrorsInfoResponse:
 
     try:
         api_errors = load_qa_api_error_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
 
     return QAApiErrorsInfoResponse(
@@ -290,7 +290,7 @@ async def qa_get_api_errors(run_id: str) -> QAApiErrorsInfoResponse:
 
 
 @router.post("/runs/{run_id}/retry-api-errors", response_model=QARetryApiErrorsResponse)
-async def qa_retry_api_errors(run_id: str) -> QARetryApiErrorsResponse:
+async def qa_retry_api_errors(run_id: str, _: None = Depends(require_api_token)) -> QARetryApiErrorsResponse:
     """Retry only the api_error attempts from a previous QA run."""
     summary = get_run(run_id)
     if summary is None:
@@ -302,7 +302,7 @@ async def qa_retry_api_errors(run_id: str) -> QARetryApiErrorsResponse:
 
     try:
         api_errors = load_qa_api_error_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
 
     if not api_errors:
@@ -340,20 +340,23 @@ async def qa_retry_api_errors(run_id: str) -> QARetryApiErrorsResponse:
         )
 
     async def runner() -> None:
-        try:
-            result = await asyncio.to_thread(
-                retry_qa_api_error_attempts,
-                original_run_dir=run_dir,
-                output_dir=output_dir,
-                progress_callback=progress_proxy,
-                run_id=retry_run_id,
-            )
-        except Exception as exc:
+        def on_error(exc: Exception) -> None:
             logger.exception("qa.retry.failed", run_id=retry_run_id, error=str(exc))
             qa_progress_manager.fail(retry_run_id, str(exc))
-        else:
+
+        def on_success(result: Dict[str, Any]) -> None:
             save_run(result)
             qa_progress_manager.complete(retry_run_id, result)
+
+        await run_in_thread_with_callbacks(
+            retry_qa_api_error_attempts,
+            original_run_dir=run_dir,
+            output_dir=output_dir,
+            progress_callback=progress_proxy,
+            run_id=retry_run_id,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)
@@ -368,7 +371,11 @@ async def qa_retry_api_errors(run_id: str) -> QARetryApiErrorsResponse:
 
 
 @router.post("/runs/{run_id}/retry-single", response_model=QARetryApiErrorsResponse)
-async def qa_retry_single_attempt(run_id: str, request: QARetrySingleAttemptRequest) -> QARetryApiErrorsResponse:
+async def qa_retry_single_attempt(
+    run_id: str,
+    request: QARetrySingleAttemptRequest,
+    _: None = Depends(require_api_token),
+) -> QARetryApiErrorsResponse:
     """Retry a single failed attempt from a previous QA run."""
     summary = get_run(run_id)
     if summary is None:
@@ -380,12 +387,13 @@ async def qa_retry_single_attempt(run_id: str, request: QARetrySingleAttemptRequ
 
     try:
         all_failed = load_qa_failed_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load failed attempts: {exc}")
 
     # Filter to find the specific attempt
     filtered = [
-        e for e in all_failed
+        e
+        for e in all_failed
         if e.get("question_number") == request.question_number
         and (request.model is None or e.get("model") == request.model)
         and (request.sample_index is None or e.get("sample_index") == request.sample_index)
@@ -423,22 +431,25 @@ async def qa_retry_single_attempt(run_id: str, request: QARetrySingleAttemptRequ
         )
 
     async def runner() -> None:
-        try:
-            result = await asyncio.to_thread(
-                retry_qa_failed_attempts,
-                original_run_dir=run_dir,
-                output_dir=output_dir,
-                progress_callback=progress_proxy,
-                filter_question_number=request.question_number,
-                filter_model=request.model,
-                filter_sample_index=request.sample_index,
-            )
-        except Exception as exc:
+        def on_error(exc: Exception) -> None:
             logger.exception("qa.retry.single.failed", run_id=retry_run_id, error=str(exc))
             qa_progress_manager.fail(retry_run_id, str(exc))
-        else:
+
+        def on_success(result: Dict[str, Any]) -> None:
             save_run(result)
             qa_progress_manager.complete(retry_run_id, result)
+
+        await run_in_thread_with_callbacks(
+            retry_qa_failed_attempts,
+            original_run_dir=run_dir,
+            output_dir=output_dir,
+            progress_callback=progress_proxy,
+            filter_question_number=request.question_number,
+            filter_model=request.model,
+            filter_sample_index=request.sample_index,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)

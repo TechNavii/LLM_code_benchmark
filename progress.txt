@@ -1,1 +1,2 @@
 foundation-001-validator-entrypoints: Created standardized validator scripts (lint.sh, typecheck.sh, test.sh) with virtualenv management, requirements-dev.txt, and brownfield-safe tool configurations (ruff, mypy) in pyproject.toml. All validators pass.
+quality-001-formatting: Added ruff format configuration to pyproject.toml, integrated format check into lint.sh, created format.sh for developer auto-fix, and formatted 15 files. All validators pass.

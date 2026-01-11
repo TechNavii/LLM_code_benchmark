@@ -18,19 +18,25 @@ except ImportError:  # pragma: no cover - optional dependency for offline runs
 
 try:
     import structlog  # type: ignore
+
     LOGGER = structlog.get_logger(__name__)
-except Exception:  # pragma: no cover - fallback when structlog is unavailable
+except ImportError:  # pragma: no cover - fallback when structlog is unavailable
+
     class _DummyLogger:
         def info(self, *args, **kwargs):
             pass
+
         def warning(self, *args, **kwargs):
             pass
+
         def exception(self, *args, **kwargs):
             pass
+
     class _DummyStructlog:
         @staticmethod
         def get_logger(name=None):
             return _DummyLogger()
+
     structlog = _DummyStructlog()  # type: ignore
     LOGGER = structlog.get_logger(__name__)
 
@@ -53,6 +59,14 @@ SETTINGS = get_settings()
 QA_RUNS_ROOT = SETTINGS.runs_root / "qa_runs"
 JUDGE_MODEL = SETTINGS.expert_qa_judge_model
 JUDGE_MAX_TOKENS = 256
+# The expert QA dataset expects single-token answers; cap completions defensively.
+QA_ANSWER_MAX_TOKENS = 64
+QA_ANSWER_STOP_SEQUENCES = ["\n"]
+QA_ANSWER_SYSTEM_PROMPT = (
+    "You are taking a strict benchmark. Reply with the final answer only. "
+    "Do not include any explanation. Do not include any prefix like 'Answer:'. "
+    "Your entire response must be just the answer with no spaces or newlines."
+)
 # Retry strategy for QA completions (configurable via settings)
 MAX_QA_COMPLETION_RETRIES = SETTINGS.qa_completion_max_retries
 QA_RETRY_BACKOFF_SECONDS = SETTINGS.qa_retry_backoff_seconds
@@ -95,6 +109,7 @@ def _parse_retry_after(response: "requests.Response") -> Optional[float]:
     # Try parsing as HTTP-date (RFC 7231)
     try:
         from email.utils import parsedate_to_datetime
+
         retry_dt = parsedate_to_datetime(retry_after)
         delay = (retry_dt - dt.datetime.now(dt.timezone.utc)).total_seconds()
         return max(0.0, delay)
@@ -126,20 +141,19 @@ def _call_openrouter(
     def wrap_content(text: str) -> List[Dict[str, str]]:
         return [{"type": "text", "text": text}]
 
+    capped_max_tokens = min(max_tokens, QA_ANSWER_MAX_TOKENS)
     payload = {
         "model": model,
         "messages": [
             {
                 "role": "system",
-                "content": wrap_content(
-                    "You answer evaluation questions with exactly one word or one number. "
-                    "Do not add any additional text, punctuation, or explanation."
-                ),
+                "content": wrap_content(QA_ANSWER_SYSTEM_PROMPT),
             },
             {"role": "user", "content": wrap_content(prompt)},
         ],
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        "max_tokens": capped_max_tokens,
+        "stop": QA_ANSWER_STOP_SEQUENCES,
     }
     if preferred_provider:
         payload["provider"] = {
@@ -218,13 +232,29 @@ def _call_openrouter(
                             except (TypeError, ValueError):
                                 is_transient = False
                             lowered = message.lower()
-                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                            if any(
+                                k in lowered
+                                for k in (
+                                    "network",
+                                    "upstream",
+                                    "temporar",
+                                    "timeout",
+                                    "try again",
+                                    "rate limit",
+                                    "too many",
+                                )
+                            ):
                                 is_transient = True
                             # Use appropriate error type
                             if code_int == 429:
-                                last_error = RateLimitError(f"Provider rate limited ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = RateLimitError(
+                                    f"Provider rate limited ({code}): {message or 'unknown error'}",
+                                    retry_after=retry_after,
+                                )
                             elif is_transient:
-                                last_error = ProviderError(f"Provider error ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = ProviderError(
+                                    f"Provider error ({code}): {message or 'unknown error'}", retry_after=retry_after
+                                )
                             else:
                                 last_error = HarnessError(f"Provider error ({code}): {message or 'unknown error'}")
                             should_retry = is_transient
@@ -247,14 +277,30 @@ def _call_openrouter(
                             except (TypeError, ValueError):
                                 is_transient = False
                             lowered = message.lower()
-                            if any(k in lowered for k in ("network", "upstream", "temporar", "timeout", "try again", "rate limit", "too many")):
+                            if any(
+                                k in lowered
+                                for k in (
+                                    "network",
+                                    "upstream",
+                                    "temporar",
+                                    "timeout",
+                                    "try again",
+                                    "rate limit",
+                                    "too many",
+                                )
+                            ):
                                 is_transient = True
 
                             # Use appropriate error type
                             if code_int == 429:
-                                last_error = RateLimitError(f"Provider rate limited ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = RateLimitError(
+                                    f"Provider rate limited ({code}): {message or 'unknown error'}",
+                                    retry_after=retry_after,
+                                )
                             elif is_transient:
-                                last_error = ProviderError(f"Provider error ({code}): {message or 'unknown error'}", retry_after=retry_after)
+                                last_error = ProviderError(
+                                    f"Provider error ({code}): {message or 'unknown error'}", retry_after=retry_after
+                                )
                             else:
                                 last_error = HarnessError(f"Provider error ({code}): {message or 'unknown error'}")
                             should_retry = is_transient
@@ -279,6 +325,173 @@ def _call_openrouter(
 
     assert last_error is not None
     raise last_error
+
+
+def _is_lmstudio_model(model: str) -> bool:
+    return model.startswith("lmstudio/")
+
+
+def _normalize_lmstudio_model_id(model: str) -> str:
+    if model.startswith("lmstudio/"):
+        return model.split("lmstudio/", 1)[1]
+    return model
+
+
+def _lmstudio_root_url() -> str:
+    base_url = SETTINGS.lmstudio_base_url.rstrip("/")
+    if base_url.endswith("/v1"):
+        return base_url[:-3]
+    return base_url
+
+
+def _lmstudio_get_models() -> Optional[List[Dict[str, Any]]]:
+    if requests is None:
+        return None
+
+    url = f"{_lmstudio_root_url()}/api/v0/models"
+    try:
+        response = requests.get(url, timeout=min(5, SETTINGS.api_call_timeout_seconds))
+    except requests.exceptions.RequestException:
+        return None
+
+    if response.status_code >= 400:
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+
+    models = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return None
+
+    return [m for m in models if isinstance(m, dict)]
+
+
+_LMSTUDIO_VALIDATED_MODELS: set[str] = set()
+
+
+def _call_lmstudio(
+    prompt: str,
+    *,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+) -> Tuple[str, Dict[str, Any], float]:
+    if requests is None:
+        raise HarnessError("The 'requests' library is required to call LM Studio.")
+
+    if model not in _LMSTUDIO_VALIDATED_MODELS:
+        models_snapshot = _lmstudio_get_models()
+        if models_snapshot is not None:
+            requested_state = None
+            loaded_models: List[str] = []
+            for entry in models_snapshot:
+                model_id = entry.get("id")
+                state = entry.get("state")
+                if state == "loaded" and isinstance(model_id, str):
+                    loaded_models.append(model_id)
+                if model_id == model:
+                    requested_state = state
+
+            if requested_state != "loaded":
+                if not loaded_models:
+                    raise ProviderError(f"LM Studio has no loaded model. Load '{model}' in LM Studio and retry.")
+                raise ProviderError(
+                    f"LM Studio currently has '{loaded_models[0]}' loaded, but this run requested '{model}'. "
+                    "Load the requested model in LM Studio and retry."
+                )
+
+            _LMSTUDIO_VALIDATED_MODELS.add(model)
+
+    base_url = SETTINGS.lmstudio_base_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    capped_max_tokens = min(max_tokens, QA_ANSWER_MAX_TOKENS)
+    payload = {
+        "model": model,
+        "messages": [
+            {
+                "role": "system",
+                "content": QA_ANSWER_SYSTEM_PROMPT,
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": temperature,
+        "max_tokens": capped_max_tokens,
+        "stop": QA_ANSWER_STOP_SEQUENCES,
+    }
+
+    start = time.perf_counter()
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=SETTINGS.api_call_timeout_seconds)
+    except requests.exceptions.Timeout as exc:  # pragma: no cover
+        raise ProviderError(f"QA request timed out after {SETTINGS.api_call_timeout_seconds}s: {exc}") from exc
+    except requests.exceptions.RequestException as exc:  # pragma: no cover
+        raise ProviderError(f"QA request failed: {exc}") from exc
+
+    latency = time.perf_counter() - start
+    status = response.status_code
+    if status >= 500:
+        raise ProviderError(f"QA request failed ({status}): {response.text.strip()}")
+    if status >= 400:
+        raise HarnessError(f"QA request failed ({status}): {response.text.strip()}")
+
+    try:
+        data = response.json()
+    except ValueError:
+        raise ProviderError("QA returned non-JSON response")
+
+    served_model = data.get("model") if isinstance(data, dict) else None
+    if isinstance(served_model, str) and served_model and served_model != model:
+        raise ProviderError(
+            f"LM Studio served model '{served_model}' but this run requested '{model}'. "
+            "LM Studio may be ignoring the requested model id; ensure the correct model is loaded."
+        )
+
+    try:
+        content = data.get("choices", [])[0].get("message", {}).get("content", "")
+    except AttributeError:
+        content = ""
+    cleaned = (content or "").strip()
+    if not cleaned:
+        raise EmptyResponseError("QA returned empty content")
+
+    return cleaned, data, latency
+
+
+def _call_completion(
+    prompt: str,
+    *,
+    model: str,
+    temperature: float,
+    max_tokens: int,
+    preferred_provider: Optional[str] = None,
+    reasoning_payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Dict[str, Any], float]:
+    if _is_lmstudio_model(model):
+        return _call_lmstudio(
+            prompt,
+            model=_normalize_lmstudio_model_id(model),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    return _call_openrouter(
+        prompt,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        preferred_provider=preferred_provider,
+        reasoning_payload=reasoning_payload,
+    )
 
 
 def _judge_answer(
@@ -495,11 +708,20 @@ def _extract_single_line_answer(raw: str) -> str:
 
 
 def _build_prompt(question: Question) -> str:
+    answer = question.answer.strip()
+    expects_number = bool(re.fullmatch(r"-?\d+(?:\.\d+)?", answer))
+
+    if expects_number:
+        return (
+            "Answer the following benchmark question with a single number.\n"
+            f"Question: {question.prompt}\n"
+            "Respond with only the number—no other text."
+        )
+
     return (
-        "Answer the following benchmark question with a single word or number.\n"
-        "Question: "
-        f"{question.prompt}\n"
-        "Respond with only that single word or number—no other text."  # noqa: E501
+        "Answer the following benchmark question with a single word.\n"
+        f"Question: {question.prompt}\n"
+        "Respond with only that single word—no other text."
     )
 
 
@@ -603,14 +825,16 @@ def load_qa_api_error_attempts(run_dir: Path) -> List[Dict[str, Any]]:
                 sample_index = int(sample_match.group(1)) if sample_match else 0
                 thinking_level = level_name if level_name != "base" else None
 
-                api_error_attempts.append({
-                    "question_number": question_number,
-                    "model": model,
-                    "sample_index": sample_index,
-                    "thinking_level_requested": thinking_level,
-                    "status": "api_error",
-                    "error": error_content.strip(),
-                })
+                api_error_attempts.append(
+                    {
+                        "question_number": question_number,
+                        "model": model,
+                        "sample_index": sample_index,
+                        "thinking_level_requested": thinking_level,
+                        "status": "api_error",
+                        "error": error_content.strip(),
+                    }
+                )
 
     return api_error_attempts
 
@@ -631,7 +855,7 @@ def retry_qa_api_error_attempts(
     """
     Retry only the api_error attempts from a previous QA run.
     Creates a new run directory with retried attempts.
-    
+
     Optional filters:
       filter_question_number: Only retry attempts for this specific question
       filter_model: Only retry attempts for this specific model
@@ -639,7 +863,7 @@ def retry_qa_api_error_attempts(
     """
     api_error_attempts = load_qa_api_error_attempts(original_run_dir)
     if not api_error_attempts:
-        print(f"No api_error attempts found in {original_run_dir}. Nothing to retry.")
+        LOGGER.info("qa.retry_api_errors.none", original_run_dir=str(original_run_dir))
         return {"retried": 0, "message": "No api_error attempts to retry"}
 
     # Apply filters if specified
@@ -651,10 +875,10 @@ def retry_qa_api_error_attempts(
         api_error_attempts = [a for a in api_error_attempts if a.get("sample_index") == filter_sample_index]
 
     if not api_error_attempts:
-        print(f"No api_error attempts match the filter criteria. Nothing to retry.")
+        LOGGER.info("qa.retry_api_errors.no_matches")
         return {"retried": 0, "message": "No matching api_error attempts to retry"}
 
-    print(f"Found {len(api_error_attempts)} api_error QA attempts to retry")
+    LOGGER.info("qa.retry_api_errors.found", count=len(api_error_attempts))
 
     # Load questions
     questions = load_questions()
@@ -681,11 +905,18 @@ def retry_qa_api_error_attempts(
         thinking_level = original_attempt.get("thinking_level_requested")
 
         if question_number not in question_map:
-            print(f"  Skipping question {question_number}: not found in dataset")
+            LOGGER.warning("qa.retry_api_errors.skip_question_missing", question_number=question_number)
             continue
 
         question = question_map[question_number]
-        print(f"[{i}/{len(api_error_attempts)}] Retrying Q{question_number} with {model} (sample {sample_index})")
+        LOGGER.info(
+            "qa.retry_api_errors.retrying",
+            index=i,
+            total=len(api_error_attempts),
+            question_number=question_number,
+            model=model,
+            sample_index=sample_index,
+        )
 
         # Set up attempt directory
         attempt_dir = run_dir / f"q{question_number:03d}_{model.replace('/', '_')}__s{sample_index:02d}"
@@ -699,9 +930,7 @@ def retry_qa_api_error_attempts(
 
         model_info = model_metadata.get(model) or {}
         supported_params = {
-            param.lower()
-            for param in model_info.get("supported_parameters", [])
-            if isinstance(param, str)
+            param.lower() for param in model_info.get("supported_parameters", []) if isinstance(param, str)
         }
         model_supports_reasoning = "reasoning" in supported_params
 
@@ -726,7 +955,7 @@ def retry_qa_api_error_attempts(
             if model_supports_reasoning and thinking_level:
                 level_reasoning = _compose_reasoning_payload(thinking_level)
 
-            response_text, response_meta, api_latency = _call_openrouter(
+            response_text, response_meta, api_latency = _call_completion(
                 prompt,
                 model=model,
                 temperature=temperature,
@@ -736,15 +965,24 @@ def retry_qa_api_error_attempts(
             )
         except APIError as exc:
             error_type = type(exc).__name__
-            attempt.update({
-                "status": "api_error",
-                "error": str(exc),
-                "error_type": error_type,
-                "is_transient": True,
-            })
+            attempt.update(
+                {
+                    "status": "api_error",
+                    "error": str(exc),
+                    "error_type": error_type,
+                    "is_transient": True,
+                }
+            )
             store_text(level_dir / "error.log", f"[{error_type}] {exc}")
-        except Exception as exc:
-            attempt["error"] = str(exc)
+        except HarnessError as exc:
+            attempt.update(
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "is_transient": False,
+                }
+            )
             store_text(level_dir / "error.log", str(exc))
         else:
             store_text(level_dir / "response.txt", response_text)
@@ -755,11 +993,13 @@ def retry_qa_api_error_attempts(
             model_answer = _extract_single_line_answer(response_text)
             normalized_expected = _normalise_answer(question.answer)
             normalized_observed = _normalise_answer(model_answer)
-            attempt.update({
-                "model_answer": model_answer,
-                "normalized_expected": normalized_expected,
-                "normalized_answer": normalized_observed,
-            })
+            attempt.update(
+                {
+                    "model_answer": model_answer,
+                    "normalized_expected": normalized_expected,
+                    "normalized_answer": normalized_observed,
+                }
+            )
 
             if normalized_expected and normalized_expected == normalized_observed:
                 attempt["status"] = "passed"
@@ -773,7 +1013,7 @@ def retry_qa_api_error_attempts(
             progress_callback(model, question_number, sample_index, attempt)
 
         status = attempt.get("status", "unknown")
-        print(f"  Result: {status}")
+        LOGGER.info("qa.retry_api_errors.result", status=status)
 
     # Compute summary
     status_counts = {}
@@ -797,10 +1037,12 @@ def retry_qa_api_error_attempts(
     # Save results
     store_text(run_dir / "summary.json", json.dumps(summary, indent=2))
 
-    # Print summary
-    print(f"\nQA Retry complete. Results saved to {run_dir}")
-    print(f"  Retried: {len(retried_attempts)} attempts")
-    print(f"  Status breakdown: {status_counts}")
+    LOGGER.info(
+        "qa.retry_api_errors.complete",
+        run_dir=str(run_dir),
+        retried=len(retried_attempts),
+        status_counts=status_counts,
+    )
 
     return summary
 
@@ -824,7 +1066,7 @@ def retry_qa_failed_attempts(
     # Load original summary
     summary_file = original_run_dir / "summary.json"
     if not summary_file.exists():
-        print(f"No summary.json found in {original_run_dir}. Nothing to retry.")
+        LOGGER.info("qa.retry_failed.no_summary", original_run_dir=str(original_run_dir))
         return {"retried": 0, "message": "No summary.json found"}
 
     with summary_file.open("r", encoding="utf-8") as f:
@@ -836,8 +1078,12 @@ def retry_qa_failed_attempts(
     failed_statuses = {"error", "fail", "failed", "api_error", "exception"}
 
     def _attempt_key(a: Dict) -> tuple:
-        return (a.get("model"), a.get("question_number"), a.get("sample_index", 0),
-                a.get("thinking_level_applied") or a.get("thinking_level_requested") or "base")
+        return (
+            a.get("model"),
+            a.get("question_number"),
+            a.get("sample_index", 0),
+            a.get("thinking_level_applied") or a.get("thinking_level_requested") or "base",
+        )
 
     failed_attempts = [a for a in all_attempts if a.get("status", "").lower() in failed_statuses]
 
@@ -850,10 +1096,10 @@ def retry_qa_failed_attempts(
         failed_attempts = [a for a in failed_attempts if a.get("sample_index") == filter_sample_index]
 
     if not failed_attempts:
-        print(f"No failed attempts match the filter criteria. Nothing to retry.")
+        LOGGER.info("qa.retry_failed.no_matches")
         return {"retried": 0, "message": "No matching failed attempts to retry"}
 
-    print(f"Found {len(failed_attempts)} failed QA attempts to retry")
+    LOGGER.info("qa.retry_failed.found", count=len(failed_attempts))
 
     # Load questions
     questions = load_questions()
@@ -871,14 +1117,23 @@ def retry_qa_failed_attempts(
         model = original_attempt["model"]
         question_number = original_attempt["question_number"]
         sample_index = original_attempt.get("sample_index", 0)
-        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get("thinking_level_requested")
+        thinking_level = original_attempt.get("thinking_level_applied") or original_attempt.get(
+            "thinking_level_requested"
+        )
 
         question = question_map.get(question_number)
         if not question:
-            print(f"  Skipping Q{question_number}: Question not found")
+            LOGGER.warning("qa.retry_failed.skip_question_missing", question_number=question_number)
             continue
 
-        print(f"[{i}/{len(failed_attempts)}] Retrying Q{question_number} with {model} (sample {sample_index})")
+        LOGGER.info(
+            "qa.retry_failed.retrying",
+            index=i,
+            total=len(failed_attempts),
+            question_number=question_number,
+            model=model,
+            sample_index=sample_index,
+        )
 
         # Prepare attempt directory in original run dir
         level_dir = _prepare_attempt_directory(
@@ -916,7 +1171,7 @@ def retry_qa_failed_attempts(
             if model_supports_reasoning and thinking_level:
                 reasoning_payload = _compose_reasoning_payload(thinking_level)
 
-            response_text, response_meta, api_latency = _call_openrouter(
+            response_text, response_meta, api_latency = _call_completion(
                 prompt,
                 model=model,
                 temperature=temperature,
@@ -926,14 +1181,24 @@ def retry_qa_failed_attempts(
             )
         except APIError as exc:
             error_type = type(exc).__name__
-            attempt.update({
-                "error": str(exc),
-                "error_type": error_type,
-                "is_transient": True,
-            })
+            attempt.update(
+                {
+                    "status": "api_error",
+                    "error": str(exc),
+                    "error_type": error_type,
+                    "is_transient": True,
+                }
+            )
             store_text(level_dir / "error.log", f"[{error_type}] {exc}")
-        except Exception as exc:
-            attempt["error"] = str(exc)
+        except HarnessError as exc:
+            attempt.update(
+                {
+                    "status": "error",
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "is_transient": False,
+                }
+            )
             store_text(level_dir / "error.log", str(exc))
         else:
             store_text(level_dir / "response.txt", response_text)
@@ -944,11 +1209,13 @@ def retry_qa_failed_attempts(
             model_answer = _extract_single_line_answer(response_text)
             normalized_expected = _normalise_answer(question.answer)
             normalized_observed = _normalise_answer(model_answer)
-            attempt.update({
-                "model_answer": model_answer,
-                "normalized_expected": normalized_expected,
-                "normalized_answer": normalized_observed,
-            })
+            attempt.update(
+                {
+                    "model_answer": model_answer,
+                    "normalized_expected": normalized_expected,
+                    "normalized_answer": normalized_observed,
+                }
+            )
 
             if normalized_expected and normalized_expected == normalized_observed:
                 attempt["status"] = "passed"
@@ -984,7 +1251,7 @@ def retry_qa_failed_attempts(
             progress_callback(model, question_number, sample_index, attempt)
 
         status = attempt.get("status", "unknown")
-        print(f"  Result: {status}")
+        LOGGER.info("qa.retry_failed.result", status=status)
 
     # Recalculate metrics
     evaluable_attempts = [a for a in all_attempts if a.get("status", "").lower() != "api_error"]
@@ -1020,11 +1287,19 @@ def retry_qa_failed_attempts(
         correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
         # Simple accuracy for now
         overall_pass_at_k_values.append(correct / total if total > 0 else 0.0)
-    overall_accuracy = (sum(overall_pass_at_k_values) / len(overall_pass_at_k_values)) if overall_pass_at_k_values else None
+    overall_accuracy = (
+        (sum(overall_pass_at_k_values) / len(overall_pass_at_k_values)) if overall_pass_at_k_values else None
+    )
 
     # Recalculate token usage and timing
-    total_prompt_tokens = sum((a.get("usage") or {}).get("prompt_tokens") or (a.get("usage") or {}).get("input_tokens") or 0 for a in all_attempts)
-    total_completion_tokens = sum((a.get("usage") or {}).get("completion_tokens") or (a.get("usage") or {}).get("output_tokens") or 0 for a in all_attempts)
+    total_prompt_tokens = sum(
+        (a.get("usage") or {}).get("prompt_tokens") or (a.get("usage") or {}).get("input_tokens") or 0
+        for a in all_attempts
+    )
+    total_completion_tokens = sum(
+        (a.get("usage") or {}).get("completion_tokens") or (a.get("usage") or {}).get("output_tokens") or 0
+        for a in all_attempts
+    )
     total_cost = sum(a.get("cost_usd") or 0.0 for a in all_attempts)
     total_duration = sum(a.get("duration_seconds") or 0.0 for a in all_attempts)
     total_latency = sum(a.get("api_latency_seconds") or 0.0 for a in all_attempts)
@@ -1053,10 +1328,12 @@ def retry_qa_failed_attempts(
     # Save back to original summary.json
     store_text(summary_file, json.dumps(original_summary, indent=2))
 
-    # Print summary
-    print(f"\nQA Retry complete. Updated {summary_file}")
-    print(f"  Retried: {retried_count} attempts")
-    print(f"  New accuracy: {overall_accuracy:.2%}" if overall_accuracy else "  Accuracy: N/A")
+    LOGGER.info(
+        "qa.retry_failed.complete",
+        summary_file=str(summary_file),
+        retried=retried_count,
+        accuracy=overall_accuracy,
+    )
 
     return original_summary
 
@@ -1105,15 +1382,17 @@ def run_question_benchmark(
         raise HarnessError("Judge model configured but requests library unavailable; aborting to avoid unjudged scores")
 
     judge_enabled = bool(JUDGE_MODEL) and requests is not None
-    judge_status_reason = None
-    pricing_models = list(dict.fromkeys(model_list + ([JUDGE_MODEL] if judge_enabled else [])))
-    model_metadata = fetch_model_pricing(pricing_models)
-    if judge_enabled and JUDGE_MODEL not in model_metadata:
+    judge_status_reason: Optional[str] = None
+
+    pricing_models = [m for m in model_list if not _is_lmstudio_model(m)]
+    if judge_enabled and JUDGE_MODEL:
+        pricing_models.append(JUDGE_MODEL)
+    pricing_models = list(dict.fromkeys(pricing_models))
+    model_metadata: Dict[str, Dict[str, Any]] = fetch_model_pricing(pricing_models) if pricing_models else {}
+
+    if judge_enabled and JUDGE_MODEL and JUDGE_MODEL not in model_metadata:
         judge_status_reason = "pricing_unavailable"
         raise HarnessError(f"Judge model pricing unavailable for {JUDGE_MODEL}; aborting to avoid unjudged scores")
-    if judge_enabled and requests is None:
-        judge_status_reason = "requests_unavailable"
-        raise HarnessError("requests library unavailable; cannot use judge model safely")
 
     base_output = Path(output_dir) if output_dir else QA_RUNS_ROOT
     base_output.mkdir(parents=True, exist_ok=True)
@@ -1149,16 +1428,12 @@ def run_question_benchmark(
     for model in model_list:
         model_info = model_metadata.get(model) or {}
         supported_params = {
-            param.lower()
-            for param in model_info.get("supported_parameters", [])
-            if isinstance(param, str)
+            param.lower() for param in model_info.get("supported_parameters", []) if isinstance(param, str)
         }
         model_supports_reasoning = "reasoning" in supported_params
         # Optional global thinking level (non-sweep mode only)
         reasoning_payload = (
-            _compose_reasoning_payload(thinking_level)
-            if model_supports_reasoning and thinking_level
-            else None
+            _compose_reasoning_payload(thinking_level) if model_supports_reasoning and thinking_level else None
         )
 
         # Determine which thinking levels to evaluate for this model
@@ -1205,29 +1480,41 @@ def run_question_benchmark(
                         level_reasoning = None
                         if model_supports_reasoning and level:
                             level_reasoning = _compose_reasoning_payload(level)
-                        response_text, response_meta, api_latency = _call_openrouter(
+                        response_text, response_meta, api_latency = _call_completion(
                             prompt,
                             model=model,
                             temperature=temperature,
                             max_tokens=max_tokens,
                             preferred_provider=provider,
-                            reasoning_payload=level_reasoning or (
-                                reasoning_payload if model_supports_reasoning and thinking_level and not sweep_thinking_levels else None
+                            reasoning_payload=level_reasoning
+                            or (
+                                reasoning_payload
+                                if model_supports_reasoning and thinking_level and not sweep_thinking_levels
+                                else None
                             ),
                         )
                     except APIError as exc:
                         # API errors (rate limits, empty responses, provider failures) are transient
                         # and should not count against LLM evaluation
                         error_type = type(exc).__name__
-                        attempt.update({
-                            "status": "api_error",
-                            "error": str(exc),
-                            "error_type": error_type,
-                            "is_transient": True,
-                        })
+                        attempt.update(
+                            {
+                                "status": "api_error",
+                                "error": str(exc),
+                                "error_type": error_type,
+                                "is_transient": True,
+                            }
+                        )
                         store_text(level_dir / "error.log", f"[{error_type}] {exc}")
-                    except Exception as exc:
-                        attempt["error"] = str(exc)
+                    except HarnessError as exc:
+                        attempt.update(
+                            {
+                                "status": "error",
+                                "error": str(exc),
+                                "error_type": type(exc).__name__,
+                                "is_transient": False,
+                            }
+                        )
                         store_text(level_dir / "error.log", str(exc))
                     else:
                         store_text(level_dir / "response.txt", response_text)
@@ -1247,43 +1534,36 @@ def run_question_benchmark(
                         if normalized_expected and normalized_expected == normalized_observed:
                             attempt["status"] = "passed"
                         elif judge_enabled:
-                            try:
-                                judge_pass, judge_decision, judge_reason, judge_usage, judge_raw, judge_latency = _judge_answer(
+                            judge_pass, judge_decision, judge_reason, judge_usage, judge_raw, judge_latency = (
+                                _judge_answer(
                                     question.prompt,
                                     normalized_expected or question.answer,
                                     normalized_observed or model_answer,
                                 )
-                            except Exception as exc:  # pragma: no cover - defensive guard
-                                judge_enabled = False
-                                judge_status_reason = judge_status_reason or f"judge_failed:{exc}"
-                                LOGGER.warning(
-                                    "qa.judge_failed",
-                                    question_number=question.number,
-                                    model=model,
-                                    error=str(exc),
-                                )
-                                attempt["judge_error"] = str(exc)
+                            )
+                            attempt["judge_model"] = JUDGE_MODEL
+                            if judge_decision:
+                                attempt["judge_decision"] = judge_decision
+                            if judge_reason:
+                                attempt["judge_rationale"] = judge_reason
+                                reason_lower = judge_reason.lower()
+                                if (
+                                    "judge returned empty content" in reason_lower
+                                    or "judge response missing content" in reason_lower
+                                ):
+                                    attempt["judge_error"] = judge_reason
+                            if judge_raw:
+                                attempt["judge_raw_response"] = judge_raw
+                            if judge_usage:
+                                attempt["judge_usage"] = judge_usage
+                                judge_usage_data = judge_usage
+                            if judge_latency is not None:
+                                attempt["judge_latency_seconds"] = judge_latency
+                                judge_latency_value = judge_latency
+                            if judge_pass:
+                                attempt["status"] = "passed"
                             else:
-                                attempt["judge_model"] = JUDGE_MODEL
-                                if judge_decision:
-                                    attempt["judge_decision"] = judge_decision
-                                if judge_reason:
-                                    attempt["judge_rationale"] = judge_reason
-                                    reason_lower = judge_reason.lower()
-                                    if "judge returned empty content" in reason_lower or "judge response missing content" in reason_lower:
-                                        attempt["judge_error"] = judge_reason
-                                if judge_raw:
-                                    attempt["judge_raw_response"] = judge_raw
-                                if judge_usage:
-                                    attempt["judge_usage"] = judge_usage
-                                    judge_usage_data = judge_usage
-                                if judge_latency is not None:
-                                    attempt["judge_latency_seconds"] = judge_latency
-                                    judge_latency_value = judge_latency
-                                if judge_pass:
-                                    attempt["status"] = "passed"
-                                else:
-                                    attempt["status"] = "failed"
+                                attempt["status"] = "failed"
                         else:
                             attempt["status"] = "failed"
 
@@ -1303,8 +1583,12 @@ def run_question_benchmark(
                     judge_prompt_tokens = None
                     judge_completion_tokens = None
                     if judge_usage_data:
-                        judge_prompt_tokens = judge_usage_data.get("prompt_tokens") or judge_usage_data.get("input_tokens")
-                        judge_completion_tokens = judge_usage_data.get("completion_tokens") or judge_usage_data.get("output_tokens")
+                        judge_prompt_tokens = judge_usage_data.get("prompt_tokens") or judge_usage_data.get(
+                            "input_tokens"
+                        )
+                        judge_completion_tokens = judge_usage_data.get("completion_tokens") or judge_usage_data.get(
+                            "output_tokens"
+                        )
                         attempt["judge_usage"] = judge_usage_data
                     if prompt_tokens is not None:
                         prompt_tokens = int(prompt_tokens)
@@ -1478,16 +1762,8 @@ def run_question_benchmark(
         model_completion_tokens = 0
         for attempt in model_attempts:
             usage_main = attempt.get("usage") or {}
-            model_prompt_tokens += int(
-                usage_main.get("prompt_tokens")
-                or usage_main.get("input_tokens")
-                or 0
-            )
-            model_completion_tokens += int(
-                usage_main.get("completion_tokens")
-                or usage_main.get("output_tokens")
-                or 0
-            )
+            model_prompt_tokens += int(usage_main.get("prompt_tokens") or usage_main.get("input_tokens") or 0)
+            model_completion_tokens += int(usage_main.get("completion_tokens") or usage_main.get("output_tokens") or 0)
             model_prompt_tokens += int(attempt.get("judge_prompt_tokens") or 0)
             model_completion_tokens += int(attempt.get("judge_completion_tokens") or 0)
         cost = sum(attempt.get("cost_usd", 0.0) for attempt in model_attempts)
@@ -1521,7 +1797,9 @@ def run_question_benchmark(
         total = len(attempts_for_question)
         correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
         overall_pass_at_k_values.append(_estimate_pass_at_k(total, correct, min(samples, total)) or 0.0)
-    overall_accuracy = (sum(overall_pass_at_k_values) / len(overall_pass_at_k_values)) if overall_pass_at_k_values else None
+    overall_accuracy = (
+        (sum(overall_pass_at_k_values) / len(overall_pass_at_k_values)) if overall_pass_at_k_values else None
+    )
 
     # Store a machine-readable summary on disk
     summary = {

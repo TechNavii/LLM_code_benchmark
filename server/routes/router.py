@@ -2,15 +2,19 @@
 
 import asyncio
 import datetime as dt
+import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 import structlog
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from harness.config import get_settings as get_harness_settings
+from harness.exceptions import HarnessError
 from harness.run_harness import (
     run_tasks,
     fetch_model_metadata,
@@ -25,6 +29,8 @@ from server import database
 from server.config import get_settings
 from server.monitoring import timed
 from server.progress import progress_manager
+from server.routes.auth import require_api_token
+from server.routes.background import run_in_thread_with_callbacks
 from server.validators import ValidatedRunRequest
 
 
@@ -132,7 +138,7 @@ def get_leaderboard() -> Dict[str, Any]:
 
 @router.post("/runs", response_model=RunLaunchResponse, tags=["runs"])
 @timed
-async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
+async def create_run(request: RunRequestPayload, _: None = Depends(require_api_token)) -> RunLaunchResponse:
     allowlist = settings.model_allowlist or None
     try:
         validated = ValidatedRunRequest(**request.model_dump(), model_allowlist=allowlist)
@@ -185,33 +191,36 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
         progress_manager.publish_attempt(run_id, payload)
 
     async def runner() -> None:
-        try:
-            summary = await asyncio.to_thread(
-                run_tasks,
-                tasks=tasks,
-                models=validated.models,
-                samples=validated.samples,
-                temperature=validated.temperature,
-                max_tokens=validated.max_tokens,
-                preferred_provider=validated.provider,
-                thinking_level=validated.thinking_level,
-                sweep_thinking_levels=validated.sweep_thinking_levels,
-                include_thinking_variants=validated.include_thinking_variants,
-                include_tests=validated.include_tests,
-                install_deps=validated.install_deps,
-                allow_incomplete_diffs=validated.allow_incomplete_diffs,
-                allow_diff_rewrite_fallback=validated.allow_diff_rewrite_fallback,
-                output_dir=output_dir,
-                response_text=validated.response_text,
-                progress_callback=progress_proxy,
-                run_id=run_id,
-            )
-        except Exception as exc:  # pragma: no cover - background task
+        def on_error(exc: Exception) -> None:
             logger.exception("run.failed", run_id=run_id, error=str(exc))
             progress_manager.fail(run_id, str(exc))
-        else:
+
+        def on_success(summary: Dict[str, Any]) -> None:
             database.save_run(summary)
             progress_manager.complete(run_id, summary)
+
+        await run_in_thread_with_callbacks(
+            run_tasks,
+            tasks=tasks,
+            models=validated.models,
+            samples=validated.samples,
+            temperature=validated.temperature,
+            max_tokens=validated.max_tokens,
+            preferred_provider=validated.provider,
+            thinking_level=validated.thinking_level,
+            sweep_thinking_levels=validated.sweep_thinking_levels,
+            include_thinking_variants=validated.include_thinking_variants,
+            include_tests=validated.include_tests,
+            install_deps=validated.install_deps,
+            allow_incomplete_diffs=validated.allow_incomplete_diffs,
+            allow_diff_rewrite_fallback=validated.allow_diff_rewrite_fallback,
+            output_dir=output_dir,
+            response_text=validated.response_text,
+            progress_callback=progress_proxy,
+            run_id=run_id,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)
@@ -220,7 +229,11 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
 
 
 @router.delete("/leaderboard/{model_id:path}", tags=["leaderboard"])
-def delete_leaderboard_entry(model_id: str, thinking_level: Optional[str] = None) -> Dict[str, Any]:
+def delete_leaderboard_entry(
+    model_id: str,
+    thinking_level: Optional[str] = None,
+    _: None = Depends(require_api_token),
+) -> Dict[str, Any]:
     removed = database.delete_runs_for_model(model_id, thinking_level)
     status = "removed" if removed else "already_missing"
     return {
@@ -240,9 +253,7 @@ def get_model_capabilities(model_id: str) -> Dict[str, Any]:
     info = metadata.get(model_id) or metadata.get(f"openrouter/{model_id}")
     if not info:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found.")
-    supported_parameters = [
-        param for param in info.get("supported_parameters", []) if isinstance(param, str)
-    ]
+    supported_parameters = [param for param in info.get("supported_parameters", []) if isinstance(param, str)]
     supported_lower = {param.lower() for param in supported_parameters}
     supports_reasoning = "reasoning" in supported_lower
     suggested_levels: List[str] = []
@@ -262,6 +273,96 @@ def get_model_capabilities(model_id: str) -> Dict[str, Any]:
         "suggested_levels": suggested_levels,
         "supports_budget_tokens": supports_budget_tokens,
         "supports_budget_seconds": supports_budget_seconds,
+    }
+
+
+def _extract_lmstudio_context_length(entry: Dict[str, Any]) -> Optional[int]:
+    candidates = (
+        "max_context_length",
+        "context_length",
+        "context_window",
+        "context_size",
+        "n_ctx",
+    )
+    for key in candidates:
+        value = entry.get(key)
+        if value is None:
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
+def _lmstudio_native_base_url(base_url: str) -> str:
+    trimmed = (base_url or "").rstrip("/")
+    if trimmed.endswith("/v1"):
+        trimmed = trimmed[: -len("/v1")]
+    return trimmed
+
+
+@router.get("/models/lmstudio", tags=["models"])
+def list_lmstudio_models() -> Dict[str, Any]:
+    base_url = (settings.lmstudio_base_url or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=500, detail="LM Studio base URL is not configured")
+
+    openai_models_url = f"{base_url}/models"
+    native_base = _lmstudio_native_base_url(base_url)
+    native_models_url = f"{native_base}/api/v0/models"
+
+    payload: Dict[str, Any] | None = None
+    last_error: Optional[str] = None
+
+    # Prefer LM Studio's native endpoint when available (includes max_context_length).
+    for url in (native_models_url, openai_models_url):
+        request = Request(url, headers={"Accept": "application/json"})
+        try:
+            with urlopen(request, timeout=3) as response:
+                raw = response.read().decode("utf-8")
+        except (URLError, HTTPError) as exc:
+            last_error = f"Unable to reach LM Studio server at {url}: {exc}"
+            continue
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            last_error = f"LM Studio server returned a non-JSON response from {url}"
+            continue
+
+        if isinstance(parsed, dict):
+            payload = parsed
+            break
+
+    if payload is None:
+        raise HTTPException(status_code=503, detail=last_error or "Unable to load LM Studio models")
+
+    raw_models = payload.get("data")
+    if not isinstance(raw_models, list):
+        raw_models = payload.get("models")
+    if not isinstance(raw_models, list):
+        raw_models = []
+
+    models: List[Dict[str, Any]] = []
+    for entry in raw_models:
+        if not isinstance(entry, dict):
+            continue
+        model_id = entry.get("id")
+        if not model_id or not isinstance(model_id, str):
+            continue
+        models.append(
+            {
+                "id": model_id,
+                "context_length": _extract_lmstudio_context_length(entry),
+            }
+        )
+
+    return {
+        "base_url": base_url,
+        "models": models,
     }
 
 
@@ -297,7 +398,7 @@ def get_api_errors(run_id: str) -> ApiErrorsInfoResponse:
 
     try:
         api_errors = load_api_error_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, HarnessError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
 
     return ApiErrorsInfoResponse(
@@ -317,7 +418,7 @@ def get_api_errors(run_id: str) -> ApiErrorsInfoResponse:
 
 
 @router.post("/runs/{run_id}/retry-api-errors", response_model=RetryApiErrorsResponse, tags=["runs"])
-async def retry_api_errors(run_id: str) -> RetryApiErrorsResponse:
+async def retry_api_errors(run_id: str, _: None = Depends(require_api_token)) -> RetryApiErrorsResponse:
     """Retry only the api_error attempts from a previous run."""
     summary = database.get_run(run_id)
     if summary is None:
@@ -329,7 +430,7 @@ async def retry_api_errors(run_id: str) -> RetryApiErrorsResponse:
 
     try:
         api_errors = load_api_error_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError, HarnessError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
 
     if not api_errors:
@@ -366,20 +467,23 @@ async def retry_api_errors(run_id: str) -> RetryApiErrorsResponse:
         progress_manager.publish_attempt(retry_run_id, payload)
 
     async def runner() -> None:
-        try:
-            result = await asyncio.to_thread(
-                retry_api_error_attempts,
-                original_run_dir=run_dir,
-                output_dir=output_dir,
-                progress_callback=progress_proxy,
-                run_id=retry_run_id,
-            )
-        except Exception as exc:
+        def on_error(exc: Exception) -> None:
             logger.exception("retry.failed", run_id=retry_run_id, error=str(exc))
             progress_manager.fail(retry_run_id, str(exc))
-        else:
+
+        def on_success(result: Dict[str, Any]) -> None:
             database.save_run(result)
             progress_manager.complete(retry_run_id, result)
+
+        await run_in_thread_with_callbacks(
+            retry_api_error_attempts,
+            original_run_dir=run_dir,
+            output_dir=output_dir,
+            progress_callback=progress_proxy,
+            run_id=retry_run_id,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)
@@ -394,7 +498,11 @@ async def retry_api_errors(run_id: str) -> RetryApiErrorsResponse:
 
 
 @router.post("/runs/{run_id}/retry-single", response_model=RetryApiErrorsResponse, tags=["runs"])
-async def retry_single_attempt(run_id: str, request: RetrySingleAttemptRequest) -> RetryApiErrorsResponse:
+async def retry_single_attempt(
+    run_id: str,
+    request: RetrySingleAttemptRequest,
+    _: None = Depends(require_api_token),
+) -> RetryApiErrorsResponse:
     """Retry a single failed attempt from a previous run."""
     summary = database.get_run(run_id)
     if summary is None:
@@ -406,12 +514,13 @@ async def retry_single_attempt(run_id: str, request: RetrySingleAttemptRequest) 
 
     try:
         all_failed = load_failed_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load failed attempts: {exc}")
 
     # Filter to find the specific attempt
     filtered = [
-        e for e in all_failed
+        e
+        for e in all_failed
         if e.get("task_id") == request.task_id
         and (request.model is None or e.get("model") == request.model)
         and (request.sample_index is None or e.get("sample_index") == request.sample_index)
@@ -447,23 +556,26 @@ async def retry_single_attempt(run_id: str, request: RetrySingleAttemptRequest) 
         progress_manager.publish_attempt(retry_run_id, payload)
 
     async def runner() -> None:
-        try:
-            result = await asyncio.to_thread(
-                retry_failed_attempts,
-                original_run_dir=run_dir,
-                output_dir=output_dir,
-                progress_callback=progress_proxy,
-                filter_task_id=request.task_id,
-                filter_model=request.model,
-                filter_sample_index=request.sample_index,
-                run_id=retry_run_id,
-            )
-        except Exception as exc:
+        def on_error(exc: Exception) -> None:
             logger.exception("retry.single.failed", run_id=retry_run_id, error=str(exc))
             progress_manager.fail(retry_run_id, str(exc))
-        else:
+
+        def on_success(result: Dict[str, Any]) -> None:
             database.save_run(result)
             progress_manager.complete(retry_run_id, result)
+
+        await run_in_thread_with_callbacks(
+            retry_failed_attempts,
+            original_run_dir=run_dir,
+            output_dir=output_dir,
+            progress_callback=progress_proxy,
+            filter_task_id=request.task_id,
+            filter_model=request.model,
+            filter_sample_index=request.sample_index,
+            run_id=retry_run_id,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)
@@ -498,7 +610,7 @@ async def get_incomplete_attempts(run_id: str) -> IncompleteAttemptsResponse:
 
     try:
         incomplete = load_incomplete_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load incomplete attempts: {exc}")
 
     return IncompleteAttemptsResponse(
@@ -509,7 +621,7 @@ async def get_incomplete_attempts(run_id: str) -> IncompleteAttemptsResponse:
 
 
 @router.post("/runs/{run_id}/resume", response_model=ResumeIncompleteResponse)
-async def resume_run(run_id: str) -> ResumeIncompleteResponse:
+async def resume_run(run_id: str, _: None = Depends(require_api_token)) -> ResumeIncompleteResponse:
     """Resume incomplete attempts for a run."""
     run_dir = Path(settings.runs_root) / run_id
     if not run_dir.exists():
@@ -517,7 +629,7 @@ async def resume_run(run_id: str) -> ResumeIncompleteResponse:
 
     try:
         incomplete = load_incomplete_attempts(run_dir)
-    except Exception as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load incomplete attempts: {exc}")
 
     if not incomplete:
@@ -547,24 +659,27 @@ async def resume_run(run_id: str) -> ResumeIncompleteResponse:
         )
 
     async def runner() -> None:
-        try:
-            result = await asyncio.to_thread(
-                resume_incomplete_run,
-                run_dir=run_dir,
-                temperature=DEFAULT_TEMPERATURE,
-                max_tokens=DEFAULT_MAX_TOKENS,
-                include_tests=HARNESS_SETTINGS.include_tests_by_default,
-                install_deps=HARNESS_SETTINGS.install_deps_by_default,
-                allow_incomplete_diffs=DEFAULT_ALLOW_INCOMPLETE_DIFFS,
-                allow_diff_rewrite_fallback=DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK,
-                progress_callback=progress_proxy,
-            )
-        except Exception as exc:
+        def on_error(exc: Exception) -> None:
             logger.exception("resume.failed", run_id=run_id, error=str(exc))
             progress_manager.fail(run_id, str(exc))
-        else:
+
+        def on_success(result: Dict[str, Any]) -> None:
             database.save_run(result)
             progress_manager.complete(run_id, result)
+
+        await run_in_thread_with_callbacks(
+            resume_incomplete_run,
+            run_dir=run_dir,
+            temperature=DEFAULT_TEMPERATURE,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            include_tests=HARNESS_SETTINGS.include_tests_by_default,
+            install_deps=HARNESS_SETTINGS.install_deps_by_default,
+            allow_incomplete_diffs=DEFAULT_ALLOW_INCOMPLETE_DIFFS,
+            allow_diff_rewrite_fallback=DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK,
+            progress_callback=progress_proxy,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)

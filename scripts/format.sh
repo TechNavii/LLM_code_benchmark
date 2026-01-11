@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# lint.sh - Run linting checks for the benchmark repository
-# This script ensures a virtualenv exists and runs ruff for linting
+# format.sh - Auto-fix formatting issues (developer-only, not run in CI)
+# This script ensures a virtualenv exists and runs ruff format to fix formatting
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -23,12 +23,8 @@ echo "Ensuring dependencies are installed..."
 "${VENV_DIR}/bin/pip" install -q -r harness/requirements.txt
 "${VENV_DIR}/bin/pip" install -q -r requirements-dev.txt
 
-# Run ruff format check (check-only mode for CI)
-echo "Running ruff format check..."
-"${VENV_DIR}/bin/ruff" format --check server/ harness/ tests/ conftest.py
+# Run ruff format to fix formatting issues
+echo "Running ruff format..."
+"${VENV_DIR}/bin/ruff" format server/ harness/ tests/ conftest.py
 
-# Run ruff linting
-echo "Running ruff check..."
-"${VENV_DIR}/bin/ruff" check server/ harness/ tests/ conftest.py
-
-echo "✓ Lint checks passed"
+echo "✓ Formatting applied"

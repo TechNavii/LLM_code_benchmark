@@ -68,7 +68,7 @@
         "Add a check mode and integrate it into ./scripts/lint.sh",
         "Provide a developer fix command (non-CI), but keep CI on check-only"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-002-lint-static-analysis",

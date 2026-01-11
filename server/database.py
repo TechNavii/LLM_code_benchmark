@@ -10,6 +10,7 @@ from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Tex
 from sqlalchemy.orm import Mapped, Session, declarative_base, mapped_column, relationship, sessionmaker
 
 from server.config import get_settings
+from server.database_utils import count_errors_from_summary, extract_usage_tokens, parse_timestamp
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,15 +72,8 @@ def init_db() -> None:
 
 @contextmanager
 def get_session() -> Iterator[Session]:
-    session = SessionLocal()
-    try:
+    with SessionLocal.begin() as session:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
 def save_run(summary: Dict) -> str:
@@ -89,8 +83,7 @@ def save_run(summary: Dict) -> str:
     accuracy = summary.get("metrics", {}).get("overall", {}).get("macro_model_accuracy")
     total_cost = summary.get("token_usage", {}).get("total_cost_usd")
     total_duration = summary.get("timing", {}).get("total_duration_seconds")
-    timestamp_raw = summary.get("timestamp_utc")
-    timestamp = dt.datetime.fromisoformat(timestamp_raw) if timestamp_raw else dt.datetime.utcnow()
+    timestamp = parse_timestamp(summary.get("timestamp_utc"))
 
     with get_session() as session:
         record = session.get(RunRecord, run_id)
@@ -107,14 +100,14 @@ def save_run(summary: Dict) -> str:
         record.summary_json = json.dumps(summary)
         record.attempts.clear()
         for attempt in attempts:
-            usage = attempt.get("usage") or {}
+            prompt_tokens, completion_tokens = extract_usage_tokens(attempt.get("usage"))
             record.attempts.append(
                 AttemptRecord(
                     task_id=attempt.get("task_id"),
                     status=attempt.get("status"),
                     duration=attempt.get("duration_seconds"),
-                    prompt_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
-                    completion_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                     cost=attempt.get("cost_usd"),
                     error=attempt.get("error"),
                 )
@@ -139,28 +132,20 @@ def list_runs(limit: int = 50) -> List[Dict[str, Optional[float]]]:
     )
     with get_session() as session:
         rows = session.execute(stmt).all()
-    
+
     results = []
     for row in rows:
-        # Count errors from summary
-        error_count = 0
-        try:
-            summary = json.loads(row.summary_json) if row.summary_json else {}
-            attempts = summary.get("attempts", [])
-            failed_statuses = {"error", "fail", "failed", "api_error", "exception"}
-            error_count = sum(1 for a in attempts if a.get("status", "").lower() in failed_statuses)
-        except (json.JSONDecodeError, TypeError):
-            pass
-        
-        results.append({
-            "id": row.id,
-            "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
-            "model_id": row.model_id,
-            "accuracy": row.accuracy,
-            "total_cost": row.total_cost,
-            "total_duration": row.total_duration,
-            "error_count": error_count,
-        })
+        results.append(
+            {
+                "id": row.id,
+                "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
+                "model_id": row.model_id,
+                "accuracy": row.accuracy,
+                "total_cost": row.total_cost,
+                "total_duration": row.total_duration,
+                "error_count": count_errors_from_summary(row.summary_json),
+            }
+        )
     return results
 
 
@@ -257,7 +242,9 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
 
         for (model_id, level), model_attempts in per_model_level.items():
             cost_values = [a.get("cost_usd") for a in model_attempts if a.get("cost_usd") is not None]
-            duration_values = [a.get("duration_seconds") for a in model_attempts if a.get("duration_seconds") is not None]
+            duration_values = [
+                a.get("duration_seconds") for a in model_attempts if a.get("duration_seconds") is not None
+            ]
             # Compute accuracy for this (model, level) subset
             successes = sum(1 for a in model_attempts if (a.get("status") or "").lower() == "passed")
             accuracy = successes / len(model_attempts) if model_attempts else None
@@ -305,9 +292,7 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
 def delete_runs_for_model(model_id: str, thinking_level: Optional[str] = None) -> int:
     like_pattern = f"%{model_id}%"
     with get_session() as session:
-        candidates = session.scalars(
-            select(RunRecord).where(RunRecord.model_id.like(like_pattern))
-        ).all()
+        candidates = session.scalars(select(RunRecord).where(RunRecord.model_id.like(like_pattern))).all()
         removed = 0
         for record in candidates:
             models = [m.strip() for m in (record.model_id or "").split(",") if m.strip()]

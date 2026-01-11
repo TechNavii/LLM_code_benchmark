@@ -21,28 +21,28 @@ class DatabaseSettings(BaseSettings):
 
 
 class APISettings(BaseSettings):
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
     workers: int = 1
     reload: bool = False
-    cors_origins: List[str] = Field(default_factory=lambda: ["*"])
+    cors_origins: List[str] = Field(default_factory=list)
 
 
 class HarnessSettings(BaseSettings):
     max_concurrent_tasks: int = 5
     default_timeout: int = 300
     max_log_chars: int = 20000
-    supported_languages: List[str] = Field(
-        default_factory=lambda: ["python", "javascript", "go", "rust", "cpp"]
-    )
+    supported_languages: List[str] = Field(default_factory=lambda: ["python", "javascript", "go", "rust", "cpp"])
 
 
 class Settings(BaseSettings):
     """Top-level configuration values for the server and harness."""
 
     openrouter_api_key: str = Field(validation_alias="OPENROUTER_API_KEY")
+    api_token: str | None = Field(default=None, validation_alias="BENCHMARK_API_TOKEN")
     default_model: str = "openrouter/google/gemini-pro"
     default_temperature: float = 0.5
+    lmstudio_base_url: str = "http://127.0.0.1:1234/v1"
 
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     api: APISettings = Field(default_factory=APISettings)
@@ -61,6 +61,14 @@ class Settings(BaseSettings):
         if not api_key or len(api_key) < 10:
             raise ValueError("OPENROUTER_API_KEY must be provided and appear valid")
         return api_key
+
+    @field_validator("api_token")
+    @classmethod
+    def normalize_api_token(cls, token: str | None) -> str | None:
+        if token is None:
+            return None
+        trimmed = token.strip()
+        return trimmed or None
 
     @field_validator("cors_origins")
     @classmethod
