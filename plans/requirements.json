@@ -94,7 +94,7 @@
         "Ensure the typecheck command is fast and deterministic",
         "Integrate into ./scripts/typecheck.sh (invoked via meta.validators)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-001-unit-test-harness",
