@@ -173,7 +173,7 @@
         "Fail the build on any validator failure",
         "Ensure CI uses a pinned Python version compatible with the project (Python 3.11+) and does not gate on intentionally-incomplete tasks/* suites"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-001-dependency-vulnerability-scan",
