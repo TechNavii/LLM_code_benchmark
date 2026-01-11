@@ -121,7 +121,7 @@
         "Make the suite fast (target < 1–2 minutes) so it can run on every change",
         "Run this suite in CI as part of the default test job"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-003-integration-tests",
