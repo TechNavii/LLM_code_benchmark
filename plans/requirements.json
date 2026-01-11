@@ -213,6 +213,162 @@
         "Ensure hooks behave consistently across platforms (macOS/Linux/Windows)"
       ],
       "passes": true
+    },
+    {
+      "id": "foundation-002-dependency-lockfiles",
+      "priority": 14,
+      "category": "foundation",
+      "description": "Add deterministic dependency locking for server/harness/dev tooling",
+      "steps": [
+        "Introduce a dependency locking mechanism (pip-tools or uv) to pin transitive versions for server/, harness/, and dev/test tooling",
+        "Ensure ./scripts/lint.sh, ./scripts/typecheck.sh, and ./scripts/test.sh install from the locked sets (not floating requirements)",
+        "Add a CI check that fails when lock files are out of date",
+        "Keep lock generation reproducible and scoped to meta.lintScope (do not include tasks/* workspace deps)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "foundation-003-python-version-policy",
+      "priority": 15,
+      "category": "foundation",
+      "description": "Pin and validate supported Python versions across local scripts and CI",
+      "steps": [
+        "Define an explicit supported Python version range (e.g., 3.11+) and enforce it in CI",
+        "Add a lightweight preflight check in validator scripts that fails fast if the interpreter is unsupported",
+        "Ensure dependencies are installed per-Python-version (cache keys include python version)",
+        "Avoid relying on developer machine global site-packages"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-006-no-debug-output",
+      "priority": 16,
+      "category": "quality",
+      "description": "Enforce no accidental debug output (print/console.log) in production paths",
+      "steps": [
+        "Enable a lint rule to detect print() usage in non-CLI code paths (e.g., ruff T201) and gate it in ./scripts/lint.sh",
+        "Add an allowlist pattern for intentional CLI output wrappers (e.g., a dedicated _cli_echo helper)",
+        "Add a check that flags un-gated console.log in gui/ (allow only when gated behind an explicit debug flag)",
+        "Ensure CI fails when debug output is reintroduced"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-007-dead-code-and-import-hygiene",
+      "priority": 17,
+      "category": "quality",
+      "description": "Add dead-code detection and import hygiene checks (brownfield safe)",
+      "steps": [
+        "Add a dead-code signal check (vulture or equivalent) scoped to meta.lintScope",
+        "Maintain a small allowlist for known false positives and keep it under version control",
+        "Keep the signal-to-noise ratio high: start warn-only, then incrementally enforce",
+        "Integrate into ./scripts/lint.sh and ensure it respects meta.excludePatterns"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-008-frontend-quality-gates",
+      "priority": 18,
+      "category": "quality",
+      "description": "Add minimal frontend quality gates for gui/ (JS/CSS) to prevent regressions",
+      "steps": [
+        "Add a lightweight JS/CSS lint check (eslint/stylelint or a minimal scripted check) scoped to gui/",
+        "Keep configuration small to avoid large formatting churn",
+        "Integrate frontend checks into ./scripts/lint.sh (or a dedicated ./scripts/frontend_lint.sh invoked by lint.sh)",
+        "Exclude vendor/generated assets and keep execution fast"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-005-websocket-stream-contract",
+      "priority": 19,
+      "category": "tests",
+      "description": "Add automated WebSocket stream contract tests for run and QA progress endpoints",
+      "steps": [
+        "Add FastAPI TestClient WebSocket tests for /runs/{run_id}/stream and /qa/runs/{run_id}/stream",
+        "Verify event ordering and shape (init -> attempt(s) -> complete/error)",
+        "Add negative tests for missing run_id (expected close code) and verify cleanup via unsubscribe",
+        "Keep tests hermetic (no network calls; no task execution)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-006-harness-retry-resume-tests",
+      "priority": 20,
+      "category": "tests",
+      "description": "Add unit tests for harness retry/resume helpers (api_error retry + incomplete resume)",
+      "steps": [
+        "Add tempdir-based tests for load_api_error_attempts/load_failed_attempts/load_incomplete_attempts parsing",
+        "Add tests that validate attempt directory name parsing (task/model/sample/thinking level) and edge cases",
+        "Add tests that validate transient API error classification does not mark user-code failures as api_error",
+        "Ensure the suite is fast and does not run tasks/* tests"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-007-database-utils-and-session-tests",
+      "priority": 21,
+      "category": "tests",
+      "description": "Add focused unit/integration tests for database utilities and transactional session behavior",
+      "steps": [
+        "Unit test parse_timestamp() timezone normalization and invalid input fallback",
+        "Unit test extract_usage_tokens() for OpenAI/Anthropic usage schemas",
+        "Unit test count_errors_from_summary() for malformed JSON and status normalization",
+        "Add a lightweight integration test confirming get_session() commits/rolls back as expected"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-003-sast-bandit",
+      "priority": 22,
+      "category": "security",
+      "description": "Add Python SAST scanning (Bandit) scoped to server/ and harness/",
+      "steps": [
+        "Add Bandit (or equivalent) with a small, high-signal ruleset",
+        "Scope scanning to meta.lintScope and exclude meta.excludePatterns",
+        "Run in CI and decide an initial enforcement policy (warn-only -> fail on high/critical)",
+        "Ensure findings can be suppressed only with explicit justification"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-004-semgrep-lightweight",
+      "priority": 23,
+      "category": "security",
+      "description": "Add lightweight Semgrep rules for common Python/JS security footguns",
+      "steps": [
+        "Run Semgrep with a minimal ruleset scoped to server/, harness/, and gui/",
+        "Exclude tasks/* workspaces and generated artifacts",
+        "Run in CI and allow suppressions only when justified",
+        "Keep performance fast enough to run on every PR"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-002-python-version-matrix",
+      "priority": 24,
+      "category": "ci",
+      "description": "Run CI validators across a Python version matrix",
+      "steps": [
+        "Run lint/typecheck/tests on at least Python 3.11 and 3.12",
+        "Ensure caching keys include Python version and dependency lock hashes",
+        "Keep tasks/* suites out of the default CI job",
+        "Fail fast on the first failed job and report results clearly"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-003-ci-artifacts-and-junit",
+      "priority": 25,
+      "category": "ci",
+      "description": "Publish test artifacts (JUnit/coverage/logs) on CI failures",
+      "steps": [
+        "Configure pytest to emit a JUnit XML report and (when coverage is enabled) coverage XML",
+        "Upload artifacts on CI failures to simplify debugging",
+        "Keep artifacts scoped and size-limited (exclude runs/ and task workspaces)",
+        "Optionally add PR annotations for failing tests"
+      ],
+      "passes": false
     }
   ]
 }

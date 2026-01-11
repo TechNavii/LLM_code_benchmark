@@ -31,6 +31,9 @@ jobs:
           restore-keys: |
             venv-${{ runner.os }}-${{ matrix.python-version }}-
 
+      - name: Check dependency lock files
+        run: ./scripts/check-deps.sh
+
       - name: Run lint checks
         run: ./scripts/lint.sh
 
