@@ -1,0 +1,91 @@
+name: CodeQL Analysis
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      # Trigger on changes to source code only
+      - 'server/**'
+      - 'harness/**'
+      - 'gui/**'
+      - 'conftest.py'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'server/**'
+      - 'harness/**'
+      - 'gui/**'
+      - 'conftest.py'
+  schedule:
+    # Run weekly on Sundays at 3:00 AM UTC (after nightly scans)
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    # Allow manual trigger for debugging
+
+# Only one CodeQL run per branch at a time
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+# Permissions required for CodeQL and security tab
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # CodeQL supports: cpp, csharp, go, java, javascript, python, ruby, swift
+        language: ['python', 'javascript']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Initialize CodeQL tools for scanning
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          # Configure paths to scan (consistent with meta.lintScope)
+          # and paths to exclude (consistent with meta.excludePatterns)
+          config: |
+            paths:
+              - server
+              - harness
+              - gui
+              - conftest.py
+            paths-ignore:
+              - runs
+              - .venv
+              - .pytest_cache
+              - '**/node_modules'
+              - '**/__pycache__'
+              - 'tasks/**/workspace'
+              - '**/*.pyc'
+          # Use security-and-quality queries for comprehensive analysis
+          # Brownfield-safe: start with default queries, expand later
+          queries: +security-and-quality
+
+      # For Python, we don't need to build - CodeQL can analyze source directly
+      # For JavaScript, CodeQL also analyzes source directly (no build needed)
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      # Perform CodeQL Analysis
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          # Upload SARIF results to GitHub Security tab
+          upload: true
+          # Brownfield-safe: warn-only initially
+          # To fail on high/critical alerts, add:
+          # fail-on: error
+          # For now, we report all findings without failing the job

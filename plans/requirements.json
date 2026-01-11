@@ -525,6 +525,97 @@
         "Use the same dependency sets as CI validators"
       ],
       "passes": true
+    },
+    {
+      "id": "security-007-codeql",
+      "priority": 38,
+      "category": "security",
+      "description": "Add GitHub CodeQL analysis for Python and JavaScript",
+      "steps": [
+        "Add a GitHub Actions workflow that runs CodeQL on pull requests and on a schedule",
+        "Configure CodeQL to scan Python sources (server/, harness/) and JavaScript sources (gui/)",
+        "Keep scanning scoped/excluded consistent with meta.excludePatterns (exclude tasks/*, runs/, .venv/)",
+        "Publish SARIF results to GitHub Security tab and fail the job on new critical/high alerts (brownfield-safe warn-only initially if needed)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "security-008-dependency-review",
+      "priority": 39,
+      "category": "security",
+      "description": "Add GitHub Dependency Review to block vulnerable dependency introductions",
+      "steps": [
+        "Add the dependency-review-action to PR workflows",
+        "Configure it to evaluate changes to locked requirements files and fail on high/critical vulnerabilities",
+        "Ensure it supports the repo's lockfile strategy (pip-tools / uv) and ignores tasks/* workspace deps",
+        "Add a documented override path for emergency exceptions (with justification)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-012-openapi-diff",
+      "priority": 40,
+      "category": "quality",
+      "description": "Detect breaking API changes via OpenAPI diff (snapshot vs generated)",
+      "steps": [
+        "Introduce an OpenAPI diff step that compares the generated schema against the stored snapshot",
+        "Fail on breaking changes (removed endpoints/fields, tightened validation) and warn on additive-only changes initially",
+        "Provide a deliberate update mechanism for snapshot changes (explicit command/script)",
+        "Keep the diff process hermetic and fast (no network calls, no task execution)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-013-ruff-ruleset-expansion",
+      "priority": 41,
+      "category": "quality",
+      "description": "Incrementally expand ruff ruleset for higher signal bug prevention",
+      "steps": [
+        "Enable additional high-signal ruff rule families (e.g., bugbear, pyupgrade, simplify, perflint) in warning mode first",
+        "Add targeted per-file ignores only where necessary and keep rationale minimal",
+        "Adopt fixes incrementally to avoid large-scale churn",
+        "Gate the expanded ruleset in ./scripts/lint.sh once noise is manageable"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-012-cli-entrypoint-smoke",
+      "priority": 42,
+      "category": "tests",
+      "description": "Add smoke tests for harness CLI entrypoints and argument parsing",
+      "steps": [
+        "Add subprocess-based tests that invoke the harness CLI with --help and minimal dry-run inputs",
+        "Assert exit codes and ensure output is stable enough to detect regressions",
+        "Ensure tests remain hermetic (no network calls, no task execution, temp dirs only)",
+        "Keep runtime fast and skip on platforms where subprocess execution is restricted (if needed)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-013-migrations-smoke",
+      "priority": 43,
+      "category": "tests",
+      "description": "Add migration/schema consistency checks for the server database",
+      "steps": [
+        "If Alembic/migrations are used, add a test that runs migrations against a fresh temp SQLite DB and validates schema creation",
+        "Add a check that the migrations directory matches the current ORM model state (brownfield-safe warn-only initially)",
+        "Ensure migration tests are hermetic and use temp directories",
+        "Keep tasks/* suites excluded and runtime fast"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-006-concurrency-and-cancel-in-progress",
+      "priority": 44,
+      "category": "ci",
+      "description": "Add CI concurrency controls to cancel redundant runs and reduce CI load",
+      "steps": [
+        "Configure GitHub Actions concurrency groups per workflow+branch so new pushes cancel in-progress jobs",
+        "Ensure artifact uploads still occur for the final run and failure signals remain visible",
+        "Avoid canceling scheduled deep scans unless explicitly desired",
+        "Keep configuration brownfield-safe and easy to reason about"
+      ],
+      "passes": false
     }
   ]
 }
