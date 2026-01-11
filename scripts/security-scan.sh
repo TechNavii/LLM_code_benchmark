@@ -30,7 +30,7 @@ echo "Running pip-audit on dependencies..."
 
 # Create a combined requirements file for scanning
 TEMP_REQ=$(mktemp)
-trap "rm -f ${TEMP_REQ}" EXIT
+trap 'rm -f "${TEMP_REQ}"' EXIT
 
 cat server/requirements.txt harness/requirements.txt requirements-dev.txt > "${TEMP_REQ}"
 
@@ -42,16 +42,16 @@ SUPPRESSIONS_FILE="${REPO_ROOT}/.pip-audit-suppressions.txt"
 
 if [ -f "${SUPPRESSIONS_FILE}" ]; then
     echo "Using suppressions from ${SUPPRESSIONS_FILE}"
-    IGNORE_ARGS=""
+    IGNORE_ARGS=()
     while IFS= read -r vuln_id; do
         # Skip empty lines and comments
         if [[ -z "$vuln_id" || "$vuln_id" =~ ^# ]]; then
             continue
         fi
-        IGNORE_ARGS="${IGNORE_ARGS} --ignore-vuln ${vuln_id}"
+        IGNORE_ARGS+=("--ignore-vuln" "${vuln_id}")
     done < "${SUPPRESSIONS_FILE}"
 
-    "${VENV_DIR}/bin/pip-audit" -r "${TEMP_REQ}" ${IGNORE_ARGS} || {
+    "${VENV_DIR}/bin/pip-audit" -r "${TEMP_REQ}" "${IGNORE_ARGS[@]}" || {
         echo "⚠️  Security scan found vulnerabilities (see above)"
         echo "To suppress known/acceptable findings, add vulnerability IDs to .pip-audit-suppressions.txt"
         exit 1

@@ -394,7 +394,7 @@
         "Ensure scripts remain POSIX-compatible where practical (or declare bash explicitly)",
         "Exclude generated scripts and keep runtime fast"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-011-openapi-schema-validation",

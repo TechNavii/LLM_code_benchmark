@@ -27,7 +27,7 @@ echo "Ensuring pip-tools is installed..."
 
 # Create temporary directory for compiled files
 TEMP_DIR=$(mktemp -d)
-trap "rm -rf ${TEMP_DIR}" EXIT
+trap 'rm -rf "${TEMP_DIR}"' EXIT
 
 echo "Checking if lock files are up to date..."
 

@@ -17,7 +17,7 @@ echo "Checking for ungated console.log in gui/ files..."
 
 VIOLATIONS=0
 TEMP_RESULTS=$(mktemp)
-trap "rm -f ${TEMP_RESULTS}" EXIT
+trap 'rm -f "${TEMP_RESULTS}"' EXIT
 
 # Find all .js files in gui/ and check for ungated console.log
 while IFS= read -r file; do

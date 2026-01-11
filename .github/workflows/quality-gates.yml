@@ -33,6 +33,9 @@ jobs:
           restore-keys: |
             venv-${{ runner.os }}-${{ matrix.python-version }}-
 
+      - name: Run ShellCheck on scripts
+        run: ./scripts/shellcheck.sh
+
       - name: Check dependency lock files
         run: ./scripts/check-deps.sh
 
