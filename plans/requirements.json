@@ -758,7 +758,7 @@
         "Focus on 5xx/crash detection and request validation edge cases for both code and QA routers",
         "Keep tests hermetic (no external network) and exclude tasks/* suites"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-016-gui-headless-smoke",

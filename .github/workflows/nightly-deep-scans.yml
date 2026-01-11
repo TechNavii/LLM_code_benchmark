@@ -675,3 +675,88 @@ jobs:
             junit-random.xml
             random-test-output.txt
           retention-days: 7
+
+  # ==========================================
+  # OpenAPI Fuzz Testing (Schemathesis)
+  # ==========================================
+  openapi-fuzz-tests:
+    name: OpenAPI Fuzz Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Run OpenAPI fuzz tests
+        id: fuzz-tests
+        run: |
+          echo "Running OpenAPI fuzz tests with Schemathesis..."
+          echo ""
+
+          # Run fuzz tests with bounded examples and timeout
+          # Use 100 examples per endpoint for nightly runs
+          ./scripts/openapi-fuzz.sh --max-examples 100 2>&1 | tee fuzz-output.txt
+
+          echo ""
+          echo "Fuzz testing complete."
+        continue-on-error: true
+
+      - name: Generate fuzz test summary
+        if: always()
+        run: |
+          {
+            echo "## OpenAPI Fuzz Test Results"
+            echo ""
+            if [ -f .fuzz-reports/fuzz-report.json ]; then
+              # Extract summary from JSON report
+              .venv/bin/python -c "
+          import json
+          with open('.fuzz-reports/fuzz-report.json') as f:
+              data = json.load(f)
+          print(f\"**Timestamp:** {data['timestamp']}\")
+          print(f\"**Endpoints Tested:** {data['endpoints_tested']}\")
+          print(f\"**Total Requests:** {data['total_requests']}\")
+          print(f\"**Passed:** {data['passed']}\")
+          print(f\"**Failures:** {len(data['failures'])}\")
+          print(f\"**5xx Errors:** {len(data['errors'])}\")
+          print('')
+          if data['errors']:
+              print('### Server Errors (5xx)')
+              for e in data['errors']:
+                  print(f\"- {e['method']} {e['path']}: HTTP {e['status_code']}\")
+          if data['failures']:
+              print('### Validation Failures')
+              for f in data['failures'][:5]:  # Limit to first 5
+                  print(f\"- {f['method']} {f['path']}\")
+          "
+            else
+              echo "No fuzz report found."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload fuzz test report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: openapi-fuzz-report
+          path: |
+            .fuzz-reports/
+            fuzz-output.txt
+          retention-days: 30
