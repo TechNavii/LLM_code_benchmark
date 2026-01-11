@@ -10,6 +10,7 @@ jobs:
   quality-checks:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: true
       matrix:
         # Enforce supported Python versions (defined in pyproject.toml: requires-python = ">=3.11")
         python-version: ["3.11", "3.12"]

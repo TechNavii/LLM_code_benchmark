@@ -355,7 +355,7 @@
         "Keep tasks/* suites out of the default CI job",
         "Fail fast on the first failed job and report results clearly"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-003-ci-artifacts-and-junit",
