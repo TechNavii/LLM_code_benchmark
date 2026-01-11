@@ -420,7 +420,7 @@
         "Add negative tests for invalid input (validation errors) to ensure consistent error responses",
         "Keep tests hermetic: no external network, no executing tasks, and use temp dirs/DB where needed"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-009-auth-permission-matrix",
