@@ -589,7 +589,7 @@
         "Ensure tests remain hermetic (no network calls, no task execution, temp dirs only)",
         "Keep runtime fast and skip on platforms where subprocess execution is restricted (if needed)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-013-migrations-smoke",
