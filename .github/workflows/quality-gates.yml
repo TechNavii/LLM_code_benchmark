@@ -42,8 +42,10 @@ jobs:
       - name: Run type checking
         run: ./scripts/typecheck.sh
 
-      - name: Run tests with coverage
-        run: ./scripts/test.sh
+      - name: Run tests with coverage (strict warnings)
+        run: ./scripts/test.sh -W error::DeprecationWarning -W error::PendingDeprecationWarning
+        env:
+          CI: true
 
       - name: Run security scan
         run: ./scripts/security-scan.sh

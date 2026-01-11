@@ -381,7 +381,7 @@
         "Whitelist unavoidable third-party warnings with targeted filters and justification",
         "Ensure the policy does not apply to tasks/* suites"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-010-shellcheck-scripts",
