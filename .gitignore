@@ -26,6 +26,8 @@ dist/
 htmlcov/
 .coverage
 .coverage.*
+coverage.xml
+junit.xml
 
 # Node / JavaScript
 node_modules/

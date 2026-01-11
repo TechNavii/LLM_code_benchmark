@@ -368,7 +368,7 @@
         "Keep artifacts scoped and size-limited (exclude runs/ and task workspaces)",
         "Optionally add PR annotations for failing tests"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }
