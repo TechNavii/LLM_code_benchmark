@@ -20,12 +20,12 @@ if [ ! -d "${VENV_DIR}" ]; then
     python3 -m venv "${VENV_DIR}"
 fi
 
-# Install dependencies if needed
-echo "Ensuring dependencies are installed..."
+# Install dependencies with hash verification
+echo "Ensuring dependencies are installed (with hash verification)..."
 "${VENV_DIR}/bin/pip" install -q --upgrade pip
-"${VENV_DIR}/bin/pip" install -q -r server/requirements.txt
-"${VENV_DIR}/bin/pip" install -q -r harness/requirements.txt
-"${VENV_DIR}/bin/pip" install -q -r requirements-dev.txt
+"${VENV_DIR}/bin/pip" install -q --require-hashes -r server/requirements.txt
+"${VENV_DIR}/bin/pip" install -q --require-hashes -r harness/requirements.txt
+"${VENV_DIR}/bin/pip" install -q --require-hashes -r requirements-dev.txt
 
 # Run pytest (pytest.ini defines testpaths = tests harness/tests)
 echo "Running pytest..."

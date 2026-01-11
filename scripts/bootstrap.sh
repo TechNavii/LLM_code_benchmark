@@ -34,16 +34,17 @@ echo ""
 echo "Upgrading pip..."
 "${VENV_DIR}/bin/pip" install --upgrade pip --quiet
 
-# Install locked dependencies (same as CI validators)
+# Install locked dependencies with hash verification (same as CI validators)
+# --require-hashes ensures package integrity via SHA256 hash verification
 echo ""
-echo "Installing locked dependencies..."
+echo "Installing locked dependencies (with hash verification)..."
 echo "  - server/requirements.txt (server runtime deps)"
-"${VENV_DIR}/bin/pip" install -r server/requirements.txt --quiet
+"${VENV_DIR}/bin/pip" install -r server/requirements.txt --require-hashes --quiet
 echo "  - harness/requirements.txt (harness runtime deps)"
-"${VENV_DIR}/bin/pip" install -r harness/requirements.txt --quiet
+"${VENV_DIR}/bin/pip" install -r harness/requirements.txt --require-hashes --quiet
 echo "  - requirements-dev.txt (dev/test tooling)"
-"${VENV_DIR}/bin/pip" install -r requirements-dev.txt --quiet
-echo "✓ Dependencies installed"
+"${VENV_DIR}/bin/pip" install -r requirements-dev.txt --require-hashes --quiet
+echo "✓ Dependencies installed (hash-verified)"
 
 # Install pre-commit hooks (optional but recommended)
 echo ""

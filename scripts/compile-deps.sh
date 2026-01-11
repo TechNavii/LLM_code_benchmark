@@ -2,7 +2,8 @@
 set -euo pipefail
 
 # compile-deps.sh - Compile pinned dependency lock files from .in sources
-# This script uses pip-tools to generate deterministic lock files
+# This script uses pip-tools to generate deterministic lock files with hashes
+# for stronger dependency integrity verification
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -25,14 +26,19 @@ echo "Ensuring pip-tools is installed..."
 "${VENV_DIR}/bin/pip" install -q --upgrade pip
 "${VENV_DIR}/bin/pip" install -q pip-tools
 
-# Compile each requirements file
-echo "Compiling server/requirements.txt from server/requirements.in..."
-"${VENV_DIR}/bin/pip-compile" --quiet --strip-extras --output-file=server/requirements.txt server/requirements.in
+# Common pip-compile flags for hash generation
+# --generate-hashes: Include SHA256 hashes for all packages
+# --allow-unsafe: Include pip/setuptools so --require-hashes works correctly
+COMPILE_FLAGS="--quiet --strip-extras --generate-hashes --allow-unsafe"
 
-echo "Compiling harness/requirements.txt from harness/requirements.in..."
-"${VENV_DIR}/bin/pip-compile" --quiet --strip-extras --output-file=harness/requirements.txt harness/requirements.in
+# Compile each requirements file with hashes for integrity verification
+echo "Compiling server/requirements.txt from server/requirements.in (with hashes)..."
+"${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file=server/requirements.txt server/requirements.in
 
-echo "Compiling requirements-dev.txt from requirements-dev.in..."
-"${VENV_DIR}/bin/pip-compile" --quiet --strip-extras --output-file=requirements-dev.txt requirements-dev.in
+echo "Compiling harness/requirements.txt from harness/requirements.in (with hashes)..."
+"${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file=harness/requirements.txt harness/requirements.in
 
-echo "✓ All lock files compiled successfully"
+echo "Compiling requirements-dev.txt from requirements-dev.in (with hashes)..."
+"${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file=requirements-dev.txt requirements-dev.in
+
+echo "✓ All lock files compiled successfully (with hashes)"

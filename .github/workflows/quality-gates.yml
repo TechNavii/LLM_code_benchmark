@@ -96,6 +96,9 @@ jobs:
       - name: Check dependency lock files
         run: ./scripts/check-deps.sh
 
+      - name: Check dependency hashes integrity
+        run: ./scripts/check-hashes.sh
+
       - name: Run lint checks
         run: ./scripts/lint.sh
 

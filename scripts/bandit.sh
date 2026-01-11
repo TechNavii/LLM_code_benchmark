@@ -16,8 +16,8 @@ if [ ! -d ".venv" ]; then
   python -m venv .venv
 fi
 
-echo "Ensuring dependencies are installed..."
-.venv/bin/pip install -q -r requirements-dev.txt
+echo "Ensuring dependencies are installed (with hash verification)..."
+.venv/bin/pip install -q --require-hashes -r requirements-dev.txt
 
 echo "Running Bandit SAST scan..."
 .venv/bin/bandit -c .bandit.yml -r server/ harness/

@@ -7,19 +7,30 @@ QA routers and are hermetic (no external network, no task execution).
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
 
 from server.api import create_app
+from server.config import get_settings
 
 
 @pytest.fixture
-def client() -> TestClient:
-    """Create a test client for the FastAPI app."""
+def client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+    """Create a test client for the FastAPI app without auth enabled.
+
+    This fixture ensures BENCHMARK_API_TOKEN is unset to allow unauthenticated
+    access to mutating endpoints for contract validation tests.
+    """
+    # Clear token and settings cache to ensure no auth is enabled
+    monkeypatch.delenv("BENCHMARK_API_TOKEN", raising=False)
+    get_settings.cache_clear()
     app = create_app()
-    return TestClient(app)
+    yield TestClient(app)
+    # Clear cache after test for isolation
+    get_settings.cache_clear()
 
 
 # =============================================================================

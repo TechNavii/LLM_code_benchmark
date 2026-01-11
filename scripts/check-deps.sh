@@ -3,6 +3,7 @@ set -euo pipefail
 
 # check-deps.sh - Verify that lock files are up to date with .in sources
 # This script fails if any lock file is out of sync with its .in file
+# Also validates that lock files contain hashes for dependency integrity
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -31,32 +32,35 @@ trap 'rm -rf "${TEMP_DIR}"' EXIT
 
 echo "Checking if lock files are up to date..."
 
-# Compile to temporary files
-"${VENV_DIR}/bin/pip-compile" --quiet --strip-extras --output-file="${TEMP_DIR}/server-requirements.txt" server/requirements.in
-"${VENV_DIR}/bin/pip-compile" --quiet --strip-extras --output-file="${TEMP_DIR}/harness-requirements.txt" harness/requirements.in
-"${VENV_DIR}/bin/pip-compile" --quiet --strip-extras --output-file="${TEMP_DIR}/dev-requirements.txt" requirements-dev.in
+# Common pip-compile flags (must match compile-deps.sh)
+COMPILE_FLAGS="--quiet --strip-extras --generate-hashes --allow-unsafe"
+
+# Compile to temporary files (with hashes to match compile-deps.sh)
+"${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file="${TEMP_DIR}/server-requirements.txt" server/requirements.in
+"${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file="${TEMP_DIR}/harness-requirements.txt" harness/requirements.in
+"${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file="${TEMP_DIR}/dev-requirements.txt" requirements-dev.in
 
 # Compare with existing lock files (ignoring header comments with pip-compile command)
-# We filter out the comment line containing "pip-compile --output-file=" as it includes
-# temporary paths that differ between runs
+# We filter out the comment line containing "pip-compile" as it includes
+# the output path which differs between runs
 CHANGES=0
 
-if ! diff <(grep -v "^#    pip-compile --output-file=" server/requirements.txt) \
-         <(grep -v "^#    pip-compile --output-file=" "${TEMP_DIR}/server-requirements.txt") \
+if ! diff <(grep -v "^#    pip-compile " server/requirements.txt) \
+         <(grep -v "^#    pip-compile " "${TEMP_DIR}/server-requirements.txt") \
          >/dev/null 2>&1; then
     echo "❌ server/requirements.txt is out of date"
     CHANGES=1
 fi
 
-if ! diff <(grep -v "^#    pip-compile --output-file=" harness/requirements.txt) \
-         <(grep -v "^#    pip-compile --output-file=" "${TEMP_DIR}/harness-requirements.txt") \
+if ! diff <(grep -v "^#    pip-compile " harness/requirements.txt) \
+         <(grep -v "^#    pip-compile " "${TEMP_DIR}/harness-requirements.txt") \
          >/dev/null 2>&1; then
     echo "❌ harness/requirements.txt is out of date"
     CHANGES=1
 fi
 
-if ! diff <(grep -v "^#    pip-compile --output-file=" requirements-dev.txt) \
-         <(grep -v "^#    pip-compile --output-file=" "${TEMP_DIR}/dev-requirements.txt") \
+if ! diff <(grep -v "^#    pip-compile " requirements-dev.txt) \
+         <(grep -v "^#    pip-compile " "${TEMP_DIR}/dev-requirements.txt") \
          >/dev/null 2>&1; then
     echo "❌ requirements-dev.txt is out of date"
     CHANGES=1

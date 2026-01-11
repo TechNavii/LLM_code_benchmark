@@ -27,9 +27,9 @@ if [ ! -d ".venv" ]; then
     python3 -m venv .venv
 fi
 
-echo "Ensuring dependencies are installed..."
-.venv/bin/pip install -q -r server/requirements.txt
-.venv/bin/pip install -q -r requirements-dev.txt
+echo "Ensuring dependencies are installed (with hash verification)..."
+.venv/bin/pip install -q --require-hashes -r server/requirements.txt
+.venv/bin/pip install -q --require-hashes -r requirements-dev.txt
 
 SNAPSHOT_FILE="$REPO_ROOT/docs/openapi-snapshot.json"
 UPDATE_MODE=false

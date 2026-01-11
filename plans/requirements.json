@@ -745,7 +745,7 @@
         "Add a CI check that fails on missing hashes or unpinned direct URL dependencies",
         "Keep tasks/* workspace deps excluded"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-015-openapi-fuzz-schemathesis",
