@@ -19,6 +19,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
+# Least-privilege permissions: read-only by default
+# Nightly scans only need to read code and upload artifacts
+permissions:
+  contents: read
+  # Note: If issue creation for critical findings is enabled,
+  # add 'issues: write' permission here
+
 jobs:
   deep-security-scans:
     name: Deep Security Scans

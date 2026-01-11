@@ -12,11 +12,12 @@ concurrency:
   group: quality-gates-${{ github.ref }}
   cancel-in-progress: true
 
-# Permissions for PR comments, check annotations, and dependency review
+# Least-privilege permissions - explicitly set for security hardening
+# These are the minimum permissions required for all jobs in this workflow
 permissions:
-  contents: read
-  pull-requests: write
-  checks: write
+  contents: read          # Required: checkout code and read repository
+  pull-requests: write    # Required: PR comments (diff-cover, dependency-review)
+  checks: write           # Required: publish test results annotations
 
 jobs:
   # Dependency Review - runs on PRs to detect vulnerable dependency changes

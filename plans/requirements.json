@@ -680,7 +680,7 @@
         "Avoid long-lived secrets in workflows; prefer OIDC where applicable",
         "Add a periodic review checklist for workflow permissions"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-016-env-example-sync",
