@@ -147,7 +147,7 @@
         "Run e2e smoke in CI (can be separate job) and collect artifacts on failure",
         "Ensure the environment setup (ports, env vars, test data) is scripted and reproducible"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-004-coverage-reporting",
