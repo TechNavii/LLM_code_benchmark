@@ -42,4 +42,7 @@ echo "Running ruff check..."
 echo "Running vulture dead-code detection..."
 "${VENV_DIR}/bin/vulture" --min-confidence 80 server/ harness/ tests/ conftest.py .vulture-allowlist.py
 
+# Run frontend quality checks
+"${SCRIPT_DIR}/check-frontend.sh"
+
 echo "✓ Lint checks passed"

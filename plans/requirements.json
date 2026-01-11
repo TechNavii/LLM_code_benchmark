@@ -277,7 +277,7 @@
         "Integrate frontend checks into ./scripts/lint.sh (or a dedicated ./scripts/frontend_lint.sh invoked by lint.sh)",
         "Exclude vendor/generated assets and keep execution fast"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-005-websocket-stream-contract",
