@@ -290,7 +290,7 @@
         "Add negative tests for missing run_id (expected close code) and verify cleanup via unsubscribe",
         "Keep tests hermetic (no network calls; no task execution)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-006-harness-retry-resume-tests",
