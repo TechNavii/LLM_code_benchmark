@@ -459,7 +459,7 @@
         "Add tests for cross-thread publishing under load (small stress loop) to ensure thread-safety holds",
         "Keep stress tests bounded and fast"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-005-license-compliance-scan",
