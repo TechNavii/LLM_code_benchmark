@@ -147,6 +147,8 @@ pathable==0.4.4
     # via jsonschema-path
 peewee==3.19.0
     # via semgrep
+pip-licenses==5.0.0
+    # via -r requirements-dev.in
 pip-tools==7.5.2
     # via -r requirements-dev.in
 platformdirs==4.5.1
@@ -155,6 +157,8 @@ pluggy==1.6.0
     # via pytest
 pre-commit==4.0.1
     # via -r requirements-dev.in
+prettytable==3.17.0
+    # via pip-licenses
 protobuf==4.25.8
     # via
     #   googleapis-common-protos
@@ -212,7 +216,9 @@ sortedcontainers==2.4.0
 stevedore==5.6.0
     # via bandit
 tomli==2.0.2
-    # via semgrep
+    # via
+    #   pip-licenses
+    #   semgrep
 types-requests==2.32.0.20241016
     # via -r requirements-dev.in
 typing-extensions==4.15.0
@@ -233,6 +239,8 @@ vulture==2.14
     # via -r requirements-dev.in
 wcmatch==8.5.2
     # via semgrep
+wcwidth==0.2.14
+    # via prettytable
 wheel==0.45.1
     # via pip-tools
 wrapt==1.17.3

@@ -59,6 +59,9 @@ jobs:
       - name: Run Semgrep security scan
         run: ./scripts/semgrep.sh
 
+      - name: Run license compliance scan
+        run: ./scripts/license-scan.sh
+
       - name: Validate OpenAPI schema
         run: ./scripts/openapi-validate.sh
 

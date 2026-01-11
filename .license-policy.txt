@@ -1,0 +1,18 @@
+# License Policy - Package Allowlist
+#
+# This file contains packages with non-standard licenses that have been
+# reviewed and approved for use in this project.
+#
+# Format: package-name
+# Each entry should have a comment explaining why the exception is allowed.
+#
+# Add packages here when:
+# 1. The license is compatible with project use but not in the standard allowlist
+# 2. The package is only used for development/testing (not distributed)
+# 3. A special exception has been granted with legal review
+#
+# Examples:
+# some-gpl-dev-tool  # Only used in dev, not distributed
+# legacy-package     # Reviewed on 2024-01-01, compatible with our use case
+
+# No exceptions currently required - all dependencies use approved licenses

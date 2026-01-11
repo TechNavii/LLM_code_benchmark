@@ -472,7 +472,7 @@
         "Run in CI and fail (or warn initially) on disallowed/unknown licenses",
         "Keep scanning offline and ensure it does not leak dependency metadata unnecessarily"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-006-sbom-generation",
