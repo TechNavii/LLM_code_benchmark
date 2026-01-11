@@ -732,7 +732,7 @@
         "Start warn-only, then enforce a baseline once noise is understood",
         "Keep the scan scoped to the repo (exclude tasks/* workspaces where applicable)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-013-python-require-hashes",

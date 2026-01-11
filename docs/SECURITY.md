@@ -204,6 +204,84 @@ regexes = [
   - Review `git status` before committing
   - Consider using a pre-commit hook (see quality-005-precommit-hooks)
 
+## OSSF Scorecard
+
+This project uses the [OSSF Scorecard](https://securityscorecards.dev/) to analyze repository supply chain security best practices.
+
+### What Is OSSF Scorecard?
+
+OSSF Scorecard is an automated tool from the Open Source Security Foundation that evaluates open source projects against a series of security best practices. It assigns a score (0-10) for each check.
+
+### Checks Performed
+
+The Scorecard analyzes:
+
+| Check | Description |
+|-------|-------------|
+| Binary-Artifacts | No checked-in binary files |
+| Branch-Protection | Branch protection rules on default branch |
+| CI-Tests | CI test coverage presence |
+| Code-Review | Code review requirements |
+| Contributors | Active contributors |
+| Dangerous-Workflow | No dangerous workflow patterns (e.g., untrusted inputs in scripts) |
+| Dependency-Update-Tool | Automated dependency update tools (e.g., Dependabot) |
+| Fuzzing | Fuzz testing presence |
+| License | Open source license file |
+| Maintained | Active maintenance (commits, releases) |
+| Pinned-Dependencies | Pinned dependency versions in workflows |
+| Packaging | Published packages |
+| SAST | Static analysis tools |
+| Security-Policy | SECURITY.md file presence |
+| Signed-Releases | Signed releases |
+| Token-Permissions | Minimal token permissions in workflows |
+| Vulnerabilities | Known vulnerabilities in dependencies |
+| Webhooks | Webhook configurations |
+
+### When Scorecard Runs
+
+- **On push to main/master**: Automatically after code changes
+- **Weekly (Tuesdays 4AM UTC)**: Scheduled scan for ongoing monitoring
+- **Manual trigger**: Via workflow_dispatch for ad-hoc analysis
+
+### Viewing Results
+
+1. **GitHub Security Tab**: SARIF results are uploaded to the repository's Code Scanning alerts
+2. **OpenSSF Viewer**: Visit [scorecard.dev](https://scorecard.dev/viewer/?uri=github.com/YOUR_ORG/YOUR_REPO) for a visual dashboard
+3. **Workflow Summary**: Each run includes a summary of checks performed
+4. **Artifacts**: SARIF results are stored as artifacts for 90 days
+
+### Score Tracking
+
+Scorecard results are tracked over time:
+- Each run uploads a SARIF artifact with the commit SHA
+- Score history artifacts are retained for 365 days
+- Trends can be analyzed by comparing historical artifacts
+
+### Improving Your Score
+
+To improve the Scorecard score:
+
+1. **Branch Protection**: Enable required reviews, status checks, and force-push restrictions
+2. **Dependency Updates**: Dependabot is already configured (security-009)
+3. **Pinned Actions**: All GitHub Actions are pinned to SHAs (security-011)
+4. **Token Permissions**: Workflows use least-privilege permissions (security-010)
+5. **SAST**: CodeQL and Bandit are integrated (security-003, security-007)
+6. **Security Policy**: This SECURITY.md file satisfies the requirement
+
+### Enforcement Policy
+
+- **Initial (brownfield)**: Warn-only mode - findings are reported but don't fail builds
+- **Future**: Once baseline is understood, minimum score thresholds may be enforced
+
+### False Positives
+
+Some checks may not apply to all projects. Known limitations:
+- `Signed-Releases`: Not applicable if releases aren't published
+- `Packaging`: Not applicable for non-library projects
+- `Fuzzing`: May show low score if fuzzing isn't set up (tests-010-harness-patch-parser-fuzz uses Hypothesis, not OSS-Fuzz)
+
+For persistent false positives, document them here and accept the reduced score in those areas.
+
 ## Reporting Security Issues
 
 If you discover a security vulnerability in this project, please report it by:
