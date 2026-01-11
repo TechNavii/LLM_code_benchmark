@@ -524,7 +524,7 @@
         "Keep bootstrap free of secrets (no reading .env beyond what is required)",
         "Use the same dependency sets as CI validators"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }
