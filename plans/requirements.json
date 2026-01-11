@@ -667,7 +667,7 @@
         "Ensure updates run validators in CI and include clear changelog summaries",
         "Keep tasks/* workspace deps excluded"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-010-gha-permissions-hardening",
