@@ -641,7 +641,7 @@
         "Keep the rules brownfield-safe (warn-only initially if needed)",
         "Ensure workflow linting respects repository constraints (no tasks/* suites, no runs/ artifacts)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-007-os-matrix",

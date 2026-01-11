@@ -330,9 +330,7 @@ jobs:
         run: |
           echo "Comparing with baseline findings..."
 
-          # Check if baseline exists in repo
-          BASELINE_FILE=".security-baseline.json"
-
+          # Note: baseline_file path is defined in the Python script below
           .venv/bin/python << 'EOF'
           import json
           import os

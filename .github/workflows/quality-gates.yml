@@ -34,20 +34,12 @@ jobs:
           fail-on-severity: high
           # Deny specific problematic licenses (optional, can be expanded)
           deny-licenses: GPL-3.0, AGPL-3.0
-          # Only scan repository requirements files, not tasks/* workspace deps
-          # The action scans manifest files changed in the PR
-          # Use allow-paths to restrict scanning scope
-          allow-paths: |
-            server/requirements.txt
-            server/requirements.in
-            harness/requirements.txt
-            harness/requirements.in
-            requirements-dev.txt
-            requirements-dev.in
           # Block PRs that introduce vulnerable dependencies
           comment-summary-in-pr: on-failure
-          # Warn but don't fail on unknown licenses (brownfield-friendly)
-          allow-unknown-licenses: true
+          # Note: The action automatically scans manifest files changed in the PR
+          # tasks/* workspace deps are excluded since they are not committed to the repo
+          # Use warn-only: true for brownfield-friendly approach to unknown licenses
+          warn-only: false
 
   quality-checks:
     runs-on: ubuntu-latest
@@ -78,6 +70,15 @@ jobs:
           restore-keys: |
             venv-${{ runner.os }}-${{ matrix.python-version }}-
 
+      - name: Install actionlint
+        run: |
+          # Install actionlint for workflow linting
+          curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz | tar xz -C /tmp
+          sudo mv /tmp/actionlint /usr/local/bin/
+
+      - name: Run actionlint on workflows
+        run: ./scripts/actionlint.sh
+
       - name: Run ShellCheck on scripts
         run: ./scripts/shellcheck.sh
 
@@ -106,23 +107,25 @@ jobs:
           DIFF_COVER_HTML=diff-cover.html \
           ./scripts/diff-cover.sh 2>&1 | tee diff-cover-output.txt
 
-          # Extract summary for PR comment
-          echo "## Diff Coverage Report (Python ${{ matrix.python-version }})" > diff-cover-summary.md
-          echo "" >> diff-cover-summary.md
-          # Extract coverage percentage from diff-cover output
-          if grep -q "Diff Coverage:" diff-cover-output.txt; then
-            grep "Diff Coverage:" diff-cover-output.txt >> diff-cover-summary.md
-          else
-            echo "No changed lines found in coverage scope." >> diff-cover-summary.md
-          fi
-          echo "" >> diff-cover-summary.md
-          echo "<details>" >> diff-cover-summary.md
-          echo "<summary>Full diff coverage output</summary>" >> diff-cover-summary.md
-          echo "" >> diff-cover-summary.md
-          echo '```' >> diff-cover-summary.md
-          cat diff-cover-output.txt >> diff-cover-summary.md
-          echo '```' >> diff-cover-summary.md
-          echo "</details>" >> diff-cover-summary.md
+          # Extract summary for PR comment using grouped redirects (SC2129)
+          {
+            echo "## Diff Coverage Report (Python ${{ matrix.python-version }})"
+            echo ""
+            # Extract coverage percentage from diff-cover output
+            if grep -q "Diff Coverage:" diff-cover-output.txt; then
+              grep "Diff Coverage:" diff-cover-output.txt
+            else
+              echo "No changed lines found in coverage scope."
+            fi
+            echo ""
+            echo "<details>"
+            echo "<summary>Full diff coverage output</summary>"
+            echo ""
+            echo '```'
+            cat diff-cover-output.txt
+            echo '```'
+            echo "</details>"
+          } > diff-cover-summary.md
         continue-on-error: true
 
       - name: Post diff coverage summary to PR
