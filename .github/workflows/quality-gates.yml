@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main, master]
 
+# Permissions for PR comments and check annotations
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
 jobs:
   quality-checks:
     runs-on: ubuntu-latest
@@ -18,6 +24,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Fetch full history for diff-cover comparison
+          fetch-depth: 0
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
@@ -49,6 +58,94 @@ jobs:
         run: ./scripts/test.sh -W error::DeprecationWarning -W error::PendingDeprecationWarning
         env:
           CI: true
+
+      - name: Run diff coverage analysis
+        id: diff-cover
+        if: github.event_name == 'pull_request'
+        run: |
+          # Generate diff-cover report in markdown format for PR comment
+          # Brownfield-friendly: warn-only mode initially (DIFF_COVER_WARN_ONLY=true)
+          # Set DIFF_COVER_FAIL_UNDER to enforce minimum coverage on changed lines
+          DIFF_COVER_WARN_ONLY=true \
+          DIFF_COVER_HTML=diff-cover.html \
+          ./scripts/diff-cover.sh 2>&1 | tee diff-cover-output.txt
+
+          # Extract summary for PR comment
+          echo "## Diff Coverage Report (Python ${{ matrix.python-version }})" > diff-cover-summary.md
+          echo "" >> diff-cover-summary.md
+          # Extract coverage percentage from diff-cover output
+          if grep -q "Diff Coverage:" diff-cover-output.txt; then
+            grep "Diff Coverage:" diff-cover-output.txt >> diff-cover-summary.md
+          else
+            echo "No changed lines found in coverage scope." >> diff-cover-summary.md
+          fi
+          echo "" >> diff-cover-summary.md
+          echo "<details>" >> diff-cover-summary.md
+          echo "<summary>Full diff coverage output</summary>" >> diff-cover-summary.md
+          echo "" >> diff-cover-summary.md
+          echo '```' >> diff-cover-summary.md
+          cat diff-cover-output.txt >> diff-cover-summary.md
+          echo '```' >> diff-cover-summary.md
+          echo "</details>" >> diff-cover-summary.md
+        continue-on-error: true
+
+      - name: Post diff coverage summary to PR
+        if: github.event_name == 'pull_request' && matrix.python-version == '3.11'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the diff-cover summary
+            let summary = '';
+            try {
+              summary = fs.readFileSync('diff-cover-summary.md', 'utf8');
+            } catch (e) {
+              summary = '## Diff Coverage Report\n\nNo diff coverage data available.';
+            }
+
+            // Find existing comment to update
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('## Diff Coverage Report')
+            );
+
+            const body = summary + '\n\n---\n*Posted by Quality Gates CI*';
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Upload diff coverage report
+        uses: actions/upload-artifact@v4
+        if: github.event_name == 'pull_request'
+        with:
+          name: diff-cover-report-py${{ matrix.python-version }}
+          path: |
+            diff-cover.html
+            diff-cover-output.txt
+            diff-cover-summary.md
+          retention-days: 7
 
       - name: Run security scan
         run: ./scripts/security-scan.sh

@@ -511,7 +511,7 @@
         "Ensure coverage measurement is stable and does not include tasks/* workspaces or runs/",
         "Keep enforcement brownfield-friendly (warn-only -> fail after adoption)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "foundation-004-bootstrap-script",
