@@ -195,6 +195,9 @@ jobs:
       - name: Validate OpenAPI schema
         run: ./scripts/openapi-validate.sh
 
+      - name: Check for OpenAPI breaking changes
+        run: ./scripts/openapi-diff.sh
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: success()

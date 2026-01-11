@@ -563,7 +563,7 @@
         "Provide a deliberate update mechanism for snapshot changes (explicit command/script)",
         "Keep the diff process hermetic and fast (no network calls, no task execution)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-013-ruff-ruleset-expansion",
