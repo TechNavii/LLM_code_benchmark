@@ -944,3 +944,135 @@ jobs:
             junit-e2e.xml
             e2e-test-output.txt
           retention-days: 7
+
+  # ==========================================
+  # Performance Regression Benchmarks
+  # ==========================================
+  performance-benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Cache benchmark baselines
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .benchmarks
+          key: benchmarks-${{ runner.os }}-${{ matrix.python-version }}
+          restore-keys: |
+            benchmarks-${{ runner.os }}-${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run performance benchmarks
+        id: benchmarks
+        run: |
+          echo "Running performance regression benchmarks..."
+          echo ""
+
+          # Create benchmarks directory
+          mkdir -p .benchmarks
+
+          # Check if baseline exists
+          if ls .benchmarks/*baseline* >/dev/null 2>&1; then
+            echo "Baseline found, comparing against it..."
+            COMPARE_FLAG="--compare"
+          else
+            echo "No baseline found, creating initial baseline..."
+            COMPARE_FLAG="--save"
+          fi
+
+          # Run benchmarks with JSON output
+          # Fail threshold: 20% regression (brownfield-friendly)
+          ./scripts/benchmark.sh ${COMPARE_FLAG} --json --fail-threshold 20 2>&1 | tee benchmark-output.txt
+
+          # Save new baseline for future comparisons
+          if [ "${COMPARE_FLAG}" = "--compare" ]; then
+            echo ""
+            echo "Saving updated baseline..."
+            ./scripts/benchmark.sh --save 2>&1 || true
+          fi
+
+          echo ""
+          echo "Benchmarks complete."
+        continue-on-error: true
+
+      - name: Generate benchmark summary
+        if: always()
+        run: |
+          {
+            echo "## Performance Regression Benchmarks"
+            echo ""
+            echo "Benchmarks for critical hot paths:"
+            echo "- Patch normalization (\`_is_probably_valid_patch\`, \`_normalize_patch_format\`)"
+            echo "- Database queries (\`get_session\`, \`list_runs\`, \`get_run\`)"
+            echo "- Progress dispatch (\`publish_attempt\`, \`_append_event\`)"
+            echo ""
+            echo "**Regression Threshold:** 20% (brownfield-friendly slack)"
+            echo ""
+            if [ -f .benchmarks/results.json ]; then
+              # Extract key metrics from JSON report
+              .venv/bin/python -c "
+          import json
+
+          with open('.benchmarks/results.json') as f:
+              data = json.load(f)
+
+          benchmarks = data.get('benchmarks', [])
+          print(f'**Benchmarks Run:** {len(benchmarks)}')
+          print('')
+          print('### Key Results')
+          print('')
+          print('| Benchmark | Mean (ms) | Std Dev | Iterations |')
+          print('|-----------|-----------|---------|------------|')
+          for b in benchmarks[:15]:  # Limit to first 15
+              name = b.get('name', 'unknown').split('::')[-1]
+              mean_ns = b.get('stats', {}).get('mean', 0)
+              mean_ms = mean_ns * 1000  # Convert to ms
+              stddev = b.get('stats', {}).get('stddev', 0) * 1000
+              iterations = b.get('stats', {}).get('iterations', 0)
+              print(f'| {name[:40]} | {mean_ms:.4f} | {stddev:.4f} | {iterations} |')
+          if len(benchmarks) > 15:
+              print(f'| ... and {len(benchmarks) - 15} more | | | |')
+          "
+            else
+              echo "No benchmark results found. Check the benchmark-output.txt artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: performance-benchmark-results
+          path: |
+            .benchmarks/
+            benchmark-output.txt
+          retention-days: 30

@@ -1224,6 +1224,10 @@ protobuf==4.25.8 \
     # via
     #   googleapis-common-protos
     #   opentelemetry-proto
+py-cpuinfo==9.0.0 \
+    --hash=sha256:3cdbbf3fac90dc6f118bfd64384f309edeadd902d7c8fb17f02ffa1fc3f49690 \
+    --hash=sha256:859625bc251f64e21f077d099d4162689c762b5d6a4c3c97553d56241c9674d5
+    # via pytest-benchmark
 py-serializable==1.1.2 \
     --hash=sha256:801be61b0a1ba64c3861f7c624f1de5cfbbabf8b458acc9cdda91e8f7e5effa1 \
     --hash=sha256:89af30bc319047d4aa0d8708af412f6ce73835e18bacf1a080028bb9e2f42bdb
@@ -1259,6 +1263,7 @@ pytest==8.3.4 \
     #   -r requirements-dev.in
     #   pytest-asyncio
     #   pytest-base-url
+    #   pytest-benchmark
     #   pytest-cov
     #   pytest-playwright
     #   pytest-randomly
@@ -1272,6 +1277,10 @@ pytest-base-url==2.1.0 \
     --hash=sha256:02748589a54f9e63fcbe62301d6b0496da0d10231b753e950c63e03aee745d45 \
     --hash=sha256:3ad15611778764d451927b2a53240c1a7a591b521ea44cebfe45849d2d2812e6
     # via pytest-playwright
+pytest-benchmark==5.1.0 \
+    --hash=sha256:922de2dfa3033c227c96da942d1878191afa135a29485fb942e85dff1c592c89 \
+    --hash=sha256:9ea661cdc292e8231f7cd4c10b0319e56a2118e2c09d9f50e1b3d150d2aca105
+    # via -r requirements-dev.in
 pytest-cov==6.0.0 \
     --hash=sha256:eee6f1b9e61008bd34975a4d5bab25801eb31898b032dd55addc93e96fcaaa35 \
     --hash=sha256:fde0b595ca248bb8e2d76f020b465f3b107c9632e6a1d1705f17834c89dcadc0

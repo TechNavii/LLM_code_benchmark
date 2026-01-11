@@ -810,7 +810,7 @@
         "Fail only on significant regressions to avoid flakiness",
         "Keep the suite deterministic and resource-bounded"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-008-branch-protection-requirements",

@@ -21,3 +21,4 @@ cyclonedx-bom==4.6.1
 diff-cover==9.2.0
 schemathesis==3.36.0
 pytest-playwright==0.7.2
+pytest-benchmark==5.1.0

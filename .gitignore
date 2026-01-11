@@ -51,6 +51,7 @@ runs/
 *.db
 *.sqlite
 docs/sbom/
+.benchmarks/
 
 # IDE / editor
 .idea/
