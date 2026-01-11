@@ -14,3 +14,7 @@ _.Coroutine  # Type hint import for async type checking
 # Brownfield imports that may be needed for future functionality
 # TODO: Incrementally review and remove if truly unused
 _.defaultdict  # harness/run_harness.py - imported but not currently used
+
+# Structlog processor signature requires logger and method_name parameters
+# These are part of the structlog processor interface and must be accepted
+_.method_name  # server/redaction.py - structlog processor signature requirement

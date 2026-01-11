@@ -797,7 +797,7 @@
         "Ensure GUI debug logging remains gated and does not include tokens",
         "Keep redaction deterministic and avoid false-positive over-redaction where practical"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-018-performance-regression-budgets",

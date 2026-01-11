@@ -7,9 +7,15 @@ from collections.abc import Iterable
 
 import structlog
 
+from server.redaction import redact_secrets
+
 
 def configure_logging(handlers: Iterable[logging.Handler] | None = None) -> None:
-    """Configure stdlib logging and structlog with JSON output."""
+    """Configure stdlib logging and structlog with JSON output.
+
+    Includes automatic redaction of sensitive data (API keys, Bearer tokens,
+    and other common secret patterns) to prevent accidental credential leakage.
+    """
 
     if handlers is None:
         handlers = [logging.StreamHandler()]
@@ -27,6 +33,8 @@ def configure_logging(handlers: Iterable[logging.Handler] | None = None) -> None
             structlog.processors.add_log_level,
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
+            # Redact secrets before final rendering
+            redact_secrets,
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
