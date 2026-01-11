@@ -81,7 +81,7 @@
         "Add targeted ignores only where needed and keep rationale minimal",
         "Integrate into ./scripts/lint.sh and ensure it runs on CI"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-003-typecheck",
