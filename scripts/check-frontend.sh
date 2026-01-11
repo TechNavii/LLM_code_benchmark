@@ -48,8 +48,10 @@ if grep -rn '\bdebugger\b' gui/ --include="*.js" --exclude-dir=node_modules 2>/d
 fi
 
 # Check 5: Detect common CSS issues - empty rulesets
+# Use awk for cross-platform compatibility (grep -P not available on macOS)
 echo "  Checking for empty CSS rulesets..."
-if grep -Pzo '\{[[:space:]]*\}' gui/**/*.css 2>/dev/null | grep -q .; then
+EMPTY_RULESETS=$(find gui/ -name "*.css" -exec awk '/\{[[:space:]]*\}/' {} + 2>/dev/null | wc -l | tr -d ' ')
+if [ "$EMPTY_RULESETS" -gt 0 ]; then
     echo "⚠️  Found empty CSS rulesets"
     # Note: Warning only for brownfield code
 fi

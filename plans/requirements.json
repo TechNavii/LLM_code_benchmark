@@ -654,7 +654,7 @@
         "Fix any POSIX/bash portability issues surfaced by macOS",
         "Keep Windows optional unless explicitly required"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-009-dependabot-updates",

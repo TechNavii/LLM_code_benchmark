@@ -42,10 +42,12 @@ jobs:
           warn-only: false
 
   quality-checks:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
       matrix:
+        # Run on both Ubuntu and macOS for cross-platform script compatibility
+        os: [ubuntu-latest, macos-latest]
         # Enforce supported Python versions (defined in pyproject.toml: requires-python = ">=3.11")
         python-version: ["3.11", "3.12"]
 
@@ -66,15 +68,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .venv
-          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          key: venv-${{ matrix.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
           restore-keys: |
-            venv-${{ runner.os }}-${{ matrix.python-version }}-
+            venv-${{ matrix.os }}-${{ matrix.python-version }}-
 
       - name: Install actionlint
         run: |
-          # Install actionlint for workflow linting
-          curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz | tar xz -C /tmp
-          sudo mv /tmp/actionlint /usr/local/bin/
+          # Install actionlint for workflow linting (OS-specific binaries)
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz | tar xz -C /tmp
+            sudo mv /tmp/actionlint /usr/local/bin/
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_darwin_amd64.tar.gz | tar xz -C /tmp
+            sudo mv /tmp/actionlint /usr/local/bin/
+          fi
 
       - name: Run actionlint on workflows
         run: ./scripts/actionlint.sh
@@ -109,7 +116,7 @@ jobs:
 
           # Extract summary for PR comment using grouped redirects (SC2129)
           {
-            echo "## Diff Coverage Report (Python ${{ matrix.python-version }})"
+            echo "## Diff Coverage Report (${{ matrix.os }}/Python ${{ matrix.python-version }})"
             echo ""
             # Extract coverage percentage from diff-cover output
             if grep -q "Diff Coverage:" diff-cover-output.txt; then
@@ -129,7 +136,8 @@ jobs:
         continue-on-error: true
 
       - name: Post diff coverage summary to PR
-        if: github.event_name == 'pull_request' && matrix.python-version == '3.11'
+        # Only post one comment per PR (from ubuntu-latest/Python 3.11 job)
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         uses: actions/github-script@v7
         with:
           script: |
@@ -179,7 +187,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: github.event_name == 'pull_request'
         with:
-          name: diff-cover-report-py${{ matrix.python-version }}
+          name: diff-cover-report-${{ matrix.os }}-py${{ matrix.python-version }}
           path: |
             diff-cover.html
             diff-cover-output.txt
@@ -219,7 +227,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-report-py${{ matrix.python-version }}
+          name: coverage-report-${{ matrix.os }}-py${{ matrix.python-version }}
           path: htmlcov/
           retention-days: 7
 
@@ -227,7 +235,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: junit-results-py${{ matrix.python-version }}
+          name: junit-results-${{ matrix.os }}-py${{ matrix.python-version }}
           path: junit.xml
           retention-days: 7
 
@@ -235,22 +243,23 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-xml-py${{ matrix.python-version }}
+          name: coverage-xml-${{ matrix.os }}-py${{ matrix.python-version }}
           path: coverage.xml
           retention-days: 7
 
-      - name: Publish test results
+      - name: Publish test results (Ubuntu only)
+        # EnricoMi/publish-unit-test-result-action only supports Linux runners
         uses: EnricoMi/publish-unit-test-result-action@v2
-        if: always()
+        if: always() && matrix.os == 'ubuntu-latest'
         with:
           files: junit.xml
-          check_name: Test Results (Python ${{ matrix.python-version }})
+          check_name: Test Results (${{ matrix.os }}/Python ${{ matrix.python-version }})
 
       - name: Upload SBOM artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: sbom-py${{ matrix.python-version }}
+          name: sbom-${{ matrix.os }}-py${{ matrix.python-version }}
           path: |
             docs/sbom/sbom.json
             docs/sbom/sbom.xml
