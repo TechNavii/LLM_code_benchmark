@@ -1,0 +1,4 @@
+# file: /Users/tooru/Desktop/coding_test/benchmark/server/database_utils.py
+# hypothesis_version: 6.135.0
+
+['FAILED_STATUSES', 'api_error', 'attempts', 'completion_tokens', 'error', 'exception', 'extract_usage_tokens', 'fail', 'failed', 'input_tokens', 'output_tokens', 'parse_timestamp', 'prompt_tokens', 'status']

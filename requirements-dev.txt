@@ -9,6 +9,7 @@ anyio==4.12.1
 attrs==25.4.0
     # via
     #   glom
+    #   hypothesis
     #   jsonschema
     #   referencing
     #   semgrep
@@ -66,6 +67,8 @@ h11==0.16.0
 httpcore==1.0.9
     # via httpx
 httpx==0.28.1
+    # via -r requirements-dev.in
+hypothesis==6.135.0
     # via -r requirements-dev.in
 identify==2.6.15
     # via pre-commit
@@ -204,6 +207,8 @@ semgrep==1.102.0
     # via -r requirements-dev.in
 six==1.17.0
     # via rfc3339-validator
+sortedcontainers==2.4.0
+    # via hypothesis
 stevedore==5.6.0
     # via bandit
 tomli==2.0.2

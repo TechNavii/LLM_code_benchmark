@@ -446,7 +446,7 @@
         "Keep runtime bounded (small examples, limited max examples) to remain CI-friendly",
         "Ensure behavior is deterministic and does not touch filesystem outside temp dirs"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-011-progress-backpressure-and-cleanup",

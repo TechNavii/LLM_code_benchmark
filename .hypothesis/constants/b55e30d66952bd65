@@ -1,0 +1,4 @@
+# file: /Users/tooru/Desktop/coding_test/benchmark/server/progress_base.py
+# hypothesis_version: 6.135.0
+
+['BaseProgressManager', 'attempt', 'complete', 'done', 'error', 'events', 'init', 'message', 'metadata', 'queues', 'run', 'run_id', 'summary', 'type']

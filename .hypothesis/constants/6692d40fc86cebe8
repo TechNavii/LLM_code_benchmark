@@ -1,0 +1,4 @@
+# file: /Users/tooru/Desktop/coding_test/benchmark/server/config.py
+# hypothesis_version: 6.135.0
+
+[0.5, 300, 8000, 20000, '.env', '127.0.0.1', 'BENCHMARK_API_TOKEN', 'OPENROUTER_API_KEY', '__', 'api_token', 'case_sensitive', 'cors_origins', 'cpp', 'env_file', 'env_nested_delimiter', 'go', 'javascript', 'openrouter_api_key', 'protected_namespaces', 'python', 'runs', 'rust', 'settings_', 'tasks']

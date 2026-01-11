@@ -1,0 +1,4 @@
+# file: /Users/tooru/Desktop/coding_test/benchmark/conftest.py
+# hypothesis_version: 6.135.0
+
+['OPENROUTER_API_KEY']
