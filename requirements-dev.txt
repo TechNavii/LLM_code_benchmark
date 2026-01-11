@@ -79,9 +79,18 @@ importlib-metadata==7.1.0
 iniconfig==2.3.0
     # via pytest
 jsonschema==4.26.0
-    # via semgrep
+    # via
+    #   openapi-schema-validator
+    #   openapi-spec-validator
+    #   semgrep
+jsonschema-path==0.3.4
+    # via openapi-spec-validator
 jsonschema-specifications==2025.9.1
-    # via jsonschema
+    # via
+    #   jsonschema
+    #   openapi-schema-validator
+lazy-object-proxy==1.12.0
+    # via openapi-spec-validator
 markdown-it-py==4.0.0
     # via rich
 mdurl==0.1.2
@@ -92,6 +101,10 @@ mypy-extensions==1.1.0
     # via mypy
 nodeenv==1.10.0
     # via pre-commit
+openapi-schema-validator==0.6.3
+    # via openapi-spec-validator
+openapi-spec-validator==0.7.1
+    # via -r requirements-dev.in
 opentelemetry-api==1.25.0
     # via
     #   opentelemetry-exporter-otlp-proto-http
@@ -127,6 +140,8 @@ packaging==25.0
     #   build
     #   pytest
     #   semgrep
+pathable==0.4.4
+    # via jsonschema-path
 peewee==3.19.0
     # via semgrep
 pip-tools==7.5.2
@@ -159,15 +174,20 @@ pytest-cov==6.0.0
 pyyaml==6.0.3
     # via
     #   bandit
+    #   jsonschema-path
     #   pre-commit
-referencing==0.37.0
+referencing==0.36.2
     # via
     #   jsonschema
+    #   jsonschema-path
     #   jsonschema-specifications
 requests==2.32.5
     # via
+    #   jsonschema-path
     #   opentelemetry-exporter-otlp-proto-http
     #   semgrep
+rfc3339-validator==0.1.4
+    # via openapi-schema-validator
 rich==13.5.3
     # via
     #   bandit
@@ -182,6 +202,8 @@ ruff==0.8.4
     # via -r requirements-dev.in
 semgrep==1.102.0
     # via -r requirements-dev.in
+six==1.17.0
+    # via rfc3339-validator
 stevedore==5.6.0
     # via bandit
 tomli==2.0.2

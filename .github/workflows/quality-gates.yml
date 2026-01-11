@@ -59,6 +59,9 @@ jobs:
       - name: Run Semgrep security scan
         run: ./scripts/semgrep.sh
 
+      - name: Validate OpenAPI schema
+        run: ./scripts/openapi-validate.sh
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: success()

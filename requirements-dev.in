@@ -11,3 +11,4 @@ pip-tools>=7.4.1
 vulture==2.14
 bandit==1.8.0
 semgrep==1.102.0
+openapi-spec-validator==0.7.1

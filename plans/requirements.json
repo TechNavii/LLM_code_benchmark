@@ -407,7 +407,7 @@
         "Ensure schema generation does not require network calls or task execution",
         "Run in CI as part of the default validation job"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-008-api-contract-tests",
