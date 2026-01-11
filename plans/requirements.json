@@ -602,7 +602,7 @@
         "Ensure migration tests are hermetic and use temp directories",
         "Keep tasks/* suites excluded and runtime fast"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-006-concurrency-and-cancel-in-progress",
