@@ -303,7 +303,7 @@
         "Add tests that validate transient API error classification does not mark user-code failures as api_error",
         "Ensure the suite is fast and does not run tasks/* tests"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-007-database-utils-and-session-tests",
