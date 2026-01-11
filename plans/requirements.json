@@ -836,7 +836,7 @@
         "Keep it optional and avoid impacting non-container workflows",
         "Ensure it works on macOS/Linux hosts"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }
