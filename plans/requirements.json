@@ -706,7 +706,7 @@
         "Ensure randomness is reproducible via logged seeds",
         "Exclude tasks/* suites and keep tmp/workdir isolation intact"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }

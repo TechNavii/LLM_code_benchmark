@@ -586,3 +586,92 @@ jobs:
           name: weekly-extended-analysis
           path: .security-reports/
           retention-days: 90
+
+  # ==========================================
+  # Randomized Test Order (detect order dependencies)
+  # ==========================================
+  test-order-randomization:
+    name: Randomized Test Order
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run tests with randomized order
+        id: random-tests
+        run: |
+          echo "Running tests with randomized order..."
+          echo "pytest-randomly will automatically randomize test order"
+
+          # Generate a random seed (or use fixed seed for reproducibility debugging)
+          RANDOM_SEED=${PYTEST_RANDOMLY_SEED:-$RANDOM}
+          echo "Using random seed: ${RANDOM_SEED}"
+          echo "random_seed=${RANDOM_SEED}" >> "$GITHUB_OUTPUT"
+
+          # Run tests with randomized order
+          # pytest-randomly is enabled by default when installed
+          # Log the seed for reproducibility
+          .venv/bin/pytest \
+            tests/ harness/tests/ \
+            -p randomly \
+            --randomly-seed="${RANDOM_SEED}" \
+            -v \
+            --tb=short \
+            --junit-xml=junit-random.xml \
+            2>&1 | tee random-test-output.txt
+
+          # Check for test order dependencies
+          echo ""
+          echo "Tests completed with seed: ${RANDOM_SEED}"
+          echo "To reproduce this exact order, run:"
+          echo "  pytest tests/ harness/tests/ --randomly-seed=${RANDOM_SEED}"
+
+      - name: Log random seed for reproducibility
+        if: always()
+        run: |
+          {
+            echo "## Test Order Randomization Results"
+            echo ""
+            echo "**Random Seed:** \`${{ steps.random-tests.outputs.random_seed }}\`"
+            echo ""
+            echo "To reproduce locally:"
+            echo "\`\`\`bash"
+            echo "pytest tests/ harness/tests/ --randomly-seed=${{ steps.random-tests.outputs.random_seed }}"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: random-test-results
+          path: |
+            junit-random.xml
+            random-test-output.txt
+          retention-days: 7
