@@ -15,7 +15,7 @@ import concurrent.futures
 import gc
 import threading
 import weakref
-from typing import Any, Dict, List
+from typing import Any
 
 import pytest
 
@@ -37,7 +37,7 @@ class TestManySubscribers:
         await pm.start_run(run_id, {"kind": "stress"})
 
         # Create many subscribers
-        queues: List[asyncio.Queue[Dict[str, Any]]] = []
+        queues: list[asyncio.Queue[dict[str, Any]]] = []
         for _ in range(num_subscribers):
             queue = await pm.subscribe(run_id)
             queues.append(queue)
@@ -108,7 +108,7 @@ class TestManySubscribers:
         await asyncio.sleep(0.1)
 
         # Verify stable subscriber got all events in order
-        received: List[int] = []
+        received: list[int] = []
         while not stable_queue.empty():
             event = stable_queue.get_nowait()
             if event["type"] == "attempt":
@@ -298,8 +298,8 @@ class TestCrossThreadPublishing:
         # Consume init
         await asyncio.wait_for(queue.get(), timeout=1.0)
 
-        errors: List[BaseException] = []
-        published_indices: List[int] = []
+        errors: list[BaseException] = []
+        published_indices: list[int] = []
         lock = threading.Lock()
 
         def publish_from_thread(thread_idx: int) -> None:
@@ -325,7 +325,7 @@ class TestCrossThreadPublishing:
         await asyncio.sleep(0.3)
 
         # Collect all received events
-        received_indices: List[int] = []
+        received_indices: list[int] = []
         while not queue.empty():
             event = queue.get_nowait()
             if event["type"] == "attempt":
@@ -353,7 +353,7 @@ class TestCrossThreadPublishing:
         await asyncio.wait_for(stable_queue.get(), timeout=1.0)  # init
 
         stop_flag = threading.Event()
-        errors: List[BaseException] = []
+        errors: list[BaseException] = []
 
         def background_publisher() -> None:
             try:
@@ -485,7 +485,7 @@ class TestQAProgressManagerStress:
         queue = await pm.subscribe(run_id)
         await asyncio.wait_for(queue.get(), timeout=1.0)  # init
 
-        errors: List[BaseException] = []
+        errors: list[BaseException] = []
 
         def publish() -> None:
             try:
@@ -524,7 +524,7 @@ class TestEdgeCases:
     async def test_unsubscribe_nonexistent_run(self) -> None:
         """Unsubscribe from non-existent run should not raise."""
         pm = CodeProgressManager()
-        fake_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        fake_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         # Should not raise
         await pm.unsubscribe("nonexistent_run", fake_queue)
 
@@ -536,7 +536,7 @@ class TestEdgeCases:
 
         await pm.start_run(run_id, {})
         correct_queue = await pm.subscribe(run_id)
-        wrong_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        wrong_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
         # Should not raise
         await pm.unsubscribe(run_id, wrong_queue)

@@ -17,6 +17,7 @@ class HarnessSettings(BaseSettings):
     default_model: str = "openrouter/google/gemini-pro"
     default_temperature: float = 0.5
     default_max_tokens: int = 200000
+    lmstudio_base_url: str = "http://127.0.0.1:1234/v1"
     include_tests_by_default: bool = False
     install_deps_by_default: bool = False
     timeout_seconds: int = 300
@@ -26,7 +27,10 @@ class HarnessSettings(BaseSettings):
     allow_diff_rewrite_fallback: bool = False
     tasks_root: Path = ROOT / "tasks"
     runs_root: Path = ROOT / "runs"
-    expert_qa_judge_model: str | None = "openai/gpt-5-mini"
+    expert_qa_judge_model: str | None = Field(
+        default=None,
+        validation_alias="EXPERT_QA_JUDGE_MODEL",
+    )
     # Retry tuning (can be overridden via env)
     completion_max_retries: int = 12
     completion_retry_backoff_seconds: float = 10.0

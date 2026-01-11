@@ -20,7 +20,8 @@ import time
 import uuid
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any
+from collections.abc import Callable, Iterable
 
 try:
     import requests
@@ -72,7 +73,7 @@ MAX_LOG_CHARS = SETTINGS.max_log_chars
 DEFAULT_ALLOW_INCOMPLETE_DIFFS = SETTINGS.allow_incomplete_diffs
 DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK = SETTINGS.allow_diff_rewrite_fallback
 
-TASK_HINTS: Dict[str, str] = {
+TASK_HINTS: dict[str, str] = {
     "cpp_expert_sparse_matrix": textwrap.dedent(
         """
         Update the existing SparseMatrix class in-place. Do not introduce a second class definition or duplicate the declarations already present in sparse_matrix.{h,cpp}. Edit the current methods to use CSR storage and keep header/implementation aligned. Tests require: set(…,0) removes entries, get throws std::out_of_range for invalid indices, multiply enforces shape compatibility, transpose returns a new matrix, and nnz reflects stored entries.
@@ -155,7 +156,7 @@ def _is_probably_valid_patch(patch: str) -> bool:
 
 def _normalize_patch_format(patch: str) -> tuple[str, bool]:
     lines = patch.splitlines()
-    normalized: List[str] = []
+    normalized: list[str] = []
     in_hunk = False
     current_old_line = 1
     current_new_line = 1
@@ -232,8 +233,8 @@ def _normalize_patch_format(patch: str) -> tuple[str, bool]:
             prefix = line[: len(line) - len(stripped)]
             match = HUNK_HEADER_RE.match(stripped)
             suffix = ""
-            parsed_old_len_val: Optional[int] = None
-            parsed_new_len_val: Optional[int] = None
+            parsed_old_len_val: int | None = None
+            parsed_new_len_val: int | None = None
             old_start = current_old_line if current_old_line > 0 else 1
             new_start = current_new_line if current_new_line > 0 else 1
             old_len = measured_old
@@ -329,9 +330,9 @@ def _normalize_lmstudio_model_id(model: str) -> str:
 
 
 def _store_model_metadata(
-    registry: Dict[str, Dict[str, Any]],
+    registry: dict[str, dict[str, Any]],
     model_id: str,
-    metadata: Dict[str, Any],
+    metadata: dict[str, Any],
 ) -> None:
     existing = registry.get(model_id, {})
     if existing:
@@ -341,7 +342,7 @@ def _store_model_metadata(
     registry[model_id] = merged
 
 
-def fetch_model_metadata(models: List[str]) -> Dict[str, Dict[str, Any]]:
+def fetch_model_metadata(models: list[str]) -> dict[str, dict[str, Any]]:
     if requests is None:
         return {}
 
@@ -363,7 +364,7 @@ def fetch_model_metadata(models: List[str]) -> Dict[str, Dict[str, Any]]:
     except ValueError as exc:
         logger.warning("OpenRouter returned non-JSON response for models list: %s", exc)
         return {}
-    registry: Dict[str, Dict[str, Any]] = {}
+    registry: dict[str, dict[str, Any]] = {}
     for entry in data.get("data", []):
         model_id = entry.get("id")
         if not model_id:
@@ -412,11 +413,11 @@ fetch_model_pricing = fetch_model_metadata
 
 
 def expand_models_with_thinking_variants(
-    models: List[str],
-    metadata: Dict[str, Dict[str, Any]],
-) -> List[str]:
+    models: list[str],
+    metadata: dict[str, dict[str, Any]],
+) -> list[str]:
     """Return a model list expanded with thinking variants where available."""
-    expanded: List[str] = []
+    expanded: list[str] = []
     seen: set[str] = set()
 
     for model in models:
@@ -436,7 +437,7 @@ def expand_models_with_thinking_variants(
     return expanded
 
 
-def _compose_reasoning_payload(level: str) -> Dict[str, Any]:
+def _compose_reasoning_payload(level: str) -> dict[str, Any]:
     """Translate CLI input into the OpenRouter reasoning payload."""
     value = (level or "").strip()
     if not value:
@@ -460,7 +461,7 @@ def _compose_reasoning_payload(level: str) -> Dict[str, Any]:
     return {"effort": value}
 
 
-def discover_tasks() -> List[str]:
+def discover_tasks() -> list[str]:
     if not TASKS_ROOT.exists():
         return []
     return sorted(
@@ -470,7 +471,7 @@ def discover_tasks() -> List[str]:
     )
 
 
-def load_metadata(task_id: str) -> Dict:
+def load_metadata(task_id: str) -> dict:
     metadata_path = TASKS_ROOT / task_id / "metadata.json"
     if not metadata_path.exists():
         raise HarnessError(f"metadata.json not found for task {task_id}")
@@ -482,7 +483,7 @@ def should_include_in_prompt(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_EXTENSIONS
 
 
-def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> str:
+def build_prompt(task_id: str, metadata: dict, include_tests: bool = False) -> str:
     task_dir = TASKS_ROOT / task_id
     instructions_path = task_dir / metadata["instructions_file"]
     if not instructions_path.exists():
@@ -490,7 +491,7 @@ def build_prompt(task_id: str, metadata: Dict, include_tests: bool = False) -> s
     instructions = instructions_path.read_text(encoding="utf-8").strip()
 
     workspace_dir = task_dir / metadata.get("workspace_dir", "workspace")
-    contextual_snippets: List[str] = []
+    contextual_snippets: list[str] = []
 
     for source in sorted(workspace_dir.rglob("*")):
         if source.is_file() and should_include_in_prompt(source):
@@ -580,7 +581,7 @@ RETRY_BACKOFF_SECONDS = SETTINGS.completion_retry_backoff_seconds
 MAX_BACKOFF_SECONDS = SETTINGS.completion_max_backoff_seconds
 
 
-def _parse_retry_after(response: "requests.Response") -> Optional[float]:
+def _parse_retry_after(response: requests.Response) -> float | None:
     """Parse Retry-After header from response, returning seconds to wait."""
     retry_after = response.headers.get("Retry-After")
     if not retry_after:
@@ -594,7 +595,7 @@ def _parse_retry_after(response: "requests.Response") -> Optional[float]:
         from email.utils import parsedate_to_datetime
 
         retry_dt = parsedate_to_datetime(retry_after)
-        delay = (retry_dt - dt.datetime.now(dt.timezone.utc)).total_seconds()
+        delay = (retry_dt - dt.datetime.now(dt.UTC)).total_seconds()
         return max(0.0, delay)
     except (ValueError, TypeError):
         return None
@@ -603,7 +604,7 @@ def _parse_retry_after(response: "requests.Response") -> Optional[float]:
 def _classify_error(
     status: int,
     error_message: str,
-    retry_after: Optional[float] = None,
+    retry_after: float | None = None,
     is_empty_content: bool = False,
 ) -> HarnessError:
     """Classify an API error into the appropriate exception type."""
@@ -631,11 +632,11 @@ def call_openrouter(
     model: str,
     temperature: float,
     max_tokens: int,
-    preferred_provider: Optional[str] = None,
+    preferred_provider: str | None = None,
     *,
-    thinking_level: Optional[str] = None,
-    model_info: Optional[Dict[str, Any]] = None,
-) -> tuple[str, Dict, float]:
+    thinking_level: str | None = None,
+    model_info: dict[str, Any] | None = None,
+) -> tuple[str, dict, float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
 
@@ -678,12 +679,12 @@ def call_openrouter(
             if "include_reasoning" in supported_params:
                 payload["include_reasoning"] = True
 
-    last_error: Optional[HarnessError] = None
+    last_error: HarnessError | None = None
     backoff = RETRY_BACKOFF_SECONDS
 
     for attempt in range(MAX_COMPLETION_RETRIES):
         should_retry = False
-        retry_after: Optional[float] = None
+        retry_after: float | None = None
 
         try:
             start_time = time.perf_counter()
@@ -861,7 +862,7 @@ def call_lmstudio(
     model: str,
     temperature: float,
     max_tokens: int,
-) -> tuple[str, Dict, float]:
+) -> tuple[str, dict, float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call LM Studio.")
 
@@ -925,7 +926,7 @@ def call_lmstudio(
     message_obj = (first or {}).get("message") or {}
     content = message_obj.get("content", "")
     if isinstance(content, list):
-        parts: List[str] = []
+        parts: list[str] = []
         for item in content:
             if isinstance(item, dict) and item.get("type") == "text" and isinstance(item.get("text"), str):
                 parts.append(item["text"])
@@ -978,7 +979,7 @@ def clean_patch_text(patch_text: str) -> tuple[str, bool, bool]:
     return cleaned, git_style, synthetic_headers
 
 
-def prepare_run_directory(task_id: str, metadata: Dict) -> Path:
+def prepare_run_directory(task_id: str, metadata: dict) -> Path:
     task_dir = TASKS_ROOT / task_id
     workspace_dir = task_dir / metadata.get("workspace_dir", "workspace")
     tests_dir = task_dir / metadata.get("tests_dir", "tests")
@@ -1022,7 +1023,7 @@ def install_requirements(workspace_path: Path) -> None:
         )
 
 
-def _run_patch_command(args: List[str], patch_bytes: bytes, workspace_path: Path, timeout: int = 60):
+def _run_patch_command(args: list[str], patch_bytes: bytes, workspace_path: Path, timeout: int = 60):
     try:
         return subprocess.run(
             args,
@@ -1037,7 +1038,7 @@ def _run_patch_command(args: List[str], patch_bytes: bytes, workspace_path: Path
         raise HarnessError("Failed to apply patch: patch command timed out") from exc
 
 
-def _normalize_patch_path(path: str) -> Optional[str]:
+def _normalize_patch_path(path: str) -> str | None:
     path = path.strip()
     if not path or path in {"/dev/null", "dev/null"}:
         return None
@@ -1049,9 +1050,9 @@ def _normalize_patch_path(path: str) -> Optional[str]:
     return path.lstrip("./")
 
 
-def _extract_full_file_rewrites(cleaned_patch: str) -> Optional[Dict[str, str]]:
+def _extract_full_file_rewrites(cleaned_patch: str) -> dict[str, str] | None:
     lines = cleaned_patch.splitlines()
-    rewrites: Dict[str, str] = {}
+    rewrites: dict[str, str] = {}
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -1066,7 +1067,7 @@ def _extract_full_file_rewrites(cleaned_patch: str) -> Optional[Dict[str, str]]:
             return None
         new_path = lines[i][4:].strip()
         i += 1
-        content_lines: List[str] = []
+        content_lines: list[str] = []
         has_minus = False
         while i < len(lines):
             current = lines[i]
@@ -1140,7 +1141,7 @@ def _parse_unified_diff(cleaned_patch: str):
                 start_new = int(match.group("new_start"))
                 len_new = int(match.group("new_len") or "1")
                 i += 1
-                hunk_lines: List[str] = []
+                hunk_lines: list[str] = []
                 while i < len(lines):
                     candidate = lines[i]
                     if candidate.startswith("diff --git") or candidate.startswith("--- ") or candidate.startswith("@@"):
@@ -1154,22 +1155,22 @@ def _parse_unified_diff(cleaned_patch: str):
     return files or None
 
 
-def _apply_parsed_unified_diff(file_diffs, workspace_path: Path) -> Optional[List[str]]:
-    rewritten: List[str] = []
+def _apply_parsed_unified_diff(file_diffs, workspace_path: Path) -> list[str] | None:
+    rewritten: list[str] = []
     for old_path, new_path, hunks in file_diffs:
         target_rel = _normalize_patch_path(new_path)
         if target_rel is None:
             return None
         source_rel = _normalize_patch_path(old_path)
         if source_rel is None:
-            original_lines: List[str] = []
+            original_lines: list[str] = []
         else:
             source_file = workspace_path / source_rel
             if source_file.exists():
                 original_lines = source_file.read_text(encoding="utf-8").splitlines()
             else:
                 original_lines = []
-        result_lines: List[str] = []
+        result_lines: list[str] = []
         orig_index = 0
         for start_old, len_old, start_new, len_new, hunk_lines in hunks:
             zero_based = max(start_old - 1, 0)
@@ -1233,7 +1234,7 @@ def _parse_loose_unified_diff(cleaned_patch: str):
             if current.startswith("@@"):
                 header = current
                 i += 1
-                hunk_ops: List[Tuple[str, str]] = []
+                hunk_ops: list[tuple[str, str]] = []
                 while i < len(lines):
                     candidate = lines[i]
                     if candidate.startswith("diff --git") or candidate.startswith("--- ") or candidate.startswith("@@"):
@@ -1259,7 +1260,7 @@ def _parse_loose_unified_diff(cleaned_patch: str):
     return files or None
 
 
-def _find_subsequence(haystack: List[str], needle: List[str], start: int) -> Optional[int]:
+def _find_subsequence(haystack: list[str], needle: list[str], start: int) -> int | None:
     if not needle:
         return start
     end_limit = len(haystack) - len(needle)
@@ -1272,7 +1273,7 @@ def _find_subsequence(haystack: List[str], needle: List[str], start: int) -> Opt
     return None
 
 
-_COMPARE_STRATEGIES: Tuple[Callable[[str], str], ...] = (
+_COMPARE_STRATEGIES: tuple[Callable[[str], str], ...] = (
     lambda s: s,
     lambda s: s.expandtabs(4),
     lambda s: re.sub(r"\s+", " ", s.strip()),
@@ -1288,7 +1289,7 @@ def _lines_equivalent(left: str, right: str) -> bool:
     return False
 
 
-def _locate_hunk(updated_lines: List[str], pattern: List[str], search_start: int) -> Optional[int]:
+def _locate_hunk(updated_lines: list[str], pattern: list[str], search_start: int) -> int | None:
     for transform in _COMPARE_STRATEGIES:
         haystack = [transform(line) for line in updated_lines]
         needle = [transform(line) for line in pattern]
@@ -1324,8 +1325,8 @@ def _locate_hunk(updated_lines: List[str], pattern: List[str], search_start: int
     return None
 
 
-def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List[str]]:
-    planned_writes: List[Tuple[str, str]] = []
+def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> list[str] | None:
+    planned_writes: list[tuple[str, str]] = []
     for old_path, new_path, hunks in file_diffs:
         if not hunks:
             continue
@@ -1352,7 +1353,7 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
                     start_index = search_start
                 else:
                     return None
-            new_segment: List[str] = []
+            new_segment: list[str] = []
             cursor = start_index
             for tag, text in hunk_ops:
                 if tag == " ":
@@ -1362,7 +1363,7 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
                             cursor += 1
                         continue
                     search_cursor = cursor
-                    temp_buffer: List[str] = []
+                    temp_buffer: list[str] = []
                     found = False
                     while search_cursor < len(updated_lines):
                         existing_line = updated_lines[search_cursor]
@@ -1380,7 +1381,7 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
                     if not found:
                         return None
                 elif tag == "-":
-                    temp_segment: List[str] = []
+                    temp_segment: list[str] = []
                     temp_cursor = cursor
                     removed = False
                     while temp_cursor < len(updated_lines):
@@ -1412,7 +1413,7 @@ def _apply_loose_unified_diff(file_diffs, workspace_path: Path) -> Optional[List
         planned_writes.append((target_rel, updated_text))
     if not planned_writes:
         return None
-    rewritten: List[str] = []
+    rewritten: list[str] = []
     for rel_path, content in planned_writes:
         target_path = workspace_path / rel_path
         target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1426,10 +1427,10 @@ def _apply_diff_rewrite_fallback(
     workspace_path: Path,
     *,
     allow_strict_parse: bool,
-) -> Optional[List[str]]:
+) -> list[str] | None:
     rewrites = _extract_full_file_rewrites(cleaned_patch)
     if rewrites:
-        rewritten_files: List[str] = []
+        rewritten_files: list[str] = []
         for rel_path, content in rewrites.items():
             target_path = workspace_path / rel_path
             target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1480,7 +1481,7 @@ def apply_patch(
     workspace_path: Path,
     *,
     allow_diff_rewrite_fallback: bool,
-    attempt_summary: Dict,
+    attempt_summary: dict,
     attempt_dir: Path,
 ) -> None:
     cleaned_patch, git_style, synthetic_headers = clean_patch_text(patch_text)
@@ -1520,11 +1521,11 @@ def apply_patch(
 
 
 def run_evaluation(
-    command: List[str],
+    command: list[str],
     workspace_path: Path,
     timeout: int,
-    env_updates: Optional[Dict[str, str]] = None,
-    working_dir: Optional[str] = None,
+    env_updates: dict[str, str] | None = None,
+    working_dir: str | None = None,
 ) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env.setdefault("PYTHONPATH", ".")
@@ -1555,7 +1556,7 @@ def truncate_log(text: str) -> str:
 
 
 def create_run_directory(output_root: Path) -> Path:
-    timestamp = dt.datetime.now(dt.timezone.utc).strftime("run_%Y%m%dT%H%M%SZ")
+    timestamp = dt.datetime.now(dt.UTC).strftime("run_%Y%m%dT%H%M%SZ")
     run_dir = output_root / f"{timestamp}_{uuid.uuid4().hex[:6]}"
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -1568,26 +1569,26 @@ def store_text(path: Path, content: str) -> None:
 
 def evaluate_attempt(
     task_id: str,
-    metadata: Dict,
+    metadata: dict,
     model: str,
     sample_index: int,
     temperature: float,
     max_tokens: int,
-    preferred_provider: Optional[str],
-    thinking_level: Optional[str],
-    model_metadata: Dict[str, Dict[str, Any]],
+    preferred_provider: str | None,
+    thinking_level: str | None,
+    model_metadata: dict[str, dict[str, Any]],
     include_tests: bool,
     install_deps_flag: bool,
-    response_override: Optional[str],
+    response_override: str | None,
     allow_incomplete_diffs: bool,
     allow_diff_rewrite_fallback: bool,
     run_dir: Path,
-) -> Dict:
+) -> dict:
     prompt = build_prompt(task_id, metadata, include_tests=include_tests)
 
     # Use the requested thinking level for artifact directory suffix so that
     # base/low/medium/high attempts never collide, even when reasoning is unsupported.
-    def _sanitize_level_for_dir(level: Optional[str]) -> str:
+    def _sanitize_level_for_dir(level: str | None) -> str:
         if not level:
             return "base"
         # Keep it filesystem-friendly
@@ -1669,7 +1670,7 @@ def evaluate_attempt(
         store_text(attempt_dir / "response.json", json.dumps(response_meta, indent=2))
         usage = response_meta.get("usage")
 
-    workspace_path: Optional[Path] = None
+    workspace_path: Path | None = None
     try:
         patch_text = extract_patch(raw_response, allow_incomplete_diffs=allow_incomplete_diffs)
         store_text(attempt_dir / "patch.diff", patch_text)
@@ -1725,8 +1726,8 @@ def evaluate_attempt(
     return attempt_summary
 
 
-def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str], samples: int) -> Dict:
-    def _estimate_pass_at_k(total: int, correct: int, k: int) -> Optional[float]:
+def compute_metrics(attempts: Iterable[dict], models: list[str], tasks: list[str], samples: int) -> dict:
+    def _estimate_pass_at_k(total: int, correct: int, k: int) -> float | None:
         if total <= 0 or k <= 0:
             return None
         k = min(k, total)
@@ -1742,13 +1743,13 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
     # Count api_errors separately for reporting
     api_error_count = sum(1 for a in attempts_list if a.get("status") == "api_error")
 
-    metrics: Dict[str, Dict[str, Optional[float]]] = {
+    metrics: dict[str, dict[str, float | None]] = {
         "model_accuracy": {},
         "model_attempt_success": {},
     }
-    pass_at_1: Dict[str, Optional[float]] = {}
-    pass_at_k: Dict[str, Optional[float]] = {}
-    api_errors_by_model: Dict[str, int] = {}
+    pass_at_1: dict[str, float | None] = {}
+    pass_at_k: dict[str, float | None] = {}
+    api_errors_by_model: dict[str, int] = {}
 
     for model in models:
         model_attempts = [a for a in attempts_list if a["model"] == model]
@@ -1767,8 +1768,8 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
         successes = sum(1 for a in evaluable_attempts if a["status"] == "passed")
         metrics["model_attempt_success"][model] = successes / len(evaluable_attempts)
 
-        task_pass_at_1: List[float] = []
-        task_pass_at_k: List[float] = []
+        task_pass_at_1: list[float] = []
+        task_pass_at_k: list[float] = []
 
         for task in tasks:
             # Exclude api_error attempts from pass@k calculation
@@ -1804,7 +1805,7 @@ def compute_metrics(attempts: Iterable[Dict], models: List[str], tasks: List[str
     return metrics
 
 
-def _bucket_level_for_metrics(attempt: Dict, default_level: Optional[str] = None) -> str:
+def _bucket_level_for_metrics(attempt: dict, default_level: str | None = None) -> str:
     # Mirror server/database._determine_model_level logic for consistency
     applied = attempt.get("thinking_level_applied")
     if applied:
@@ -1817,13 +1818,13 @@ def _bucket_level_for_metrics(attempt: Dict, default_level: Optional[str] = None
 
 
 def compute_metrics_by_thinking_level(
-    attempts: Iterable[Dict],
-    models: List[str],
-    tasks: List[str],
+    attempts: Iterable[dict],
+    models: list[str],
+    tasks: list[str],
     samples: int,
-    default_level: Optional[str] = None,
-) -> Dict[str, Dict[str, Dict[str, float]]]:
-    def _estimate_pass_at_k(total: int, correct: int, k: int) -> Optional[float]:
+    default_level: str | None = None,
+) -> dict[str, dict[str, dict[str, float]]]:
+    def _estimate_pass_at_k(total: int, correct: int, k: int) -> float | None:
         if total <= 0 or k <= 0:
             return None
         k = min(k, total)
@@ -1833,9 +1834,9 @@ def compute_metrics_by_thinking_level(
             return 1.0
         return 1.0 - math.comb(total - correct, k) / math.comb(total, k)
 
-    result: Dict[str, Dict[str, Dict[str, float]]] = {}
+    result: dict[str, dict[str, dict[str, float]]] = {}
     # Pre-index attempts per (model, level)
-    per_model_level: Dict[str, Dict[str, List[Dict]]] = {}
+    per_model_level: dict[str, dict[str, list[dict]]] = {}
     for a in attempts:
         model = a.get("model")
         if not model:
@@ -1858,15 +1859,15 @@ def compute_metrics_by_thinking_level(
             errored = sum(1 for x in evaluable_attempts if (x.get("status") or "").lower() == "error")
 
             # Task-level pass@k accuracy for this level (excluding api_error)
-            tasks_for_level: Dict[str, List[Dict]] = {}
+            tasks_for_level: dict[str, list[dict]] = {}
             for x in evaluable_attempts:
                 tid = x.get("task_id")
                 if not tid:
                     continue
                 tasks_for_level.setdefault(tid, []).append(x)
             task_ids = list(tasks_for_level.keys())
-            pass_at_1_values: List[float] = []
-            pass_at_k_values: List[float] = []
+            pass_at_1_values: list[float] = []
+            pass_at_k_values: list[float] = []
             for tid in task_ids:
                 attempts_for_task = tasks_for_level[tid]
                 task_total = len(attempts_for_task)
@@ -1900,7 +1901,7 @@ def _safe_name(value: str) -> str:
     return safe.strip("._-") or "default"
 
 
-def update_task_latest(task_id: str, attempt_summary: Dict) -> None:
+def update_task_latest(task_id: str, attempt_summary: dict) -> None:
     RUN_ARTIFACTS.mkdir(exist_ok=True)
     model = _safe_name(attempt_summary.get("model", "unknown"))
     output_path = RUN_ARTIFACTS / f"{task_id}__{model}_latest.json"
@@ -1937,7 +1938,7 @@ def update_task_latest(task_id: str, attempt_summary: Dict) -> None:
     store_text(index_path, json.dumps(current_index, indent=2))
 
 
-def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="OpenRouter benchmark harness")
     parser.add_argument("--task", help="Evaluate a single task identifier")
     parser.add_argument("--tasks", nargs="+", help="Evaluate multiple tasks or 'all' for every available task")
@@ -2015,7 +2016,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def load_failed_attempts(run_dir: Path) -> List[Dict]:
+def load_failed_attempts(run_dir: Path) -> list[dict]:
     """Load attempts from a previous run that failed (error, fail, api_error).
 
     Supports both completed runs (with attempts.json/summary.json) and
@@ -2039,7 +2040,7 @@ def load_failed_attempts(run_dir: Path) -> List[Dict]:
     return []
 
 
-def load_api_error_attempts(run_dir: Path) -> List[Dict]:
+def load_api_error_attempts(run_dir: Path) -> list[dict]:
     """Load attempts from a previous run that had api_error status.
 
     Supports both completed runs (with attempts.json/summary.json) and
@@ -2074,7 +2075,7 @@ def load_api_error_attempts(run_dir: Path) -> List[Dict]:
         "OpenRouter returned empty content",
     ]
 
-    api_error_attempts: List[Dict] = []
+    api_error_attempts: list[dict] = []
     for attempt_dir in run_dir.iterdir():
         if not attempt_dir.is_dir():
             continue
@@ -2127,18 +2128,18 @@ def retry_api_error_attempts(
     original_run_dir: Path,
     temperature: float = 0.0,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    preferred_provider: Optional[str] = None,
+    preferred_provider: str | None = None,
     include_tests: bool = False,
     install_deps: bool = False,
     output_dir: Path = RUN_ARTIFACTS,
-    allow_incomplete_diffs: Optional[bool] = None,
-    allow_diff_rewrite_fallback: Optional[bool] = None,
-    progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
-    filter_task_id: Optional[str] = None,
-    filter_model: Optional[str] = None,
-    filter_sample_index: Optional[int] = None,
-    run_id: Optional[str] = None,
-) -> Dict:
+    allow_incomplete_diffs: bool | None = None,
+    allow_diff_rewrite_fallback: bool | None = None,
+    progress_callback: Callable[[str, str, int, dict], None] | None = None,
+    filter_task_id: str | None = None,
+    filter_model: str | None = None,
+    filter_sample_index: int | None = None,
+    run_id: str | None = None,
+) -> dict:
     """
     Retry only the api_error attempts from a previous run.
     Creates a new run directory with retried attempts merged with successful ones.
@@ -2186,7 +2187,7 @@ def retry_api_error_attempts(
     if allow_diff_rewrite_fallback is None:
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
 
-    retried_attempts: List[Dict] = []
+    retried_attempts: list[dict] = []
 
     for i, original_attempt in enumerate(api_error_attempts, 1):
         task_id = original_attempt["task_id"]
@@ -2242,7 +2243,7 @@ def retry_api_error_attempts(
     status_counts = Counter(a.get("status") for a in retried_attempts)
 
     summary = {
-        "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
         "run_id": run_id,
         "run_dir": str(run_dir),
         "original_run_dir": str(original_run_dir),
@@ -2272,18 +2273,18 @@ def retry_failed_attempts(
     original_run_dir: Path,
     temperature: float = 0.0,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    preferred_provider: Optional[str] = None,
+    preferred_provider: str | None = None,
     include_tests: bool = False,
     install_deps: bool = False,
     output_dir: Path = RUN_ARTIFACTS,
-    allow_incomplete_diffs: Optional[bool] = None,
-    allow_diff_rewrite_fallback: Optional[bool] = None,
-    progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
-    filter_task_id: Optional[str] = None,
-    filter_model: Optional[str] = None,
-    filter_sample_index: Optional[int] = None,
-    run_id: Optional[str] = None,
-) -> Dict:
+    allow_incomplete_diffs: bool | None = None,
+    allow_diff_rewrite_fallback: bool | None = None,
+    progress_callback: Callable[[str, str, int, dict], None] | None = None,
+    filter_task_id: str | None = None,
+    filter_model: str | None = None,
+    filter_sample_index: int | None = None,
+    run_id: str | None = None,
+) -> dict:
     """
     Retry any failed attempts (error, fail, api_error) from a previous run.
     Creates a new run directory with retried attempts.
@@ -2326,7 +2327,7 @@ def retry_failed_attempts(
     if allow_diff_rewrite_fallback is None:
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
 
-    retried_attempts: List[Dict] = []
+    retried_attempts: list[dict] = []
 
     for i, original_attempt in enumerate(failed_attempts, 1):
         task_id = original_attempt["task_id"]
@@ -2382,7 +2383,7 @@ def retry_failed_attempts(
     status_counts = Counter(a.get("status") for a in retried_attempts)
 
     summary = {
-        "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
         "run_id": run_id,
         "run_dir": str(run_dir),
         "original_run_dir": str(original_run_dir),
@@ -2407,7 +2408,7 @@ def retry_failed_attempts(
     return summary
 
 
-def load_incomplete_attempts(run_dir: Path) -> List[Dict]:
+def load_incomplete_attempts(run_dir: Path) -> list[dict]:
     """Load attempts from a run that were started but didn't complete.
 
     An incomplete attempt has:
@@ -2417,7 +2418,7 @@ def load_incomplete_attempts(run_dir: Path) -> List[Dict]:
 
     Returns list of dicts with task_id, model, sample_index, thinking_level info.
     """
-    incomplete: List[Dict] = []
+    incomplete: list[dict] = []
 
     # Get completed attempts from summary if it exists
     summary_file = run_dir / "summary.json"
@@ -2499,13 +2500,13 @@ def resume_incomplete_run(
     run_dir: Path,
     temperature: float = 0.0,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    preferred_provider: Optional[str] = None,
+    preferred_provider: str | None = None,
     include_tests: bool = False,
     install_deps: bool = False,
-    allow_incomplete_diffs: Optional[bool] = None,
-    allow_diff_rewrite_fallback: Optional[bool] = None,
-    progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
-) -> Dict:
+    allow_incomplete_diffs: bool | None = None,
+    allow_diff_rewrite_fallback: bool | None = None,
+    progress_callback: Callable[[str, str, int, dict], None] | None = None,
+) -> dict:
     """
     Resume an incomplete run by retrying attempts that didn't finish.
     Updates the original run directory with completed attempts.
@@ -2527,8 +2528,8 @@ def resume_incomplete_run(
 
     # Load existing summary or create new one
     summary_file = run_dir / "summary.json"
-    existing_attempts: List[Dict] = []
-    existing_summary: Dict = {}
+    existing_attempts: list[dict] = []
+    existing_summary: dict = {}
 
     if summary_file.exists():
         with summary_file.open("r", encoding="utf-8") as f:
@@ -2545,7 +2546,7 @@ def resume_incomplete_run(
     if allow_diff_rewrite_fallback is None:
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
 
-    new_attempts: List[Dict] = []
+    new_attempts: list[dict] = []
 
     for i, incomplete in enumerate(incomplete_attempts, 1):
         task_id = incomplete["task_id"]
@@ -2605,7 +2606,7 @@ def resume_incomplete_run(
     # Update or create summary
     run_id = run_dir.name
     summary = {
-        "timestamp_utc": existing_summary.get("timestamp_utc", dt.datetime.now(dt.timezone.utc).isoformat()),
+        "timestamp_utc": existing_summary.get("timestamp_utc", dt.datetime.now(dt.UTC).isoformat()),
         "run_id": run_id,
         "run_dir": str(run_dir),
         "tasks": all_tasks,
@@ -2616,7 +2617,7 @@ def resume_incomplete_run(
         "attempts": all_attempts,
         "status_counts": dict(status_counts),
         "metrics": compute_metrics(all_attempts, all_models, all_tasks, existing_summary.get("samples", 1)),
-        "resumed_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "resumed_at": dt.datetime.now(dt.UTC).isoformat(),
         "resumed_count": len(new_attempts),
     }
 
@@ -2647,7 +2648,7 @@ def resume_incomplete_run(
     return summary
 
 
-def resolve_task_list(args: argparse.Namespace) -> List[str]:
+def resolve_task_list(args: argparse.Namespace) -> list[str]:
     if args.task and args.tasks:
         raise HarnessError("Use either --task or --tasks, not both.")
     if args.task:
@@ -2664,25 +2665,25 @@ def resolve_task_list(args: argparse.Namespace) -> List[str]:
 
 def run_tasks(
     *,
-    tasks: List[str],
-    models: List[str],
+    tasks: list[str],
+    models: list[str],
     samples: int = 1,
     temperature: float = 0.0,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-    preferred_provider: Optional[str] = None,
-    thinking_level: Optional[str] = None,
+    preferred_provider: str | None = None,
+    thinking_level: str | None = None,
     sweep_thinking_levels: bool = False,
     include_thinking_variants: bool = False,
     include_tests: bool = False,
     install_deps: bool = False,
     output_dir: Path = RUN_ARTIFACTS,
-    response_file: Optional[Path] = None,
-    response_text: Optional[str] = None,
-    allow_incomplete_diffs: Optional[bool] = None,
-    allow_diff_rewrite_fallback: Optional[bool] = None,
-    progress_callback: Optional[Callable[[str, str, int, Dict], None]] = None,
-    run_id: Optional[str] = None,
-) -> Dict:
+    response_file: Path | None = None,
+    response_text: str | None = None,
+    allow_incomplete_diffs: bool | None = None,
+    allow_diff_rewrite_fallback: bool | None = None,
+    progress_callback: Callable[[str, str, int, dict], None] | None = None,
+    run_id: str | None = None,
+) -> dict:
     samples = max(1, samples)
     if response_file and (len(tasks) != 1 or len(models) != 1 or samples != 1):
         raise HarnessError("--response-file is only supported for single-task, single-model, single-sample runs.")
@@ -2713,10 +2714,10 @@ def run_tasks(
     if allow_diff_rewrite_fallback is None:
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
 
-    attempts: List[Dict] = []
-    patch_fallbacks_used: List[str] = []
+    attempts: list[dict] = []
+    patch_fallbacks_used: list[str] = []
 
-    def _suggest_levels_for_model(model_id: str) -> List[str]:
+    def _suggest_levels_for_model(model_id: str) -> list[str]:
         info = model_metadata.get(model_id) or {}
         params = {p.lower() for p in (info.get("supported_parameters") or []) if isinstance(p, str)}
         if "reasoning" not in params:
@@ -2726,7 +2727,7 @@ def run_tasks(
 
     for model in models:
         # Determine which thinking levels to evaluate for this model
-        levels: List[Optional[str]]
+        levels: list[str | None]
         if sweep_thinking_levels:
             suggested = _suggest_levels_for_model(model)
             levels = [None] + (suggested or ["low", "medium", "high"])  # fallback if unknown
@@ -2808,9 +2809,9 @@ def run_tasks(
             total_cost += attempt_cost
 
     status_counts = Counter(attempt.get("status") for attempt in attempts)
-    model_status_counts: Dict[str, Dict[str, int]] = {}
-    task_status: Dict[str, str] = {}
-    attempt_manifest: List[Dict[str, Any]] = []
+    model_status_counts: dict[str, dict[str, int]] = {}
+    task_status: dict[str, str] = {}
+    attempt_manifest: list[dict[str, Any]] = []
 
     for attempt in attempts:
         model_status_counts.setdefault(attempt["model"], {}).setdefault(attempt.get("status"), 0)
@@ -2828,7 +2829,7 @@ def run_tasks(
         )
 
     summary = {
-        "timestamp_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
         "run_id": run_id,
         "run_dir": str(run_dir),
         "run_dir_relative_to_output": run_dir_relative,
@@ -2881,7 +2882,7 @@ def run_tasks(
     return summary
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
     allow_incomplete_diffs = (
@@ -2899,7 +2900,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not run_dir.exists():
             raise HarnessError(f"Run directory not found: {run_dir}")
 
-        def progress_callback(model: str, task_id: str, sample_index: int, summary: Dict) -> None:
+        def progress_callback(model: str, task_id: str, sample_index: int, summary: dict) -> None:
             _cli_echo(f"[{model}] {task_id} sample {sample_index}: {summary['status']}")
 
         if args.resume_incomplete:
@@ -2947,7 +2948,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _cli_echo(prompt)
         return 0
 
-    def progress_callback(model: str, task_id: str, sample_index: int, summary: Dict) -> None:
+    def progress_callback(model: str, task_id: str, sample_index: int, summary: dict) -> None:
         _cli_echo(f"[{model}] {task_id} sample {sample_index}: {summary['status']}")
 
     summary = run_tasks(

@@ -22,26 +22,46 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.ruff.lint]
-# Start with a focused ruleset to avoid massive refactoring
+# Expanded ruleset for higher signal bug prevention
 select = [
-    "E",   # pycodestyle errors
-    "F",   # pyflakes
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
     "T201", # print() usage detection (flake8-print)
+    "B",    # flake8-bugbear - common bug patterns
+    "UP",   # pyupgrade - Python version upgrade suggestions
+    "SIM",  # flake8-simplify - code simplification
+    "PERF", # Perflint - performance anti-patterns
 ]
 
 # Allow brownfield code patterns temporarily
 ignore = [
-    "E402",  # Module level import not at top (common in existing code)
-    "E501",  # Line too long (brownfield code has many long lines)
+    "E402",   # Module level import not at top (common in existing code)
+    "E501",   # Line too long (brownfield code has many long lines)
+    # Bugbear rules that are too noisy for brownfield adoption
+    "B008",   # Do not perform function calls in argument defaults (common pattern)
+    "B904",   # Within an except clause, raise exceptions with `from err` (gradual)
+    # Simplify rules that require larger refactoring
+    "SIM108", # Use ternary operator instead of if-else (stylistic preference)
+    # Perflint rules that are too strict for brownfield
+    "PERF203", # try-except in loop (sometimes necessary)
 ]
 
 [tool.ruff.lint.per-file-ignores]
 # Allow unused imports and variables in specific files that need gradual cleanup
-"harness/expert_questions/run_benchmark.py" = ["F841"]
-"harness/run_harness.py" = ["F401", "F841"]
-"server/database.py" = ["F401"]
+"harness/expert_questions/run_benchmark.py" = ["F841", "B007"]  # B007: unused loop var in stats iteration
+"harness/run_harness.py" = [
+    "F401", "F841",
+    "UP022",   # capture_output (subprocess calls use explicit stdout/stderr for clarity)
+    "B007",    # unused loop variables in tuple unpacking (intentional pattern)
+    "SIM103",  # return condition directly (readability: multi-condition returns)
+    "SIM105",  # contextlib.suppress (explicit try/except preferred for clarity)
+    "SIM110",  # return any() (readability: explicit loop over strategies)
+    "PERF401", # list comprehension (brownfield: complex dict transformations)
+]
+"harness/secure_execution.py" = ["UP022"]  # capture_output (needs explicit stdout/stderr for preexec_fn)
+"server/database.py" = ["F401", "PERF401"]  # PERF401: complex dict in list comprehension
 "server/monitoring.py" = ["F401"]
-"server/qa_database.py" = ["F401"]
+"server/qa_database.py" = ["F401", "PERF401"]  # PERF401: complex dict in list comprehension
 
 [tool.mypy]
 # Brownfield-safe mypy settings for incremental adoption

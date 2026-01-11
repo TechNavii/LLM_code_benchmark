@@ -576,7 +576,7 @@
         "Adopt fixes incrementally to avoid large-scale churn",
         "Gate the expanded ruleset in ./scripts/lint.sh once noise is manageable"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-012-cli-entrypoint-smoke",

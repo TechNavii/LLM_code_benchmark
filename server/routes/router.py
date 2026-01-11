@@ -4,7 +4,7 @@ import asyncio
 import datetime as dt
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -50,35 +50,35 @@ class RunLaunchResponse(BaseModel):
 
 
 class RunDetailResponse(BaseModel):
-    summary: Dict[str, Any]
+    summary: dict[str, Any]
 
 
 class RunSummary(BaseModel):
     run_id: str
-    timestamp_utc: Optional[str]
-    model_id: Optional[str]
-    accuracy: Optional[float]
-    total_cost_usd: Optional[float]
-    total_duration_seconds: Optional[float]
+    timestamp_utc: str | None
+    model_id: str | None
+    accuracy: float | None
+    total_cost_usd: float | None
+    total_duration_seconds: float | None
 
 
 class RunListResponse(BaseModel):
-    runs: List[RunSummary]
+    runs: list[RunSummary]
 
 
 class RunRequestPayload(BaseModel):
-    models: List[str]
-    tasks: Optional[List[str]] = None
+    models: list[str]
+    tasks: list[str] | None = None
     samples: int = 1
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
-    provider: Optional[str] = None
+    provider: str | None = None
     include_tests: bool = False
     install_deps: bool = False
     allow_incomplete_diffs: bool = DEFAULT_ALLOW_INCOMPLETE_DIFFS
     allow_diff_rewrite_fallback: bool = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
-    response_text: Optional[str] = None
-    thinking_level: Optional[str] = None
+    response_text: str | None = None
+    thinking_level: str | None = None
     include_thinking_variants: bool = False
     sweep_thinking_levels: bool = False
 
@@ -89,7 +89,7 @@ def index() -> RedirectResponse:
 
 
 @router.get("/health")
-def health() -> Dict[str, str]:
+def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
@@ -119,7 +119,7 @@ def get_run(run_id: str) -> RunDetailResponse:
 
 
 @router.get("/leaderboard", tags=["leaderboard"])
-def get_leaderboard() -> Dict[str, Any]:
+def get_leaderboard() -> dict[str, Any]:
     rows = database.leaderboard()
     return {
         "models": [
@@ -155,7 +155,7 @@ async def create_run(request: RunRequestPayload, _: None = Depends(require_api_t
         {
             "models": validated.models,
             "tasks": tasks,
-            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
             "samples": validated.samples,
             "temperature": validated.temperature,
             "max_tokens": validated.max_tokens,
@@ -172,7 +172,7 @@ async def create_run(request: RunRequestPayload, _: None = Depends(require_api_t
 
     output_dir = Path(settings.runs_root)
 
-    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
         payload = {
             "model": model,
             "task_id": task_id,
@@ -195,7 +195,7 @@ async def create_run(request: RunRequestPayload, _: None = Depends(require_api_t
             logger.exception("run.failed", run_id=run_id, error=str(exc))
             progress_manager.fail(run_id, str(exc))
 
-        def on_success(summary: Dict[str, Any]) -> None:
+        def on_success(summary: dict[str, Any]) -> None:
             database.save_run(summary)
             progress_manager.complete(run_id, summary)
 
@@ -231,9 +231,9 @@ async def create_run(request: RunRequestPayload, _: None = Depends(require_api_t
 @router.delete("/leaderboard/{model_id:path}", tags=["leaderboard"])
 def delete_leaderboard_entry(
     model_id: str,
-    thinking_level: Optional[str] = None,
+    thinking_level: str | None = None,
     _: None = Depends(require_api_token),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     removed = database.delete_runs_for_model(model_id, thinking_level)
     status = "removed" if removed else "already_missing"
     return {
@@ -245,7 +245,7 @@ def delete_leaderboard_entry(
 
 
 @router.get("/models/capabilities", tags=["models"])
-def get_model_capabilities(model_id: str) -> Dict[str, Any]:
+def get_model_capabilities(model_id: str) -> dict[str, Any]:
     model_id = model_id.strip()
     if not model_id:
         raise HTTPException(status_code=400, detail="model_id must be provided")
@@ -256,7 +256,7 @@ def get_model_capabilities(model_id: str) -> Dict[str, Any]:
     supported_parameters = [param for param in info.get("supported_parameters", []) if isinstance(param, str)]
     supported_lower = {param.lower() for param in supported_parameters}
     supports_reasoning = "reasoning" in supported_lower
-    suggested_levels: List[str] = []
+    suggested_levels: list[str] = []
     if supports_reasoning:
         suggested_levels = ["low", "medium", "high"]
     supports_budget_tokens = False
@@ -276,7 +276,7 @@ def get_model_capabilities(model_id: str) -> Dict[str, Any]:
     }
 
 
-def _extract_lmstudio_context_length(entry: Dict[str, Any]) -> Optional[int]:
+def _extract_lmstudio_context_length(entry: dict[str, Any]) -> int | None:
     candidates = (
         "max_context_length",
         "context_length",
@@ -305,7 +305,7 @@ def _lmstudio_native_base_url(base_url: str) -> str:
 
 
 @router.get("/models/lmstudio", tags=["models"])
-def list_lmstudio_models() -> Dict[str, Any]:
+def list_lmstudio_models() -> dict[str, Any]:
     base_url = (settings.lmstudio_base_url or "").rstrip("/")
     if not base_url:
         raise HTTPException(status_code=500, detail="LM Studio base URL is not configured")
@@ -314,8 +314,8 @@ def list_lmstudio_models() -> Dict[str, Any]:
     native_base = _lmstudio_native_base_url(base_url)
     native_models_url = f"{native_base}/api/v0/models"
 
-    payload: Dict[str, Any] | None = None
-    last_error: Optional[str] = None
+    payload: dict[str, Any] | None = None
+    last_error: str | None = None
 
     # Prefer LM Studio's native endpoint when available (includes max_context_length).
     for url in (native_models_url, openai_models_url):
@@ -347,7 +347,7 @@ def list_lmstudio_models() -> Dict[str, Any]:
     if not isinstance(raw_models, list):
         raw_models = []
 
-    models: List[Dict[str, Any]] = []
+    models: list[dict[str, Any]] = []
     for entry in raw_models:
         if not isinstance(entry, dict):
             continue
@@ -377,13 +377,13 @@ class RetryApiErrorsResponse(BaseModel):
 class ApiErrorsInfoResponse(BaseModel):
     run_id: str
     api_error_count: int
-    api_errors: List[Dict[str, Any]]
+    api_errors: list[dict[str, Any]]
 
 
 class RetrySingleAttemptRequest(BaseModel):
     task_id: str
-    model: Optional[str] = None
-    sample_index: Optional[int] = None
+    model: str | None = None
+    sample_index: int | None = None
 
 
 @router.get("/runs/{run_id}/api-errors", response_model=ApiErrorsInfoResponse, tags=["runs"])
@@ -450,13 +450,13 @@ async def retry_api_errors(run_id: str, _: None = Depends(require_api_token)) ->
             "original_run_id": run_id,
             "retry_mode": True,
             "api_errors_to_retry": len(api_errors),
-            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
         },
     )
 
     output_dir = Path(settings.runs_root)
 
-    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
         payload = {
             "model": model,
             "task_id": task_id,
@@ -472,7 +472,7 @@ async def retry_api_errors(run_id: str, _: None = Depends(require_api_token)) ->
             logger.exception("retry.failed", run_id=retry_run_id, error=str(exc))
             progress_manager.fail(retry_run_id, str(exc))
 
-        def on_success(result: Dict[str, Any]) -> None:
+        def on_success(result: dict[str, Any]) -> None:
             database.save_run(result)
             progress_manager.complete(retry_run_id, result)
 
@@ -539,13 +539,13 @@ async def retry_single_attempt(
             "single_retry": True,
             "task_id": request.task_id,
             "api_errors_to_retry": len(filtered),
-            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
         },
     )
 
     output_dir = Path(settings.runs_root)
 
-    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
         payload = {
             "model": model,
             "task_id": task_id,
@@ -561,7 +561,7 @@ async def retry_single_attempt(
             logger.exception("retry.single.failed", run_id=retry_run_id, error=str(exc))
             progress_manager.fail(retry_run_id, str(exc))
 
-        def on_success(result: Dict[str, Any]) -> None:
+        def on_success(result: dict[str, Any]) -> None:
             database.save_run(result)
             progress_manager.complete(retry_run_id, result)
 
@@ -593,7 +593,7 @@ async def retry_single_attempt(
 class IncompleteAttemptsResponse(BaseModel):
     run_id: str
     incomplete_count: int
-    incomplete_attempts: List[Dict[str, Any]]
+    incomplete_attempts: list[dict[str, Any]]
 
 
 class ResumeIncompleteResponse(BaseModel):
@@ -642,11 +642,11 @@ async def resume_run(run_id: str, _: None = Depends(require_api_token)) -> Resum
         {
             "resume_mode": True,
             "incomplete_to_resume": len(incomplete),
-            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
         },
     )
 
-    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
         progress_manager.publish_attempt(
             run_id,
             {
@@ -664,7 +664,7 @@ async def resume_run(run_id: str, _: None = Depends(require_api_token)) -> Resum
             logger.exception("resume.failed", run_id=run_id, error=str(exc))
             progress_manager.fail(run_id, str(exc))
 
-        def on_success(result: Dict[str, Any]) -> None:
+        def on_success(result: dict[str, Any]) -> None:
             database.save_run(result)
             progress_manager.complete(run_id, result)
 
@@ -714,7 +714,7 @@ async def run_stream(websocket: WebSocket, run_id: str) -> None:
         await progress_manager.unsubscribe(run_id, queue)
 
 
-def harness_tasks_all() -> List[str]:
+def harness_tasks_all() -> list[str]:
     from harness.run_harness import discover_tasks
 
     return discover_tasks()

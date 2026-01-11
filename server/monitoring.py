@@ -4,30 +4,14 @@ from __future__ import annotations
 
 import inspect
 import time
-from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Awaitable, Callable, Coroutine, TypeVar
+from typing import Any, TypeVar
+from collections.abc import Awaitable, Callable, Coroutine
 
 import structlog
 
 
-correlation_id: ContextVar[str] = ContextVar("correlation_id", default="")
-
-
 FuncType = TypeVar("FuncType", bound=Callable[..., Awaitable[Any]])
-
-
-def with_correlation_id(func: FuncType) -> FuncType:
-    @wraps(func)
-    async def wrapper(*args, **kwargs):
-        token = correlation_id.set(str(time.time_ns()))
-        try:
-            return await func(*args, **kwargs)
-        finally:
-            correlation_id.reset(token)
-
-    wrapper.__signature__ = inspect.signature(func)  # type: ignore[attr-defined]
-    return wrapper  # type: ignore[return-value]
 
 
 def timed(func: FuncType) -> FuncType:

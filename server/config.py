@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings
@@ -25,14 +24,14 @@ class APISettings(BaseSettings):
     port: int = 8000
     workers: int = 1
     reload: bool = False
-    cors_origins: List[str] = Field(default_factory=list)
+    cors_origins: list[str] = Field(default_factory=list)
 
 
 class HarnessSettings(BaseSettings):
     max_concurrent_tasks: int = 5
     default_timeout: int = 300
     max_log_chars: int = 20000
-    supported_languages: List[str] = Field(default_factory=lambda: ["python", "javascript", "go", "rust", "cpp"])
+    supported_languages: list[str] = Field(default_factory=lambda: ["python", "javascript", "go", "rust", "cpp"])
 
 
 class Settings(BaseSettings):
@@ -51,9 +50,9 @@ class Settings(BaseSettings):
     tasks_root: Path = ROOT / "tasks"
     runs_root: Path = ROOT / "runs"
 
-    model_allowlist: List[str] = Field(default_factory=list)
+    model_allowlist: list[str] = Field(default_factory=list)
 
-    cors_origins: List[str] | None = None
+    cors_origins: list[str] | None = None
 
     @field_validator("openrouter_api_key")
     @classmethod
@@ -72,7 +71,7 @@ class Settings(BaseSettings):
 
     @field_validator("cors_origins")
     @classmethod
-    def ensure_cors_origins(cls, value: List[str] | None) -> List[str] | None:
+    def ensure_cors_origins(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
             return value
         if any(origin.strip() == "" for origin in value):

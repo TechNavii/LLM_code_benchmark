@@ -7,7 +7,7 @@ import datetime as dt
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -46,34 +46,34 @@ class QARunLaunchResponse(BaseModel):
 
 class QARunListEntry(BaseModel):
     run_id: str
-    timestamp_utc: Optional[str]
-    model_id: Optional[str]
-    accuracy: Optional[float]
-    total_cost_usd: Optional[float]
-    total_duration_seconds: Optional[float]
+    timestamp_utc: str | None
+    model_id: str | None
+    accuracy: float | None
+    total_cost_usd: float | None
+    total_duration_seconds: float | None
 
 
 class QARunListResponse(BaseModel):
-    runs: List[QARunListEntry]
+    runs: list[QARunListEntry]
 
 
 class QARunDetailResponse(BaseModel):
-    summary: Dict[str, Any]
+    summary: dict[str, Any]
 
 
 class QARunRequest(BaseModel):
-    models: List[str]
+    models: list[str]
     samples: PositiveInt = 1
     temperature: float = 0.5
     max_tokens: int = 200000
-    provider: Optional[str] = None
-    thinking_level: Optional[str] = None
+    provider: str | None = None
+    thinking_level: str | None = None
     include_thinking_variants: bool = False
     sweep_thinking_levels: bool = False
 
     @field_validator("models")
     @classmethod
-    def validate_models(cls, value: List[str]) -> List[str]:
+    def validate_models(cls, value: list[str]) -> list[str]:
         trimmed = [item.strip() for item in value if item.strip()]
         if not trimmed:
             raise ValueError("At least one model identifier is required.")
@@ -88,7 +88,7 @@ class QARunRequest(BaseModel):
 
     @field_validator("provider")
     @classmethod
-    def validate_provider(cls, provider: Optional[str]) -> Optional[str]:
+    def validate_provider(cls, provider: str | None) -> str | None:
         if provider is None:
             return None
         trimmed = provider.strip()
@@ -102,7 +102,7 @@ class QARunRequest(BaseModel):
 
     @field_validator("thinking_level")
     @classmethod
-    def validate_thinking_level(cls, level: Optional[str]) -> Optional[str]:
+    def validate_thinking_level(cls, level: str | None) -> str | None:
         if level is None:
             return None
         trimmed = level.strip()
@@ -135,13 +135,13 @@ async def qa_run_detail(run_id: str) -> QARunDetailResponse:
 
 
 @router.get("/leaderboard")
-async def qa_leaderboard() -> Dict[str, Any]:
+async def qa_leaderboard() -> dict[str, Any]:
     rows = leaderboard()
     return {"models": rows}
 
 
 @router.delete("/leaderboard/{model_id:path}")
-async def qa_leaderboard_delete(model_id: str, _: None = Depends(require_api_token)) -> Dict[str, Any]:
+async def qa_leaderboard_delete(model_id: str, _: None = Depends(require_api_token)) -> dict[str, Any]:
     removed = delete_runs_for_model(model_id)
     status = "removed" if removed else "already_missing"
     if removed:
@@ -179,7 +179,7 @@ async def qa_run_create(request: QARunRequest, _: None = Depends(require_api_tok
         },
     )
 
-    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: dict[str, Any]) -> None:
         usage = attempt.get("usage") or {}
         qa_progress_manager.publish_attempt(
             run_id,
@@ -212,7 +212,7 @@ async def qa_run_create(request: QARunRequest, _: None = Depends(require_api_tok
             logger.exception("qa.run_failed", run_id=run_id, error=str(exc))
             qa_progress_manager.fail(run_id, str(exc))
 
-        def on_success(summary: Dict[str, Any]) -> None:
+        def on_success(summary: dict[str, Any]) -> None:
             save_run(summary)
             qa_progress_manager.complete(run_id, summary)
 
@@ -248,13 +248,13 @@ class QARetryApiErrorsResponse(BaseModel):
 class QAApiErrorsInfoResponse(BaseModel):
     run_id: str
     api_error_count: int
-    api_errors: List[Dict[str, Any]]
+    api_errors: list[dict[str, Any]]
 
 
 class QARetrySingleAttemptRequest(BaseModel):
     question_number: int
-    model: Optional[str] = None
-    sample_index: Optional[int] = None
+    model: str | None = None
+    sample_index: int | None = None
 
 
 @router.get("/runs/{run_id}/api-errors", response_model=QAApiErrorsInfoResponse)
@@ -320,13 +320,13 @@ async def qa_retry_api_errors(run_id: str, _: None = Depends(require_api_token))
             "original_run_id": run_id,
             "retry_mode": True,
             "api_errors_to_retry": len(api_errors),
-            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
         },
     )
 
     output_dir = Path(settings.runs_root)
 
-    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: dict[str, Any]) -> None:
         qa_progress_manager.publish_attempt(
             retry_run_id,
             {
@@ -344,7 +344,7 @@ async def qa_retry_api_errors(run_id: str, _: None = Depends(require_api_token))
             logger.exception("qa.retry.failed", run_id=retry_run_id, error=str(exc))
             qa_progress_manager.fail(retry_run_id, str(exc))
 
-        def on_success(result: Dict[str, Any]) -> None:
+        def on_success(result: dict[str, Any]) -> None:
             save_run(result)
             qa_progress_manager.complete(retry_run_id, result)
 
@@ -411,13 +411,13 @@ async def qa_retry_single_attempt(
             "single_retry": True,
             "question_number": request.question_number,
             "api_errors_to_retry": len(filtered),
-            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
         },
     )
 
     output_dir = Path(settings.runs_root)
 
-    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, question_number: int, sample_index: int, attempt: dict[str, Any]) -> None:
         qa_progress_manager.publish_attempt(
             retry_run_id,
             {
@@ -435,7 +435,7 @@ async def qa_retry_single_attempt(
             logger.exception("qa.retry.single.failed", run_id=retry_run_id, error=str(exc))
             qa_progress_manager.fail(retry_run_id, str(exc))
 
-        def on_success(result: Dict[str, Any]) -> None:
+        def on_success(result: dict[str, Any]) -> None:
             save_run(result)
             qa_progress_manager.complete(retry_run_id, result)
 

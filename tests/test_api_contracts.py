@@ -236,7 +236,7 @@ class TestCreateRunValidationContract:
         assert isinstance(data, dict)
         assert "detail" in data
         # FastAPI validation errors are typically lists of error objects
-        assert isinstance(data["detail"], (str, list))
+        assert isinstance(data["detail"], str | list)
 
 
 # =============================================================================

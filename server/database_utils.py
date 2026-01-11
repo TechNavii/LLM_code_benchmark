@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-from typing import Any, Dict, Optional, Set
+from typing import Any
 
 
-FAILED_STATUSES: Set[str] = {"error", "fail", "failed", "api_error", "exception"}
+FAILED_STATUSES: set[str] = {"error", "fail", "failed", "api_error", "exception"}
 
 
-def parse_timestamp(timestamp_raw: Optional[str]) -> dt.datetime:
+def parse_timestamp(timestamp_raw: str | None) -> dt.datetime:
     """Parse an ISO timestamp string to a naive UTC datetime.
 
     Falls back to current UTC time if parsing fails.
@@ -20,17 +20,17 @@ def parse_timestamp(timestamp_raw: Optional[str]) -> dt.datetime:
         try:
             timestamp = dt.datetime.fromisoformat(timestamp_raw)
         except ValueError:
-            timestamp = dt.datetime.now(dt.timezone.utc)
+            timestamp = dt.datetime.now(dt.UTC)
     else:
-        timestamp = dt.datetime.now(dt.timezone.utc)
+        timestamp = dt.datetime.now(dt.UTC)
 
     if timestamp.tzinfo is not None:
-        timestamp = timestamp.astimezone(dt.timezone.utc).replace(tzinfo=None)
+        timestamp = timestamp.astimezone(dt.UTC).replace(tzinfo=None)
 
     return timestamp
 
 
-def count_errors_from_summary(summary_json: Optional[str]) -> int:
+def count_errors_from_summary(summary_json: str | None) -> int:
     """Count failed attempts from a summary JSON string."""
     if not summary_json:
         return 0
@@ -42,7 +42,7 @@ def count_errors_from_summary(summary_json: Optional[str]) -> int:
         return 0
 
 
-def extract_usage_tokens(usage: Optional[Dict[str, Any]]) -> tuple[Optional[int], Optional[int]]:
+def extract_usage_tokens(usage: dict[str, Any] | None) -> tuple[int | None, int | None]:
     """Extract prompt and completion tokens from a usage dict.
 
     Handles both OpenAI-style (prompt_tokens/completion_tokens) and

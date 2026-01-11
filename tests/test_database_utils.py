@@ -60,9 +60,9 @@ class TestParseTimestamp:
     def test_parse_invalid_timestamp_fallback(self):
         """Test that invalid timestamp falls back to current UTC time."""
         invalid_timestamp = "not-a-valid-timestamp"
-        before = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        before = dt.datetime.now(dt.UTC).replace(tzinfo=None)
         result = parse_timestamp(invalid_timestamp)
-        after = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        after = dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
         assert isinstance(result, dt.datetime)
         assert result.tzinfo is None
@@ -71,9 +71,9 @@ class TestParseTimestamp:
 
     def test_parse_none_timestamp_fallback(self):
         """Test that None timestamp falls back to current UTC time."""
-        before = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        before = dt.datetime.now(dt.UTC).replace(tzinfo=None)
         result = parse_timestamp(None)
-        after = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        after = dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
         assert isinstance(result, dt.datetime)
         assert result.tzinfo is None
@@ -81,9 +81,9 @@ class TestParseTimestamp:
 
     def test_parse_empty_string_fallback(self):
         """Test that empty string falls back to current UTC time."""
-        before = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        before = dt.datetime.now(dt.UTC).replace(tzinfo=None)
         result = parse_timestamp("")
-        after = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+        after = dt.datetime.now(dt.UTC).replace(tzinfo=None)
 
         assert isinstance(result, dt.datetime)
         assert result.tzinfo is None
@@ -303,7 +303,7 @@ class TestCountErrorsFromSummary:
     def test_failed_statuses_constant(self):
         """Test that FAILED_STATUSES constant is correct."""
         expected = {"error", "fail", "failed", "api_error", "exception"}
-        assert FAILED_STATUSES == expected
+        assert expected == FAILED_STATUSES
 
 
 class TestGetSessionIntegration:

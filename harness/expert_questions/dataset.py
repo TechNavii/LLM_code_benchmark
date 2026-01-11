@@ -7,7 +7,7 @@ import zlib
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Iterable, Iterator, List, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 PDF_PATH = ROOT / "100 Expert-Level Benchmark Questions for LLMs.pdf"
@@ -30,7 +30,7 @@ def _iter_pdf_streams(data: bytes) -> Iterator[bytes]:
         raw = match.group(1)
         try:
             yield zlib.decompress(raw)
-        except Exception:
+        except zlib.error:
             continue
 
 
@@ -55,12 +55,9 @@ def _build_cmap(streams: Iterable[bytes]) -> dict[bytes, str]:
                     continue
                 if len(dst_bytes) % 2 != 0:
                     # fall back to latin-1 decode when pairs are not available
-                    try:
-                        cmap[src_bytes] = dst_bytes.decode("latin-1")
-                    except Exception:
-                        continue
+                    cmap[src_bytes] = dst_bytes.decode("latin-1")
                     continue
-                chars: List[str] = []
+                chars: list[str] = []
                 for index in range(0, len(dst_bytes), 2):
                     codepoint = int.from_bytes(dst_bytes[index : index + 2], "big")
                     if 0 <= codepoint <= 0x10FFFF:
@@ -70,8 +67,8 @@ def _build_cmap(streams: Iterable[bytes]) -> dict[bytes, str]:
     return cmap
 
 
-def _decode_text_objects(data: bytes, cmap: dict[bytes, str]) -> List[str]:
-    texts: List[str] = []
+def _decode_text_objects(data: bytes, cmap: dict[bytes, str]) -> list[str]:
+    texts: list[str] = []
     text_objects_pattern = re.compile(rb"BT(.*?)ET", re.S)
     array_pattern = re.compile(rb"\[(.*?)\]\s*TJ", re.S)
     hex_pattern = re.compile(rb"<([0-9A-Fa-f]+)>")
@@ -82,7 +79,7 @@ def _decode_text_objects(data: bytes, cmap: dict[bytes, str]) -> List[str]:
         if not raw:
             return ""
         step = 2 if len(raw) % 2 == 0 else 1
-        decoded_parts: List[str] = []
+        decoded_parts: list[str] = []
         for index in range(0, len(raw), step):
             chunk = raw[index : index + step]
             mapped = cmap.get(chunk)
@@ -111,7 +108,7 @@ def _decode_text_objects(data: bytes, cmap: dict[bytes, str]) -> List[str]:
     return texts
 
 
-def _extract_lines() -> List[str]:
+def _extract_lines() -> list[str]:
     if not PDF_PATH.exists():
         raise _PDFParseError(f"Question source PDF not found at {PDF_PATH}")
     data = PDF_PATH.read_bytes()
@@ -119,11 +116,11 @@ def _extract_lines() -> List[str]:
     streams = list(_iter_pdf_streams(data))
     cmap = _build_cmap(streams)
 
-    lines: List[str] = []
+    lines: list[str] = []
     for stream in streams:
         lines.extend(_decode_text_objects(stream, cmap))
 
-    cleaned: List[str] = []
+    cleaned: list[str] = []
     for raw_line in lines:
         line = raw_line.replace("\xa0", " ")
         line = re.sub(r"<sup>(.*?)</sup>", lambda m: f"^{m.group(1)}", line)
@@ -148,8 +145,8 @@ _HEADINGS = {
 _TRAILING_NOTES_PREFIX = "Each question above"
 
 
-def _filter_lines(lines: Sequence[str]) -> List[str]:
-    filtered: List[str] = []
+def _filter_lines(lines: Sequence[str]) -> list[str]:
+    filtered: list[str] = []
     total = len(lines)
     for idx, line in enumerate(lines):
         if line in _HEADINGS:
@@ -175,8 +172,8 @@ def _filter_lines(lines: Sequence[str]) -> List[str]:
     return filtered
 
 
-def _coalesce_questions(lines: Sequence[str]) -> List[Question]:
-    questions: List[Question] = []
+def _coalesce_questions(lines: Sequence[str]) -> list[Question]:
+    questions: list[Question] = []
     i = 0
     total = len(lines)
     number_pattern = re.compile(r"^(\d{1,3})\.\s+(.*)$")
@@ -189,13 +186,13 @@ def _coalesce_questions(lines: Sequence[str]) -> List[Question]:
             continue
 
         number = int(match.group(1))
-        question_parts: List[str] = []
+        question_parts: list[str] = []
         first_part = match.group(2).strip()
         if first_part:
             question_parts.append(first_part)
         i += 1
 
-        buffer: List[str] = []
+        buffer: list[str] = []
         while i < total:
             candidate = lines[i]
             if number_pattern.match(candidate):
@@ -218,7 +215,7 @@ def _coalesce_questions(lines: Sequence[str]) -> List[Question]:
 
 
 @lru_cache(maxsize=1)
-def load_questions() -> List[Question]:
+def load_questions() -> list[Question]:
     """Return the 100 expert-level questions and answers."""
 
     lines = _extract_lines()

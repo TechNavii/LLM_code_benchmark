@@ -9,7 +9,8 @@ import re
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any
+from collections.abc import Callable, Iterable
 
 try:
     import requests
@@ -74,7 +75,7 @@ QA_MAX_BACKOFF_SECONDS = SETTINGS.completion_max_backoff_seconds
 # LOGGER already defined above via structlog or fallback
 
 
-def _compose_reasoning_payload(level: str) -> Dict[str, Any]:
+def _compose_reasoning_payload(level: str) -> dict[str, Any]:
     value = (level or "").strip()
     if not value:
         return {}
@@ -97,7 +98,7 @@ def _compose_reasoning_payload(level: str) -> Dict[str, Any]:
     return {"effort": value}
 
 
-def _parse_retry_after(response: "requests.Response") -> Optional[float]:
+def _parse_retry_after(response: requests.Response) -> float | None:
     """Parse Retry-After header from response, returning seconds to wait."""
     retry_after = response.headers.get("Retry-After")
     if not retry_after:
@@ -111,7 +112,7 @@ def _parse_retry_after(response: "requests.Response") -> Optional[float]:
         from email.utils import parsedate_to_datetime
 
         retry_dt = parsedate_to_datetime(retry_after)
-        delay = (retry_dt - dt.datetime.now(dt.timezone.utc)).total_seconds()
+        delay = (retry_dt - dt.datetime.now(dt.UTC)).total_seconds()
         return max(0.0, delay)
     except (ValueError, TypeError):
         return None
@@ -123,9 +124,9 @@ def _call_openrouter(
     model: str,
     temperature: float,
     max_tokens: int,
-    preferred_provider: Optional[str] = None,
-    reasoning_payload: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, Dict[str, Any], float]:
+    preferred_provider: str | None = None,
+    reasoning_payload: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any], float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
 
@@ -138,7 +139,7 @@ def _call_openrouter(
         "Content-Type": "application/json",
     }
 
-    def wrap_content(text: str) -> List[Dict[str, str]]:
+    def wrap_content(text: str) -> list[dict[str, str]]:
         return [{"type": "text", "text": text}]
 
     capped_max_tokens = min(max_tokens, QA_ANSWER_MAX_TOKENS)
@@ -162,12 +163,12 @@ def _call_openrouter(
     if reasoning_payload is not None:
         payload["reasoning"] = reasoning_payload
 
-    last_error: Optional[HarnessError] = None
+    last_error: HarnessError | None = None
     backoff = QA_RETRY_BACKOFF_SECONDS
 
     for attempt in range(MAX_QA_COMPLETION_RETRIES):
         should_retry = False
-        retry_after: Optional[float] = None
+        retry_after: float | None = None
         start = time.perf_counter()
 
         try:
@@ -344,7 +345,7 @@ def _lmstudio_root_url() -> str:
     return base_url
 
 
-def _lmstudio_get_models() -> Optional[List[Dict[str, Any]]]:
+def _lmstudio_get_models() -> list[dict[str, Any]] | None:
     if requests is None:
         return None
 
@@ -381,7 +382,7 @@ def _call_lmstudio(
     model: str,
     temperature: float,
     max_tokens: int,
-) -> Tuple[str, Dict[str, Any], float]:
+) -> tuple[str, dict[str, Any], float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call LM Studio.")
 
@@ -389,7 +390,7 @@ def _call_lmstudio(
         models_snapshot = _lmstudio_get_models()
         if models_snapshot is not None:
             requested_state = None
-            loaded_models: List[str] = []
+            loaded_models: list[str] = []
             for entry in models_snapshot:
                 model_id = entry.get("id")
                 state = entry.get("state")
@@ -474,9 +475,9 @@ def _call_completion(
     model: str,
     temperature: float,
     max_tokens: int,
-    preferred_provider: Optional[str] = None,
-    reasoning_payload: Optional[Dict[str, Any]] = None,
-) -> Tuple[str, Dict[str, Any], float]:
+    preferred_provider: str | None = None,
+    reasoning_payload: dict[str, Any] | None = None,
+) -> tuple[str, dict[str, Any], float]:
     if _is_lmstudio_model(model):
         return _call_lmstudio(
             prompt,
@@ -502,7 +503,7 @@ def _judge_answer(
     *,
     model: str = JUDGE_MODEL,
     max_tokens: int = JUDGE_MAX_TOKENS,
-) -> Tuple[bool, Optional[str], Optional[str], Optional[Dict[str, Any]], Optional[str], Optional[float]]:
+) -> tuple[bool, str | None, str | None, dict[str, Any] | None, str | None, float | None]:
     """Ask an auxiliary model to determine if two answers are equivalent."""
 
     if requests is None:
@@ -517,7 +518,7 @@ def _judge_answer(
         "Content-Type": "application/json",
     }
 
-    def wrap_content(text: str) -> List[Dict[str, str]]:
+    def wrap_content(text: str) -> list[dict[str, str]]:
         return [{"type": "text", "text": text}]
 
     system_prompt = (
@@ -526,11 +527,11 @@ def _judge_answer(
         "two answers mean the same thing, accounting for formatting or synonymous wording."
     )
     user_prompt = (
-        "Question: {question}\n"
-        "Expected answer: {expected}\n"
-        "Model answer: {observed}\n"
+        f"Question: {question_text}\n"
+        f"Expected answer: {expected}\n"
+        f"Model answer: {observed}\n"
         "Reply with PASS if the answers convey the same meaning (allowing for formatting, capitalization, or equivalent synonyms). Otherwise reply FAIL."
-    ).format(question=question_text, expected=expected, observed=observed)
+    )
 
     payload = {
         "model": model,
@@ -544,15 +545,15 @@ def _judge_answer(
 
     max_attempts = MAX_QA_COMPLETION_RETRIES
     total_latency = 0.0
-    last_usage: Optional[Dict[str, Any]] = None
-    last_raw: Optional[str] = None
-    failure_reason: Optional[str] = None
+    last_usage: dict[str, Any] | None = None
+    last_raw: str | None = None
+    failure_reason: str | None = None
     backoff = QA_RETRY_BACKOFF_SECONDS
 
     for attempt_index in range(1, max_attempts + 1):
         start = time.perf_counter()
         should_retry = False
-        retry_after: Optional[float] = None
+        retry_after: float | None = None
 
         try:
             response = requests.post(url, headers=headers, json=payload, timeout=SETTINGS.api_call_timeout_seconds)
@@ -630,7 +631,7 @@ def _judge_answer(
 
     raw_text = (last_raw or "").strip()
 
-    def _attempt_parse(payload: str) -> Optional[Dict[str, Any]]:
+    def _attempt_parse(payload: str) -> dict[str, Any] | None:
         try:
             return json.loads(payload)
         except json.JSONDecodeError:
@@ -642,8 +643,8 @@ def _judge_answer(
         stripped = stripped.rstrip("`").strip()
         parsed = _attempt_parse(stripped)
 
-    decision_label: Optional[str] = None
-    rationale: Optional[str] = None
+    decision_label: str | None = None
+    rationale: str | None = None
 
     if isinstance(parsed, dict):
         decision_label = str(parsed.get("decision", "")).strip().upper()
@@ -744,11 +745,11 @@ def _prepare_attempt_directory(
     return level_dir
 
 
-AttemptSummary = Dict[str, Any]
+AttemptSummary = dict[str, Any]
 ProgressCallback = Callable[[str, int, int, AttemptSummary], None]
 
 
-def load_qa_failed_attempts(run_dir: Path) -> List[Dict[str, Any]]:
+def load_qa_failed_attempts(run_dir: Path) -> list[dict[str, Any]]:
     """Load QA attempts from a previous run that failed (error, fail, api_error).
 
     Supports completed runs with summary.json.
@@ -765,7 +766,7 @@ def load_qa_failed_attempts(run_dir: Path) -> List[Dict[str, Any]]:
     return []
 
 
-def load_qa_api_error_attempts(run_dir: Path) -> List[Dict[str, Any]]:
+def load_qa_api_error_attempts(run_dir: Path) -> list[dict[str, Any]]:
     """Load QA attempts from a previous run that had api_error status.
 
     Supports both completed runs (with summary.json) and
@@ -794,7 +795,7 @@ def load_qa_api_error_attempts(run_dir: Path) -> List[Dict[str, Any]]:
         "QA rate limited",
     ]
 
-    api_error_attempts: List[Dict[str, Any]] = []
+    api_error_attempts: list[dict[str, Any]] = []
     for attempt_dir in run_dir.iterdir():
         if not attempt_dir.is_dir():
             continue
@@ -845,14 +846,14 @@ def retry_qa_api_error_attempts(
     original_run_dir: Path,
     temperature: float = 0.5,
     max_tokens: int = 200000,
-    provider: Optional[str] = None,
-    output_dir: Optional[Path] = None,
-    progress_callback: Optional[ProgressCallback] = None,
-    filter_question_number: Optional[int] = None,
-    filter_model: Optional[str] = None,
-    filter_sample_index: Optional[int] = None,
-    run_id: Optional[str] = None,
-) -> Dict[str, Any]:
+    provider: str | None = None,
+    output_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
+    filter_question_number: int | None = None,
+    filter_model: str | None = None,
+    filter_sample_index: int | None = None,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     """
     Retry only the api_error attempts from a previous QA run.
     Creates a new run directory with retried attempts.
@@ -889,7 +890,7 @@ def retry_qa_api_error_attempts(
     base_output = Path(output_dir) if output_dir else QA_RUNS_ROOT
     base_output.mkdir(parents=True, exist_ok=True)
     if not run_id:
-        timestamp = dt.datetime.now(dt.timezone.utc)
+        timestamp = dt.datetime.now(dt.UTC)
         run_id = f"retry_{timestamp.strftime('%Y%m%dT%H%M%SZ')}"
     run_dir = _prepare_run_directory(run_id, base_output)
 
@@ -897,7 +898,7 @@ def retry_qa_api_error_attempts(
     models = list({a["model"] for a in api_error_attempts})
     model_metadata = fetch_model_pricing(models)
 
-    retried_attempts: List[Dict[str, Any]] = []
+    retried_attempts: list[dict[str, Any]] = []
 
     for i, original_attempt in enumerate(api_error_attempts, 1):
         question_number = original_attempt["question_number"]
@@ -935,7 +936,7 @@ def retry_qa_api_error_attempts(
         }
         model_supports_reasoning = "reasoning" in supported_params
 
-        attempt: Dict[str, Any] = {
+        attempt: dict[str, Any] = {
             "model": model,
             "provider": provider,
             "sample_index": sample_index,
@@ -1053,13 +1054,13 @@ def retry_qa_failed_attempts(
     original_run_dir: Path,
     temperature: float = 0.5,
     max_tokens: int = 200000,
-    provider: Optional[str] = None,
-    output_dir: Optional[Path] = None,
-    progress_callback: Optional[ProgressCallback] = None,
-    filter_question_number: Optional[int] = None,
-    filter_model: Optional[str] = None,
-    filter_sample_index: Optional[int] = None,
-) -> Dict[str, Any]:
+    provider: str | None = None,
+    output_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
+    filter_question_number: int | None = None,
+    filter_model: str | None = None,
+    filter_sample_index: int | None = None,
+) -> dict[str, Any]:
     """
     Retry failed QA attempts and UPDATE the original run's summary.json in-place.
     The failed attempts are replaced with the new results, preserving all other data.
@@ -1078,7 +1079,7 @@ def retry_qa_failed_attempts(
     # Find failed attempts
     failed_statuses = {"error", "fail", "failed", "api_error", "exception"}
 
-    def _attempt_key(a: Dict) -> tuple:
+    def _attempt_key(a: dict) -> tuple:
         return (
             a.get("model"),
             a.get("question_number"),
@@ -1151,7 +1152,7 @@ def retry_qa_failed_attempts(
         model_supports_reasoning = "reasoning" in supported_params
 
         # Prepare new attempt data (copy relevant fields from original)
-        attempt: Dict[str, Any] = {
+        attempt: dict[str, Any] = {
             "model": model,
             "question_number": question_number,
             "sample_index": sample_index,
@@ -1274,7 +1275,7 @@ def retry_qa_failed_attempts(
         stats["accuracy"] = stats["passed"] / stats["total"] if stats["total"] > 0 else None
 
     # Overall accuracy
-    overall_questions: Dict[int, List[Dict]] = {}
+    overall_questions: dict[int, list[dict]] = {}
     for att in evaluable_attempts:
         qn = att.get("question_number")
         if qn is None:
@@ -1282,7 +1283,7 @@ def retry_qa_failed_attempts(
         overall_questions.setdefault(int(qn), []).append(att)
 
     samples = original_summary.get("samples", 1)
-    overall_pass_at_k_values: List[float] = []
+    overall_pass_at_k_values: list[float] = []
     for attempts_for_question in overall_questions.values():
         total = len(attempts_for_question)
         correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
@@ -1323,7 +1324,7 @@ def retry_qa_failed_attempts(
         "completion_tokens": total_completion_tokens,
         "total_cost_usd": round(total_cost, 6),
     }
-    original_summary["last_retry_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    original_summary["last_retry_utc"] = dt.datetime.now(dt.UTC).isoformat()
     original_summary["retry_count"] = original_summary.get("retry_count", 0) + retried_count
 
     # Save back to original summary.json
@@ -1345,15 +1346,15 @@ def run_question_benchmark(
     samples: int = 1,
     temperature: float = 0.5,
     max_tokens: int = 200000,
-    provider: Optional[str] = None,
-    thinking_level: Optional[str] = None,
+    provider: str | None = None,
+    thinking_level: str | None = None,
     include_thinking_variants: bool = False,
     sweep_thinking_levels: bool = False,
-    question_limit: Optional[int] = None,
+    question_limit: int | None = None,
     run_id: str,
-    output_dir: Optional[Path] = None,
-    progress_callback: Optional[ProgressCallback] = None,
-) -> Dict[str, Any]:
+    output_dir: Path | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict[str, Any]:
     questions = load_questions()
     if question_limit is not None:
         try:
@@ -1383,13 +1384,13 @@ def run_question_benchmark(
         raise HarnessError("Judge model configured but requests library unavailable; aborting to avoid unjudged scores")
 
     judge_enabled = bool(JUDGE_MODEL) and requests is not None
-    judge_status_reason: Optional[str] = None
+    judge_status_reason: str | None = None
 
     pricing_models = [m for m in model_list if not _is_lmstudio_model(m)]
     if judge_enabled and JUDGE_MODEL:
         pricing_models.append(JUDGE_MODEL)
     pricing_models = list(dict.fromkeys(pricing_models))
-    model_metadata: Dict[str, Dict[str, Any]] = fetch_model_pricing(pricing_models) if pricing_models else {}
+    model_metadata: dict[str, dict[str, Any]] = fetch_model_pricing(pricing_models) if pricing_models else {}
 
     if judge_enabled and JUDGE_MODEL and JUDGE_MODEL not in model_metadata:
         judge_status_reason = "pricing_unavailable"
@@ -1398,9 +1399,9 @@ def run_question_benchmark(
     base_output = Path(output_dir) if output_dir else QA_RUNS_ROOT
     base_output.mkdir(parents=True, exist_ok=True)
     run_dir = _prepare_run_directory(run_id, base_output)
-    timestamp = dt.datetime.now(dt.timezone.utc)
+    timestamp = dt.datetime.now(dt.UTC)
 
-    attempts: List[AttemptSummary] = []
+    attempts: list[AttemptSummary] = []
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_cost = 0.0
@@ -1409,14 +1410,14 @@ def run_question_benchmark(
 
     question_map = {question.number: question for question in questions}
 
-    def _suggest_levels_for_model(model_id: str) -> List[str]:
+    def _suggest_levels_for_model(model_id: str) -> list[str]:
         info = model_metadata.get(model_id) or {}
         params = {str(p).lower() for p in (info.get("supported_parameters") or []) if isinstance(p, str)}
         if "reasoning" not in params:
             return []
         return ["low", "medium", "high"]
 
-    def _estimate_pass_at_k(total: int, correct: int, k: int) -> Optional[float]:
+    def _estimate_pass_at_k(total: int, correct: int, k: int) -> float | None:
         if total <= 0 or k <= 0:
             return None
         k = min(k, total)
@@ -1438,7 +1439,7 @@ def run_question_benchmark(
         )
 
         # Determine which thinking levels to evaluate for this model
-        levels: List[Optional[str]]
+        levels: list[str | None]
         if sweep_thinking_levels:
             suggested = _suggest_levels_for_model(model)
             levels = [None] + (suggested or ["low", "medium", "high"])  # fallback
@@ -1473,9 +1474,9 @@ def run_question_benchmark(
 
                     attempt_start = time.perf_counter()
                     api_latency = None
-                    usage: Dict[str, Any] | None = None
-                    judge_usage_data: Dict[str, Any] | None = None
-                    judge_latency_value: Optional[float] = None
+                    usage: dict[str, Any] | None = None
+                    judge_usage_data: dict[str, Any] | None = None
+                    judge_latency_value: float | None = None
                     try:
                         # Adjust reasoning payload per level
                         level_reasoning = None
@@ -1644,9 +1645,9 @@ def run_question_benchmark(
                     if progress_callback:
                         progress_callback(model, question.number, sample_index, attempt)
 
-    per_model_stats: Dict[str, Dict[str, Any]] = {}
+    per_model_stats: dict[str, dict[str, Any]] = {}
 
-    def _bucket_level_for_metrics(attempt: Dict[str, Any], default_level: Optional[str] = None) -> str:
+    def _bucket_level_for_metrics(attempt: dict[str, Any], default_level: str | None = None) -> str:
         applied = attempt.get("thinking_level_applied")
         if applied:
             return str(applied)
@@ -1657,8 +1658,8 @@ def run_question_benchmark(
         return "base"
 
     # Build per-level metrics similar to coding harness but at question granularity
-    metrics_by_thinking_level: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    per_model_level: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+    metrics_by_thinking_level: dict[str, dict[str, dict[str, Any]]] = {}
+    per_model_level: dict[str, dict[str, list[dict[str, Any]]]] = {}
     for a in attempts:
         model = a.get("model")
         if not model:
@@ -1681,15 +1682,15 @@ def run_question_benchmark(
             errored_attempts = sum(1 for x in evaluable_attempts if (x.get("status") or "").lower() == "error")
 
             # Exclude api_error from pass@k calculation
-            by_question: Dict[int, List[Dict[str, Any]]] = {}
+            by_question: dict[int, list[dict[str, Any]]] = {}
             for att in evaluable_attempts:
                 qn = att.get("question_number")
                 if qn is None:
                     continue
                 by_question.setdefault(int(qn), []).append(att)
 
-            pass_at_1_values: List[float] = []
-            pass_at_k_values: List[float] = []
+            pass_at_1_values: list[float] = []
+            pass_at_k_values: list[float] = []
             for attempts_for_question in by_question.values():
                 total = len(attempts_for_question)
                 correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
@@ -1740,15 +1741,15 @@ def run_question_benchmark(
         evaluable_model_attempts = [a for a in model_attempts if (a.get("status") or "").lower() != "api_error"]
         api_errors_count = len(model_attempts) - len(evaluable_model_attempts)
 
-        by_question: Dict[int, List[Dict[str, Any]]] = {}
+        by_question: dict[int, list[dict[str, Any]]] = {}
         for att in evaluable_model_attempts:
             qn = att.get("question_number")
             if qn is None:
                 continue
             by_question.setdefault(int(qn), []).append(att)
 
-        pass_at_1_values: List[float] = []
-        pass_at_k_values: List[float] = []
+        pass_at_1_values: list[float] = []
+        pass_at_k_values: list[float] = []
         for attempts_for_question in by_question.values():
             total = len(attempts_for_question)
             correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
@@ -1787,13 +1788,13 @@ def run_question_benchmark(
     # Overall accuracy now reflects question-level pass@k across all models (excluding api_error)
     total_api_errors = sum(1 for a in attempts if (a.get("status") or "").lower() == "api_error")
     evaluable_attempts = [a for a in attempts if (a.get("status") or "").lower() != "api_error"]
-    overall_questions: Dict[int, List[Dict[str, Any]]] = {}
+    overall_questions: dict[int, list[dict[str, Any]]] = {}
     for att in evaluable_attempts:
         qn = att.get("question_number")
         if qn is None:
             continue
         overall_questions.setdefault(int(qn), []).append(att)
-    overall_pass_at_k_values: List[float] = []
+    overall_pass_at_k_values: list[float] = []
     for attempts_for_question in overall_questions.values():
         total = len(attempts_for_question)
         correct = sum(1 for a in attempts_for_question if (a.get("status") or "").lower() == "passed")
