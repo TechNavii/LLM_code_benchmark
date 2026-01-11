@@ -760,3 +760,99 @@ jobs:
             .fuzz-reports/
             fuzz-output.txt
           retention-days: 30
+
+  # ==========================================
+  # GUI Headless Browser Smoke Tests (Playwright)
+  # ==========================================
+  gui-headless-smoke:
+    name: GUI Headless Smoke Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Install Playwright browsers
+        run: |
+          echo "Installing Playwright Chromium browser..."
+          .venv/bin/playwright install chromium
+          .venv/bin/playwright install-deps chromium
+
+      - name: Run GUI smoke tests
+        id: gui-tests
+        run: |
+          echo "Running GUI headless browser smoke tests..."
+          echo ""
+
+          # Run GUI tests with Playwright (chromium, headless)
+          .venv/bin/pytest tests/test_gui_smoke.py \
+            -v \
+            --tb=short \
+            --junit-xml=junit-gui.xml \
+            2>&1 | tee gui-test-output.txt
+
+          echo ""
+          echo "GUI smoke tests complete."
+        continue-on-error: true
+
+      - name: Generate GUI test summary
+        if: always()
+        run: |
+          {
+            echo "## GUI Headless Browser Smoke Tests"
+            echo ""
+            echo "**Browser:** Chromium (headless)"
+            echo ""
+            if [ -f junit-gui.xml ]; then
+              # Count tests from JUnit XML
+              TOTAL=$(grep -c 'testcase' junit-gui.xml || echo "0")
+              FAILURES=$(grep -c '<failure' junit-gui.xml || echo "0")
+              echo "**Tests Run:** ${TOTAL}"
+              echo "**Failures:** ${FAILURES}"
+              if [ "$FAILURES" = "0" ]; then
+                echo ""
+                echo "✅ All GUI smoke tests passed!"
+              else
+                echo ""
+                echo "⚠️ Some GUI tests failed. See artifacts for details."
+              fi
+            else
+              echo "No test results found."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload GUI test artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: gui-headless-test-results
+          path: |
+            junit-gui.xml
+            gui-test-output.txt
+            test-results/
+          retention-days: 7

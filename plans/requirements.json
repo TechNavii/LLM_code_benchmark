@@ -771,7 +771,7 @@
         "Optionally verify a WebSocket connection can be established (mocked/init-only)",
         "Keep runtime fast and collect artifacts (trace/screenshot) on failure"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-017-harness-server-e2e-dryrun",
