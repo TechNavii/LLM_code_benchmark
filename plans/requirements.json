@@ -369,6 +369,162 @@
         "Optionally add PR annotations for failing tests"
       ],
       "passes": true
+    },
+    {
+      "id": "quality-009-pytest-warnings-policy",
+      "priority": 26,
+      "category": "quality",
+      "description": "Treat key warnings as errors in CI to prevent silent regressions",
+      "steps": [
+        "Configure pytest invocation in CI to fail on DeprecationWarning and PendingDeprecationWarning (e.g., -W error::DeprecationWarning -W error::PendingDeprecationWarning)",
+        "Keep local developer defaults permissive if needed, but CI should be strict",
+        "Whitelist unavoidable third-party warnings with targeted filters and justification",
+        "Ensure the policy does not apply to tasks/* suites"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-010-shellcheck-scripts",
+      "priority": 27,
+      "category": "quality",
+      "description": "Add ShellCheck for scripts/ to catch portability bugs",
+      "steps": [
+        "Add ShellCheck to CI (or run via a container) and scan scripts/*.sh",
+        "Fix/annotate findings (SC* codes) with minimal suppressions",
+        "Ensure scripts remain POSIX-compatible where practical (or declare bash explicitly)",
+        "Exclude generated scripts and keep runtime fast"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-011-openapi-schema-validation",
+      "priority": 28,
+      "category": "quality",
+      "description": "Validate and optionally snapshot the FastAPI OpenAPI schema",
+      "steps": [
+        "Add a check that generates the OpenAPI schema from the app and validates it with an OpenAPI schema validator",
+        "Add a stable snapshot (JSON) to detect accidental breaking changes (optional; warn-only initially)",
+        "Ensure schema generation does not require network calls or task execution",
+        "Run in CI as part of the default validation job"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-008-api-contract-tests",
+      "priority": 29,
+      "category": "tests",
+      "description": "Add API contract tests at the HTTP boundary (FastAPI TestClient)",
+      "steps": [
+        "Add tests that call key HTTP endpoints and validate response status codes + JSON schema shape (list runs, get run, leaderboard, model capabilities)",
+        "Cover both code and QA routers",
+        "Add negative tests for invalid input (validation errors) to ensure consistent error responses",
+        "Keep tests hermetic: no external network, no executing tasks, and use temp dirs/DB where needed"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-009-auth-permission-matrix",
+      "priority": 30,
+      "category": "tests",
+      "description": "Expand auth coverage for BENCHMARK_API_TOKEN across all mutating endpoints",
+      "steps": [
+        "Enumerate all mutating endpoints (POST/PUT/PATCH/DELETE) and ensure they require auth when BENCHMARK_API_TOKEN is set",
+        "Add tests for both missing token and incorrect token (401), and correct token (200/202)",
+        "Ensure read-only endpoints remain accessible without a token",
+        "Add coverage for QA retry/resume endpoints and any future code-execution routes"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-010-harness-patch-parser-fuzz",
+      "priority": 31,
+      "category": "tests",
+      "description": "Fuzz/prop-test patch normalization and validation helpers",
+      "steps": [
+        "Use Hypothesis (or similar) to generate random patch-like strings and ensure _is_probably_valid_patch/_normalize_patch_format never crash",
+        "Add regression cases for edge formats: missing headers, malformed hunks, mixed whitespace, and partial diffs",
+        "Keep runtime bounded (small examples, limited max examples) to remain CI-friendly",
+        "Ensure behavior is deterministic and does not touch filesystem outside temp dirs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-011-progress-backpressure-and-cleanup",
+      "priority": 32,
+      "category": "tests",
+      "description": "Stress test progress managers for cleanup, ordering, and memory growth",
+      "steps": [
+        "Add tests that create many subscribers and publish many attempt events, asserting no deadlocks and correct ordering",
+        "Verify unsubscribe/complete removes run state (no memory leak)",
+        "Add tests for cross-thread publishing under load (small stress loop) to ensure thread-safety holds",
+        "Keep stress tests bounded and fast"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-005-license-compliance-scan",
+      "priority": 33,
+      "category": "security",
+      "description": "Add license compliance scanning for Python and any JS dependencies",
+      "steps": [
+        "Generate a license inventory for Python dependencies (and JS if applicable)",
+        "Define an allowlist/denylist policy (e.g., allow MIT/BSD/Apache-2.0; review GPL)",
+        "Run in CI and fail (or warn initially) on disallowed/unknown licenses",
+        "Keep scanning offline and ensure it does not leak dependency metadata unnecessarily"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-006-sbom-generation",
+      "priority": 34,
+      "category": "security",
+      "description": "Generate and publish SBOMs for supply-chain visibility",
+      "steps": [
+        "Generate a CycloneDX (or SPDX) SBOM for Python dependencies (and JS if applicable)",
+        "Upload SBOM as a CI artifact and optionally attach to releases",
+        "Ensure SBOM generation uses locked dependencies (once lockfiles exist)",
+        "Keep secrets out of SBOM outputs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-004-nightly-deep-scans",
+      "priority": 35,
+      "category": "ci",
+      "description": "Add scheduled CI jobs for deeper scans without slowing PR checks",
+      "steps": [
+        "Add a scheduled workflow (nightly/weekly) to run slower scans (full semgrep rulesets, full pip-audit, bandit, license scan, SBOM generation)",
+        "Alert on new findings and track baselines",
+        "Ensure scheduled jobs use the same pinned Python and locked dependencies as PR workflows",
+        "Keep tasks/* suites excluded"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-005-diff-coverage-and-pr-comment",
+      "priority": 36,
+      "category": "ci",
+      "description": "Add diff coverage and PR reporting to prevent untested changes",
+      "steps": [
+        "Add diff coverage (or changed-file coverage) enforcement so new code requires tests even if global baseline is low",
+        "Post a concise coverage summary on PRs (or as a CI step summary)",
+        "Ensure coverage measurement is stable and does not include tasks/* workspaces or runs/",
+        "Keep enforcement brownfield-friendly (warn-only -> fail after adoption)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "foundation-004-bootstrap-script",
+      "priority": 37,
+      "category": "foundation",
+      "description": "Add a deterministic local bootstrap script for developers and CI parity",
+      "steps": [
+        "Add a ./scripts/bootstrap.sh that creates .venv, installs locked deps, and prints next-step commands",
+        "Ensure bootstrap is idempotent and works on macOS/Linux (and optionally Windows instructions)",
+        "Keep bootstrap free of secrets (no reading .env beyond what is required)",
+        "Use the same dependency sets as CI validators"
+      ],
+      "passes": false
     }
   ]
 }
