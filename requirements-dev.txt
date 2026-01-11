@@ -6,6 +6,8 @@
 #
 anyio==4.12.1
     # via httpx
+arrow==1.4.0
+    # via isoduration
 attrs==25.4.0
     # via
     #   glom
@@ -20,6 +22,8 @@ boltons==21.0.0
     #   face
     #   glom
     #   semgrep
+boolean-py==5.0
+    # via license-expression
 bracex==2.6
     # via wcmatch
 build==1.4.0
@@ -31,6 +35,8 @@ certifi==2026.1.4
     #   requests
 cfgv==3.5.0
     # via pre-commit
+chardet==5.2.0
+    # via cyclonedx-bom
 charset-normalizer==3.4.4
     # via requests
 click==8.3.1
@@ -44,8 +50,14 @@ colorama==0.4.6
     # via semgrep
 coverage==7.13.1
     # via pytest-cov
+cyclonedx-bom==4.6.1
+    # via -r requirements-dev.in
+cyclonedx-python-lib==7.6.2
+    # via cyclonedx-bom
 defusedxml==0.7.1
-    # via semgrep
+    # via
+    #   py-serializable
+    #   semgrep
 deprecated==1.3.1
     # via
     #   opentelemetry-api
@@ -58,6 +70,8 @@ face==24.0.0
     # via glom
 filelock==3.20.3
     # via virtualenv
+fqdn==1.5.1
+    # via jsonschema
 glom==22.1.0
     # via semgrep
 googleapis-common-protos==1.72.0
@@ -76,13 +90,19 @@ idna==3.11
     # via
     #   anyio
     #   httpx
+    #   jsonschema
     #   requests
 importlib-metadata==7.1.0
     # via opentelemetry-api
 iniconfig==2.3.0
     # via pytest
+isoduration==20.11.0
+    # via jsonschema
+jsonpointer==3.0.0
+    # via jsonschema
 jsonschema==4.26.0
     # via
+    #   cyclonedx-python-lib
     #   openapi-schema-validator
     #   openapi-spec-validator
     #   semgrep
@@ -94,6 +114,10 @@ jsonschema-specifications==2025.9.1
     #   openapi-schema-validator
 lazy-object-proxy==1.12.0
     # via openapi-spec-validator
+license-expression==30.4.4
+    # via cyclonedx-python-lib
+lxml==5.4.0
+    # via cyclonedx-python-lib
 markdown-it-py==4.0.0
     # via rich
 mdurl==0.1.2
@@ -138,9 +162,15 @@ opentelemetry-semantic-conventions==0.46b0
     #   opentelemetry-sdk
 opentelemetry-util-http==0.46b0
     # via opentelemetry-instrumentation-requests
-packaging==25.0
+packageurl-python==0.17.6
+    # via
+    #   cyclonedx-bom
+    #   cyclonedx-python-lib
+packaging==24.2
     # via
     #   build
+    #   cyclonedx-bom
+    #   pip-requirements-parser
     #   pytest
     #   semgrep
 pathable==0.4.4
@@ -149,6 +179,8 @@ peewee==3.19.0
     # via semgrep
 pip-licenses==5.0.0
     # via -r requirements-dev.in
+pip-requirements-parser==32.0.1
+    # via cyclonedx-bom
 pip-tools==7.5.2
     # via -r requirements-dev.in
 platformdirs==4.5.1
@@ -163,8 +195,12 @@ protobuf==4.25.8
     # via
     #   googleapis-common-protos
     #   opentelemetry-proto
+py-serializable==1.1.2
+    # via cyclonedx-python-lib
 pygments==2.19.2
     # via rich
+pyparsing==3.3.1
+    # via pip-requirements-parser
 pyproject-hooks==1.2.0
     # via
     #   build
@@ -178,6 +214,8 @@ pytest-asyncio==0.24.0
     # via -r requirements-dev.in
 pytest-cov==6.0.0
     # via -r requirements-dev.in
+python-dateutil==2.9.0.post0
+    # via arrow
 pyyaml==6.0.3
     # via
     #   bandit
@@ -194,7 +232,11 @@ requests==2.32.5
     #   opentelemetry-exporter-otlp-proto-http
     #   semgrep
 rfc3339-validator==0.1.4
-    # via openapi-schema-validator
+    # via
+    #   jsonschema
+    #   openapi-schema-validator
+rfc3987==1.3.8
+    # via jsonschema
 rich==13.5.3
     # via
     #   bandit
@@ -210,9 +252,13 @@ ruff==0.8.4
 semgrep==1.102.0
     # via -r requirements-dev.in
 six==1.17.0
-    # via rfc3339-validator
+    # via
+    #   python-dateutil
+    #   rfc3339-validator
 sortedcontainers==2.4.0
-    # via hypothesis
+    # via
+    #   cyclonedx-python-lib
+    #   hypothesis
 stevedore==5.6.0
     # via bandit
 tomli==2.0.2
@@ -228,6 +274,10 @@ typing-extensions==4.15.0
     #   opentelemetry-sdk
     #   referencing
     #   semgrep
+tzdata==2025.3
+    # via arrow
+uri-template==1.3.0
+    # via jsonschema
 urllib3==2.6.3
     # via
     #   requests
@@ -241,6 +291,8 @@ wcmatch==8.5.2
     # via semgrep
 wcwidth==0.2.14
     # via prettytable
+webcolors==25.10.0
+    # via jsonschema
 wheel==0.45.1
     # via pip-tools
 wrapt==1.17.3

@@ -14,3 +14,4 @@ semgrep==1.102.0
 openapi-spec-validator==0.7.1
 hypothesis==6.135.0
 pip-licenses==5.0.0
+cyclonedx-bom==4.6.1

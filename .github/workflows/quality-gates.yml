@@ -62,6 +62,9 @@ jobs:
       - name: Run license compliance scan
         run: ./scripts/license-scan.sh
 
+      - name: Generate SBOM
+        run: ./scripts/sbom.sh
+
       - name: Validate OpenAPI schema
         run: ./scripts/openapi-validate.sh
 
@@ -103,3 +106,13 @@ jobs:
         with:
           files: junit.xml
           check_name: Test Results (Python ${{ matrix.python-version }})
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sbom-py${{ matrix.python-version }}
+          path: |
+            docs/sbom/sbom.json
+            docs/sbom/sbom.xml
+          retention-days: 30

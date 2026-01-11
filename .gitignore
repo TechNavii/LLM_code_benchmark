@@ -50,6 +50,7 @@ target/
 runs/
 *.db
 *.sqlite
+docs/sbom/
 
 # IDE / editor
 .idea/

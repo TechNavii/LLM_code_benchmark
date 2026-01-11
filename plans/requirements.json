@@ -485,7 +485,7 @@
         "Ensure SBOM generation uses locked dependencies (once lockfiles exist)",
         "Keep secrets out of SBOM outputs"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-004-nightly-deep-scans",
