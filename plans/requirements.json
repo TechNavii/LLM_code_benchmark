@@ -784,7 +784,7 @@
         "Verify expected DB rows/artifacts are created and progress endpoints behave",
         "Ensure the test is hermetic and does not require OPENROUTER_API_KEY"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-017-log-redaction",

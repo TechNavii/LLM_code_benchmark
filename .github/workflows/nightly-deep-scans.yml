@@ -856,3 +856,91 @@ jobs:
             gui-test-output.txt
             test-results/
           retention-days: 7
+
+  # ==========================================
+  # Harness-Server E2E Integration Tests
+  # ==========================================
+  harness-server-e2e:
+    name: Harness-Server E2E Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run E2E tests
+        id: e2e-tests
+        run: |
+          echo "Running harness-server E2E integration tests..."
+          echo ""
+
+          # Run E2E tests (uses mock responses, no real LLM calls)
+          .venv/bin/pytest tests/test_harness_server_e2e.py \
+            -v \
+            --tb=short \
+            --junit-xml=junit-e2e.xml \
+            2>&1 | tee e2e-test-output.txt
+
+          echo ""
+          echo "E2E tests complete."
+        continue-on-error: true
+
+      - name: Generate E2E test summary
+        if: always()
+        run: |
+          {
+            echo "## Harness-Server E2E Integration Tests"
+            echo ""
+            echo "Tests the full integration between FastAPI server and harness using mock model responses."
+            echo ""
+            if [ -f junit-e2e.xml ]; then
+              TOTAL=$(grep -c 'testcase' junit-e2e.xml || echo "0")
+              FAILURES=$(grep -c '<failure' junit-e2e.xml || echo "0")
+              echo "**Tests Run:** ${TOTAL}"
+              echo "**Failures:** ${FAILURES}"
+              if [ "$FAILURES" = "0" ]; then
+                echo ""
+                echo "All E2E tests passed!"
+              else
+                echo ""
+                echo "Some E2E tests failed. See artifacts for details."
+              fi
+            else
+              echo "No test results found."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload E2E test artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: |
+            junit-e2e.xml
+            e2e-test-output.txt
+          retention-days: 7
