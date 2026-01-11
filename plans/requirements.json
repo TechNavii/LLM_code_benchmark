@@ -134,7 +134,7 @@
         "Ensure tests can run locally and on CI with minimal setup",
         "Keep integration tests selectable via marker/flag or file pattern, and keep them isolated from tasks/* suites"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-004-e2e-smoke",
