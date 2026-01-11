@@ -316,7 +316,7 @@
         "Unit test count_errors_from_summary() for malformed JSON and status normalization",
         "Add a lightweight integration test confirming get_session() commits/rolls back as expected"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-003-sast-bandit",

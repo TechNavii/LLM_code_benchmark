@@ -38,7 +38,7 @@ def count_errors_from_summary(summary_json: Optional[str]) -> int:
         summary = json.loads(summary_json)
         attempts = summary.get("attempts", [])
         return sum(1 for a in attempts if a.get("status", "").lower() in FAILED_STATUSES)
-    except (json.JSONDecodeError, TypeError):
+    except (json.JSONDecodeError, TypeError, AttributeError):
         return 0
 
 
