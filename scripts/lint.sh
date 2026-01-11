@@ -35,4 +35,7 @@ echo "Running ruff format check..."
 echo "Running ruff check..."
 "${VENV_DIR}/bin/ruff" check server/ harness/ tests/ conftest.py
 
+# Check for ungated console.log in GUI files
+"${SCRIPT_DIR}/check-console-log.sh"
+
 echo "✓ Lint checks passed"

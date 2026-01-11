@@ -251,7 +251,7 @@
         "Add a check that flags un-gated console.log in gui/ (allow only when gated behind an explicit debug flag)",
         "Ensure CI fails when debug output is reintroduced"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-007-dead-code-and-import-hygiene",

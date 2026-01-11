@@ -26,6 +26,7 @@ indent-style = "space"
 select = [
     "E",   # pycodestyle errors
     "F",   # pyflakes
+    "T201", # print() usage detection (flake8-print)
 ]
 
 # Allow brownfield code patterns temporarily
