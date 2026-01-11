@@ -73,7 +73,83 @@ Security scans run automatically on every PR via GitHub Actions. The build will 
 
 ## Secret Scanning
 
-(To be added in security-002-secret-scanning)
+This project uses [Gitleaks](https://github.com/gitleaks/gitleaks) to scan for accidentally committed secrets and credentials.
+
+### How It Works
+
+Gitleaks scans the git history for:
+- API keys and tokens
+- Passwords and credentials
+- Private keys
+- Database connection strings
+- OAuth tokens
+- Other sensitive information
+
+### CI Integration
+
+Secret scanning runs automatically on:
+- Every push to main/master branches
+- Every pull request
+
+The build will fail if secrets are detected.
+
+### Handling False Positives
+
+If Gitleaks flags a false positive (e.g., example values, test credentials), add it to `.gitleaks.toml`:
+
+```toml
+[allowlist]
+paths = [
+    '''path/to/file\.txt$''',  # Specific file
+]
+
+regexes = [
+    '''example_value_pattern''',  # Specific pattern
+]
+```
+
+### If You Accidentally Commit a Secret
+
+**DO NOT** just delete the secret and commit again. The secret is still in git history.
+
+1. **Immediately rotate the exposed credential**
+   - Generate a new key/password/token
+   - Update all systems using the old credential
+   - Revoke or disable the old credential
+
+2. **Remove the secret from git history**
+   ```bash
+   # Using git filter-repo (recommended)
+   git filter-repo --path path/to/file --invert-paths
+
+   # Or using BFG Repo-Cleaner
+   bfg --delete-files path/to/file
+
+   # Force push (coordinate with team first!)
+   git push origin --force --all
+   ```
+
+3. **Document the incident**
+   - Note when it happened
+   - What credential was exposed
+   - What actions were taken
+   - When the credential was rotated
+
+### Best Practices
+
+- **Never commit secrets to version control**
+  - Use environment variables (`.env` files are gitignored)
+  - Use secret management tools (HashiCorp Vault, AWS Secrets Manager, etc.)
+  - Keep `.env.example` updated with variable names (not values)
+
+- **Use the .gitignore**
+  - `.env` and similar files are already ignored
+  - Add any project-specific secret files to `.gitignore`
+
+- **Review before committing**
+  - Check `git diff` before staging
+  - Review `git status` before committing
+  - Consider using a pre-commit hook (see quality-005-precommit-hooks)
 
 ## Reporting Security Issues
 
