@@ -45,4 +45,7 @@ echo "Running vulture dead-code detection..."
 # Run frontend quality checks
 "${SCRIPT_DIR}/check-frontend.sh"
 
+# Check .env.example is synchronized with pydantic-settings models
+"${SCRIPT_DIR}/check-env-example.sh"
+
 echo "✓ Lint checks passed"

@@ -693,7 +693,7 @@
         "Ensure the check does not reveal real secrets (only key names)",
         "Keep the check fast and deterministic"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-014-test-order-determinism",
