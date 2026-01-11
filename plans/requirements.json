@@ -342,7 +342,7 @@
         "Run in CI and allow suppressions only when justified",
         "Keep performance fast enough to run on every PR"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-002-python-version-matrix",

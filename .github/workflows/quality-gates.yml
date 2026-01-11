@@ -50,6 +50,9 @@ jobs:
       - name: Run Bandit SAST scan
         run: ./scripts/bandit.sh
 
+      - name: Run Semgrep security scan
+        run: ./scripts/semgrep.sh
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         if: success()
