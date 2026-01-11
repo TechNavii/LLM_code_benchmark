@@ -6,6 +6,8 @@
 #
 anyio==4.12.1
     # via httpx
+bandit==1.8.0
+    # via -r requirements-dev.in
 build==1.4.0
     # via pip-tools
 certifi==2026.1.4
@@ -36,6 +38,10 @@ idna==3.11
     #   httpx
 iniconfig==2.3.0
     # via pytest
+markdown-it-py==4.0.0
+    # via rich
+mdurl==0.1.2
+    # via markdown-it-py
 mypy==1.13.0
     # via -r requirements-dev.in
 mypy-extensions==1.1.0
@@ -54,6 +60,8 @@ pluggy==1.6.0
     # via pytest
 pre-commit==4.0.1
     # via -r requirements-dev.in
+pygments==2.19.2
+    # via rich
 pyproject-hooks==1.2.0
     # via
     #   build
@@ -68,9 +76,15 @@ pytest-asyncio==0.24.0
 pytest-cov==6.0.0
     # via -r requirements-dev.in
 pyyaml==6.0.3
-    # via pre-commit
+    # via
+    #   bandit
+    #   pre-commit
+rich==14.2.0
+    # via bandit
 ruff==0.8.4
     # via -r requirements-dev.in
+stevedore==5.6.0
+    # via bandit
 types-requests==2.32.0.20241016
     # via -r requirements-dev.in
 typing-extensions==4.15.0

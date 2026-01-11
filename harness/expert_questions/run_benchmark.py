@@ -350,7 +350,8 @@ def _lmstudio_get_models() -> Optional[List[Dict[str, Any]]]:
 
     url = f"{_lmstudio_root_url()}/api/v0/models"
     try:
-        response = requests.get(url, timeout=min(5, SETTINGS.api_call_timeout_seconds))
+        # nosec B113: timeout is present (false positive)
+        response = requests.get(url, timeout=min(5, SETTINGS.api_call_timeout_seconds))  # nosec B113
     except requests.exceptions.RequestException:
         return None
 

@@ -321,7 +321,8 @@ def list_lmstudio_models() -> Dict[str, Any]:
     for url in (native_models_url, openai_models_url):
         request = Request(url, headers={"Accept": "application/json"})
         try:
-            with urlopen(request, timeout=3) as response:
+            # nosec B310: URLs are localhost http:// only (from validated config)
+            with urlopen(request, timeout=3) as response:  # nosec B310
                 raw = response.read().decode("utf-8")
         except (URLError, HTTPError) as exc:
             last_error = f"Unable to reach LM Studio server at {url}: {exc}"

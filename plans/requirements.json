@@ -329,7 +329,7 @@
         "Run in CI and decide an initial enforcement policy (warn-only -> fail on high/critical)",
         "Ensure findings can be suppressed only with explicit justification"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-004-semgrep-lightweight",
