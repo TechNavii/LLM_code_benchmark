@@ -212,7 +212,7 @@
         "Keep hooks optional to install, but ensure CI remains the source of truth",
         "Ensure hooks behave consistently across platforms (macOS/Linux/Windows)"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }
