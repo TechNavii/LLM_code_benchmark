@@ -264,7 +264,7 @@
         "Keep the signal-to-noise ratio high: start warn-only, then incrementally enforce",
         "Integrate into ./scripts/lint.sh and ensure it respects meta.excludePatterns"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-008-frontend-quality-gates",

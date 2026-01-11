@@ -81,6 +81,8 @@ urllib3==2.6.3
     # via types-requests
 virtualenv==20.36.1
     # via pre-commit
+vulture==2.14
+    # via -r requirements-dev.in
 wheel==0.45.1
     # via pip-tools
 

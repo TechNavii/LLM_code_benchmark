@@ -38,4 +38,8 @@ echo "Running ruff check..."
 # Check for ungated console.log in GUI files
 "${SCRIPT_DIR}/check-console-log.sh"
 
+# Run dead-code detection with vulture
+echo "Running vulture dead-code detection..."
+"${VENV_DIR}/bin/vulture" --min-confidence 80 server/ harness/ tests/ conftest.py .vulture-allowlist.py
+
 echo "✓ Lint checks passed"
