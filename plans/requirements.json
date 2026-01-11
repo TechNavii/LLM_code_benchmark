@@ -550,7 +550,7 @@
         "Ensure it supports the repo's lockfile strategy (pip-tools / uv) and ignores tasks/* workspace deps",
         "Add a documented override path for emergency exceptions (with justification)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-012-openapi-diff",

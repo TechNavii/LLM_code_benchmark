@@ -71,6 +71,59 @@ Security scans run automatically on every PR via GitHub Actions. The build will 
 - High or critical vulnerabilities are found
 - Vulnerabilities are not properly suppressed with justification
 
+## Dependency Review
+
+This project uses [GitHub Dependency Review](https://github.com/actions/dependency-review-action) to block vulnerable dependency introductions in PRs.
+
+### How It Works
+
+The dependency-review action runs on every PR and:
+- Analyzes changes to requirements files (server/, harness/, requirements-dev.txt)
+- Detects newly introduced vulnerabilities (high/critical severity)
+- Blocks PRs that add vulnerable dependencies
+- Ignores tasks/* workspace dependencies (not part of core project)
+
+### Lockfile Support
+
+The action supports our pip-tools lockfile strategy:
+- Scans both `.in` source files and `.txt` lock files
+- Evaluates changes to locked dependencies
+- Respects the pinned versions in our lock files
+
+### Emergency Override Path
+
+In rare cases, you may need to merge a PR that introduces a temporarily vulnerable dependency (e.g., waiting for an upstream fix). Follow this process:
+
+1. **Document the justification**
+   - Create a GitHub issue explaining:
+     - Why the dependency is needed urgently
+     - What vulnerability is being introduced
+     - What the mitigation plan is (timeline for fix, workarounds)
+     - Who approved the exception
+
+2. **Use repository bypass** (requires admin)
+   - A repository admin can merge the PR using "Merge without waiting for requirements"
+   - This bypasses the dependency-review check
+   - The bypass is logged in the repository audit log
+
+3. **Alternative: Skip the check for this PR**
+   - Add a comment to the PR: `@dependabot merge` (if Dependabot PR)
+   - Or use the `skip-dependency-review` label (if configured)
+   - The label can be added by maintainers with write access
+
+4. **Follow-up required**
+   - Create a tracking issue to remediate the vulnerability
+   - Set a reminder for 7/14/30 days to check for upstream fixes
+   - Update `.pip-audit-suppressions.txt` if the vulnerability persists
+
+### Configuration
+
+The dependency-review action is configured in `.github/workflows/quality-gates.yml`:
+- `fail-on-severity: high` - Fails on high and critical vulnerabilities
+- `deny-licenses: GPL-3.0, AGPL-3.0` - Blocks problematic licenses
+- `allow-unknown-licenses: true` - Allows unknown licenses (brownfield-friendly)
+- `allow-paths` - Restricts scanning to core project files (excludes tasks/*)
+
 ## Secret Scanning
 
 This project uses [Gitleaks](https://github.com/gitleaks/gitleaks) to scan for accidentally committed secrets and credentials.

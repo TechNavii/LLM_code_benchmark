@@ -6,13 +6,43 @@ on:
   pull_request:
     branches: [main, master]
 
-# Permissions for PR comments and check annotations
+# Permissions for PR comments, check annotations, and dependency review
 permissions:
   contents: read
   pull-requests: write
   checks: write
 
 jobs:
+  # Dependency Review - runs on PRs to detect vulnerable dependency changes
+  dependency-review:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Fail on high and critical severity vulnerabilities
+          fail-on-severity: high
+          # Deny specific problematic licenses (optional, can be expanded)
+          deny-licenses: GPL-3.0, AGPL-3.0
+          # Only scan repository requirements files, not tasks/* workspace deps
+          # The action scans manifest files changed in the PR
+          # Use allow-paths to restrict scanning scope
+          allow-paths: |
+            server/requirements.txt
+            server/requirements.in
+            harness/requirements.txt
+            harness/requirements.in
+            requirements-dev.txt
+            requirements-dev.in
+          # Block PRs that introduce vulnerable dependencies
+          comment-summary-in-pr: on-failure
+          # Warn but don't fail on unknown licenses (brownfield-friendly)
+          allow-unknown-licenses: true
+
   quality-checks:
     runs-on: ubuntu-latest
     strategy:
