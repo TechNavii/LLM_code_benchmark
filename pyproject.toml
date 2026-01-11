@@ -1,0 +1,92 @@
+[tool.ruff]
+# Scope to lintScope directories
+extend-exclude = [
+    "runs/",
+    ".venv/",
+    ".pytest_cache/",
+    "__pycache__/",
+    "tasks/*/workspace/",
+]
+
+# Start with a minimal, high-signal ruleset for brownfield
+line-length = 120
+
+[tool.ruff.lint]
+# Start with a focused ruleset to avoid massive refactoring
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+]
+
+# Allow brownfield code patterns temporarily
+ignore = [
+    "E402",  # Module level import not at top (common in existing code)
+    "E501",  # Line too long (brownfield code has many long lines)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Allow unused imports and variables in specific files that need gradual cleanup
+"harness/expert_questions/run_benchmark.py" = ["F841"]
+"harness/run_harness.py" = ["F401", "F841"]
+"server/database.py" = ["F401"]
+"server/monitoring.py" = ["F401"]
+"server/qa_database.py" = ["F401"]
+
+[tool.mypy]
+# Brownfield-safe mypy settings for incremental adoption
+python_version = "3.11"
+exclude = [
+    "^runs/",
+    "^\\.venv/",
+    "^\\.pytest_cache/",
+    "^__pycache__/",
+    "^tasks/.*/workspace/",
+]
+
+# Start lenient for brownfield - focus on establishing baseline
+check_untyped_defs = false
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
+# Disable warnings to establish baseline
+warn_unused_ignores = false
+warn_return_any = false
+warn_unreachable = false
+warn_redundant_casts = false
+warn_unused_configs = false
+
+# Allow gradual typing
+ignore_missing_imports = true
+no_implicit_optional = false
+
+# Allow various errors for brownfield adoption
+allow_redefinition = true
+allow_untyped_globals = true
+implicit_reexport = true
+
+# Disable strict optional for now
+strict_optional = false
+
+# Per-file ignores for brownfield adoption
+[[tool.mypy.overrides]]
+module = [
+    "server.config",
+    "server.progress_base",
+    "server.database",
+    "server.qa_database",
+    "server.routes.router",
+    "server.routes.qa_router",
+    "harness.config",
+    "harness.run_harness",
+    "harness.expert_questions.run_benchmark",
+]
+disable_error_code = [
+    "arg-type",
+    "assignment",
+    "call-arg",
+    "misc",
+    "no-redef",
+    "valid-type",
+    "var-annotated",
+]

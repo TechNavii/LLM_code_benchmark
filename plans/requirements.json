@@ -1,0 +1,218 @@
+{
+  "meta": {
+    "name": "Benchmark Harness: Quality Checks & Tests",
+    "description": "Incrementally harden the benchmark harness (FastAPI server + Python harness + GUI) with reproducible validators, lint/format/type checks, test coverage, CI gates, and basic security scans.",
+    "projectDir": "/Users/tooru/Desktop/coding_test/benchmark",
+    "structure": {
+      "src": "server/",
+      "tests": "tests/",
+      "public": "gui/",
+      "harness": "harness/",
+      "tasks": "tasks/",
+      "runs": "runs/",
+      "scripts": "scripts/",
+      "docs": "docs/",
+      "venv": ".venv/"
+    },
+    "lintScope": [
+      "server/",
+      "harness/",
+      "tests/",
+      "conftest.py"
+    ],
+    "excludePatterns": [
+      "runs/",
+      ".venv/",
+      ".pytest_cache/",
+      "__pycache__/",
+      "tasks/**/workspace/"
+    ],
+    "validators": {
+      "lint": "cd /Users/tooru/Desktop/coding_test/benchmark && ./scripts/lint.sh",
+      "typecheck": "cd /Users/tooru/Desktop/coding_test/benchmark && ./scripts/typecheck.sh",
+      "test": "cd /Users/tooru/Desktop/coding_test/benchmark && ./scripts/test.sh"
+    },
+    "notes": [
+      "This is a brownfield plan: prefer incremental, non-breaking changes and characterization tests around existing behavior.",
+      "The default pytest suite is under tests/ and harness/tests (see pytest.ini). Do NOT add tasks/* test suites to the default validators: many tasks are intentionally incomplete and should not gate repo health.",
+      "Prefer running tools from the local virtualenv at .venv (create it if missing). Keep validators deterministic and fast.",
+      "When configuring tools (formatter/linter/type checker), scope to meta.lintScope and exclude meta.excludePatterns.",
+      "Avoid touching generated artifacts and caches listed in meta.excludePatterns.",
+      "Never commit secrets: .env is local-only; keep .env.example updated when adding required variables."
+    ]
+  },
+  "features": [
+    {
+      "id": "foundation-001-validator-entrypoints",
+      "priority": 1,
+      "category": "foundation",
+      "description": "Create standardized validator entrypoints (lint/typecheck/test) for the benchmark repo",
+      "steps": [
+        "Create executable scripts in scripts/: lint.sh, typecheck.sh, test.sh (alongside devserver.sh)",
+        "Each script should ensure a local virtualenv exists at .venv and runs tools from it (prefer invoking .venv/bin/python -m ... / .venv/bin/ruff)",
+        "Install runtime deps (server/requirements.txt + harness/requirements.txt) and a dev requirements file (e.g., requirements-dev.txt) as needed",
+        "Ensure scripts are idempotent and fail fast (non-zero exit) when checks fail",
+        "Verify all scripts run locally and deterministically from a clean checkout",
+        "Test script should run only repository tests (pytest.ini testpaths) and must not run tasks/* suites by default"
+      ],
+      "passes": true
+    },
+    {
+      "id": "quality-001-formatting",
+      "priority": 2,
+      "category": "quality",
+      "description": "Introduce consistent formatting checks for Python code without large-scale churn",
+      "steps": [
+        "Adopt a Python formatter (prefer ruff format; black acceptable) and configure it (pyproject.toml or ruff.toml)",
+        "Scope formatting to meta.lintScope and exclude meta.excludePatterns",
+        "Add a check mode and integrate it into ./scripts/lint.sh",
+        "Provide a developer fix command (non-CI), but keep CI on check-only"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-002-lint-static-analysis",
+      "priority": 3,
+      "category": "quality",
+      "description": "Add Python linting/static analysis tuned for an existing codebase",
+      "steps": [
+        "Use ruff for linting (start with a small, high-signal ruleset to avoid refactor churn)",
+        "Configure scope to meta.lintScope and excludes to meta.excludePatterns",
+        "Add targeted ignores only where needed and keep rationale minimal",
+        "Integrate into ./scripts/lint.sh and ensure it runs on CI"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-003-typecheck",
+      "priority": 4,
+      "category": "quality",
+      "description": "Establish type checking (or equivalent static checks) with incremental strictness",
+      "steps": [
+        "Add Python type checking (mypy or pyright) with brownfield-safe settings",
+        "Limit scope initially to server/ and harness/ if full strictness is not immediately feasible",
+        "Ensure the typecheck command is fast and deterministic",
+        "Integrate into ./scripts/typecheck.sh (invoked via meta.validators)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-001-unit-test-harness",
+      "priority": 5,
+      "category": "tests",
+      "description": "Standardize pytest execution and expand characterization/unit tests for server + harness",
+      "steps": [
+        "Use pytest (already configured via pytest.ini) as the default test runner",
+        "Ensure pytest and test-only deps are installed via a dedicated dev requirements file",
+        "Add characterization tests around stable behavior (e.g., /health, config parsing, validators, progress managers)",
+        "Ensure tests are hermetic where possible and avoid reliance on developer machine state",
+        "Integrate into ./scripts/test.sh (invoked via meta.validators)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-002-critical-path-regression-suite",
+      "priority": 6,
+      "category": "tests",
+      "description": "Create a fast regression/smoke suite for key server and harness flows",
+      "steps": [
+        "Codify key flows as tests: server health, runs listing, leaderboard query, task discovery, and dry-run harness execution",
+        "Prefer black-box tests at public boundaries to reduce coupling to internals",
+        "Make the suite fast (target < 1–2 minutes) so it can run on every change",
+        "Run this suite in CI as part of the default test job"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-003-integration-tests",
+      "priority": 7,
+      "category": "tests",
+      "description": "Add integration tests for key integrations (SQLite DB, filesystem artifacts, WebSocket stream)",
+      "steps": [
+        "Add integration tests that exercise real boundaries (database init/queries, run history persistence)",
+        "Use lightweight, reproducible dependencies (prefer in-memory/tempdir substitutes; keep Docker optional where appropriate)",
+        "Ensure tests can run locally and on CI with minimal setup",
+        "Keep integration tests selectable via marker/flag or file pattern, and keep them isolated from tasks/* suites"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-004-e2e-smoke",
+      "priority": 8,
+      "category": "tests",
+      "description": "Add an end-to-end smoke test for the FastAPI app + UI mounts",
+      "steps": [
+        "Add a smoke test that exercises create_app() and verifies /ui is mounted and /health returns ok",
+        "Target the happy path only at first to keep the suite stable",
+        "Run e2e smoke in CI (can be separate job) and collect artifacts on failure",
+        "Ensure the environment setup (ports, env vars, test data) is scripted and reproducible"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-004-coverage-reporting",
+      "priority": 9,
+      "category": "quality",
+      "description": "Add coverage collection and enforce a brownfield-friendly baseline",
+      "steps": [
+        "Enable code coverage reporting in pytest (unit + integration where sensible)",
+        "Record the current baseline coverage and set an initial threshold that matches it",
+        "Require that new/changed code does not reduce coverage (e.g., diff coverage or incremental thresholds)",
+        "Publish coverage in CI (summary + optional upload to a coverage service)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-001-quality-gates",
+      "priority": 10,
+      "category": "ci",
+      "description": "Add CI quality gates to run lint/typecheck/tests on every PR",
+      "steps": [
+        "Add a CI workflow (e.g., GitHub Actions) that runs ./scripts/lint.sh, ./scripts/typecheck.sh, and ./scripts/test.sh",
+        "Cache dependencies to keep CI fast",
+        "Fail the build on any validator failure",
+        "Ensure CI uses a pinned Python version compatible with the project (Python 3.11+) and does not gate on intentionally-incomplete tasks/* suites"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-001-dependency-vulnerability-scan",
+      "priority": 11,
+      "category": "security",
+      "description": "Add automated dependency vulnerability scanning",
+      "steps": [
+        "Use a Python dependency scanner (pip-audit or osv-scanner) for server/requirements.txt, harness/requirements.txt, and dev requirements",
+        "Run it in CI and fail on high/critical issues where practical (start warn-only if needed)",
+        "Add an allowlist/suppressions mechanism with justification for unavoidable findings",
+        "Document a basic remediation workflow (update dependencies, regenerate lockfiles)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-002-secret-scanning",
+      "priority": 12,
+      "category": "security",
+      "description": "Add secret scanning to prevent accidental credential commits",
+      "steps": [
+        "Integrate secret scanning (e.g., gitleaks/trufflehog) into CI",
+        "Optionally add a pre-commit hook for local protection",
+        "Ensure scanning does not log sensitive values",
+        "Add a documented process for rotating/removing exposed secrets"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-005-precommit-hooks",
+      "priority": 13,
+      "category": "quality",
+      "description": "Add developer-friendly pre-commit checks to reduce CI churn",
+      "steps": [
+        "Add pre-commit hooks (prefer the Python pre-commit framework) to run ruff/formatting on staged files",
+        "Keep hooks fast (staged-files only) and consistent with CI",
+        "Keep hooks optional to install, but ensure CI remains the source of truth",
+        "Ensure hooks behave consistently across platforms (macOS/Linux/Windows)"
+      ],
+      "passes": false
+    }
+  ]
+}

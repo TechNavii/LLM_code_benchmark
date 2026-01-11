@@ -1,0 +1,1 @@
+foundation-001-validator-entrypoints: Created standardized validator scripts (lint.sh, typecheck.sh, test.sh) with virtualenv management, requirements-dev.txt, and brownfield-safe tool configurations (ruff, mypy) in pyproject.toml. All validators pass.
