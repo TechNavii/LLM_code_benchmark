@@ -108,7 +108,7 @@
         "Ensure tests are hermetic where possible and avoid reliance on developer machine state",
         "Integrate into ./scripts/test.sh (invoked via meta.validators)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-002-critical-path-regression-suite",
