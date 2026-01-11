@@ -433,7 +433,7 @@
         "Ensure read-only endpoints remain accessible without a token",
         "Add coverage for QA retry/resume endpoints and any future code-execution routes"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-010-harness-patch-parser-fuzz",
