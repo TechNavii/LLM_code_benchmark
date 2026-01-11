@@ -186,7 +186,7 @@
         "Add an allowlist/suppressions mechanism with justification for unavoidable findings",
         "Document a basic remediation workflow (update dependencies, regenerate lockfiles)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-002-secret-scanning",
