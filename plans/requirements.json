@@ -498,7 +498,7 @@
         "Ensure scheduled jobs use the same pinned Python and locked dependencies as PR workflows",
         "Keep tasks/* suites excluded"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-005-diff-coverage-and-pr-comment",

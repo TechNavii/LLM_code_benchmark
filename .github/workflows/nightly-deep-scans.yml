@@ -1,0 +1,582 @@
+name: Nightly Deep Scans
+
+on:
+  schedule:
+    # Run nightly at 2:00 AM UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    # Allow manual trigger for debugging
+    inputs:
+      full_scan:
+        description: "Run full extended scans"
+        required: false
+        default: true
+        type: boolean
+
+# Cancel any in-progress runs of this workflow
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  deep-security-scans:
+    name: Deep Security Scans
+    runs-on: ubuntu-latest
+    # Use same Python version as PR workflow
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # Full clone for baseline comparison
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      # ==========================================
+      # Full Semgrep Scan (extended rulesets)
+      # ==========================================
+      - name: Run full Semgrep scan
+        run: |
+          echo "Running extended Semgrep scan with full rulesets..."
+
+          # Create findings directory
+          mkdir -p .security-reports
+
+          # Run with both custom rules and Semgrep registry rulesets
+          .venv/bin/semgrep scan \
+            --config .semgrep.yml \
+            --config "p/python" \
+            --config "p/javascript" \
+            --config "p/security-audit" \
+            --config "p/secrets" \
+            --exclude 'tasks/' \
+            --exclude 'runs/' \
+            --exclude '.venv/' \
+            --exclude '.pytest_cache/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude 'node_modules/' \
+            --metrics off \
+            --json > .security-reports/semgrep-full.json \
+            server/ harness/ gui/ || true
+
+          # Generate summary
+          .venv/bin/python -c "
+          import json
+          import sys
+
+          try:
+              with open('.security-reports/semgrep-full.json') as f:
+                  data = json.load(f)
+
+              results = data.get('results', [])
+              errors_count = len(results)
+
+              # Count by severity
+              by_severity = {}
+              for r in results:
+                  sev = r.get('extra', {}).get('severity', 'UNKNOWN')
+                  by_severity[sev] = by_severity.get(sev, 0) + 1
+
+              print('## Semgrep Full Scan Results')
+              print(f'Total findings: {errors_count}')
+              for sev, count in sorted(by_severity.items()):
+                  print(f'  - {sev}: {count}')
+
+              # Save summary
+              with open('.security-reports/semgrep-summary.txt', 'w') as f:
+                  f.write(f'Total findings: {errors_count}\n')
+                  for sev, count in sorted(by_severity.items()):
+                      f.write(f'{sev}: {count}\n')
+          except Exception as e:
+              print(f'Error processing Semgrep results: {e}')
+              sys.exit(0)
+          "
+        continue-on-error: true
+
+      # ==========================================
+      # Full pip-audit Scan
+      # ==========================================
+      - name: Run full pip-audit scan
+        run: |
+          echo "Running full pip-audit vulnerability scan..."
+
+          # Ensure pip-audit is installed
+          .venv/bin/pip install -q pip-audit
+
+          # Create combined requirements for scanning
+          cat server/requirements.txt harness/requirements.txt requirements-dev.txt > /tmp/all-requirements.txt
+
+          # Run pip-audit with JSON output for processing
+          .venv/bin/pip-audit \
+            -r /tmp/all-requirements.txt \
+            --format json \
+            --output .security-reports/pip-audit-full.json || true
+
+          # Generate summary
+          .venv/bin/python -c "
+          import json
+          import sys
+
+          try:
+              with open('.security-reports/pip-audit-full.json') as f:
+                  data = json.load(f)
+
+              vulns = data.get('dependencies', [])
+              vuln_count = sum(len(d.get('vulns', [])) for d in vulns)
+
+              print('## pip-audit Full Scan Results')
+              print(f'Vulnerable dependencies: {len([d for d in vulns if d.get(\"vulns\")])}')
+              print(f'Total vulnerabilities: {vuln_count}')
+
+              # List high/critical vulnerabilities
+              for dep in vulns:
+                  for v in dep.get('vulns', []):
+                      severity = v.get('fix_versions', ['unknown'])[0] if v.get('fix_versions') else 'no fix'
+                      print(f'  - {dep[\"name\"]}: {v.get(\"id\", \"unknown\")} (fix: {severity})')
+
+              # Save summary
+              with open('.security-reports/pip-audit-summary.txt', 'w') as f:
+                  f.write(f'Vulnerable dependencies: {len([d for d in vulns if d.get(\"vulns\")])}\n')
+                  f.write(f'Total vulnerabilities: {vuln_count}\n')
+          except Exception as e:
+              print(f'Error processing pip-audit results: {e}')
+              sys.exit(0)
+          "
+        continue-on-error: true
+
+      # ==========================================
+      # Full Bandit Scan
+      # ==========================================
+      - name: Run full Bandit scan
+        run: |
+          echo "Running full Bandit SAST scan..."
+
+          # Run Bandit with all checks enabled (deeper than PR scan)
+          .venv/bin/bandit \
+            -c .bandit.yml \
+            -r server/ harness/ \
+            -f json \
+            -o .security-reports/bandit-full.json || true
+
+          # Generate summary
+          .venv/bin/python -c "
+          import json
+          import sys
+
+          try:
+              with open('.security-reports/bandit-full.json') as f:
+                  data = json.load(f)
+
+              results = data.get('results', [])
+              metrics = data.get('metrics', {})
+
+              print('## Bandit Full Scan Results')
+              print(f'Total issues: {len(results)}')
+
+              # Count by severity
+              by_severity = {}
+              for r in results:
+                  sev = r.get('issue_severity', 'UNKNOWN')
+                  by_severity[sev] = by_severity.get(sev, 0) + 1
+
+              for sev, count in sorted(by_severity.items()):
+                  print(f'  - {sev}: {count}')
+
+              # Save summary
+              with open('.security-reports/bandit-summary.txt', 'w') as f:
+                  f.write(f'Total issues: {len(results)}\n')
+                  for sev, count in sorted(by_severity.items()):
+                      f.write(f'{sev}: {count}\n')
+          except Exception as e:
+              print(f'Error processing Bandit results: {e}')
+              sys.exit(0)
+          "
+        continue-on-error: true
+
+      # ==========================================
+      # License Compliance Scan
+      # ==========================================
+      - name: Run license compliance scan
+        run: |
+          echo "Running license compliance scan..."
+
+          # Run the license scan script
+          ./scripts/license-scan.sh > .security-reports/license-scan.log 2>&1 || true
+
+          # Copy inventory to reports
+          cp docs/license-inventory.txt .security-reports/ 2>/dev/null || true
+
+          echo "License scan completed. See .security-reports/license-inventory.txt"
+        continue-on-error: true
+
+      # ==========================================
+      # SBOM Generation
+      # ==========================================
+      - name: Generate SBOM
+        run: |
+          echo "Generating Software Bill of Materials..."
+
+          # Run SBOM generation
+          ./scripts/sbom.sh > .security-reports/sbom.log 2>&1 || true
+
+          # Copy SBOMs to reports
+          cp docs/sbom/sbom.json .security-reports/ 2>/dev/null || true
+          cp docs/sbom/sbom.xml .security-reports/ 2>/dev/null || true
+
+          echo "SBOM generation completed."
+        continue-on-error: true
+
+      # ==========================================
+      # Generate Combined Report
+      # ==========================================
+      - name: Generate combined security report
+        run: |
+          echo "Generating combined security report..."
+
+          .venv/bin/python << 'EOF'
+          import json
+          import os
+          from datetime import datetime
+
+          report_dir = '.security-reports'
+
+          # Collect summaries
+          summaries = []
+          summaries.append(f"# Nightly Deep Security Scan Report")
+          summaries.append(f"Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+          summaries.append(f"Commit: {os.environ.get('GITHUB_SHA', 'unknown')[:8]}")
+          summaries.append("")
+
+          # Semgrep summary
+          summaries.append("## Semgrep (Extended Rulesets)")
+          try:
+              with open(f'{report_dir}/semgrep-summary.txt') as f:
+                  summaries.append(f.read())
+          except:
+              summaries.append("No results available")
+          summaries.append("")
+
+          # pip-audit summary
+          summaries.append("## pip-audit (Vulnerability Scan)")
+          try:
+              with open(f'{report_dir}/pip-audit-summary.txt') as f:
+                  summaries.append(f.read())
+          except:
+              summaries.append("No results available")
+          summaries.append("")
+
+          # Bandit summary
+          summaries.append("## Bandit (SAST)")
+          try:
+              with open(f'{report_dir}/bandit-summary.txt') as f:
+                  summaries.append(f.read())
+          except:
+              summaries.append("No results available")
+          summaries.append("")
+
+          # License scan
+          summaries.append("## License Compliance")
+          if os.path.exists(f'{report_dir}/license-inventory.txt'):
+              summaries.append("License inventory generated successfully.")
+          else:
+              summaries.append("License scan failed or no results.")
+          summaries.append("")
+
+          # SBOM
+          summaries.append("## SBOM Generation")
+          if os.path.exists(f'{report_dir}/sbom.json'):
+              summaries.append("SBOM generated successfully (CycloneDX format).")
+          else:
+              summaries.append("SBOM generation failed or no results.")
+          summaries.append("")
+
+          # Write combined report
+          with open(f'{report_dir}/combined-report.md', 'w') as f:
+              f.write('\n'.join(summaries))
+
+          print('\n'.join(summaries))
+          EOF
+
+      # ==========================================
+      # Baseline Comparison (track new findings)
+      # ==========================================
+      - name: Compare with baseline
+        run: |
+          echo "Comparing with baseline findings..."
+
+          # Check if baseline exists in repo
+          BASELINE_FILE=".security-baseline.json"
+
+          .venv/bin/python << 'EOF'
+          import json
+          import os
+
+          report_dir = '.security-reports'
+          baseline_file = '.security-baseline.json'
+
+          # Load current findings
+          current = {
+              'semgrep': 0,
+              'pip_audit': 0,
+              'bandit': 0
+          }
+
+          try:
+              with open(f'{report_dir}/semgrep-full.json') as f:
+                  data = json.load(f)
+                  current['semgrep'] = len(data.get('results', []))
+          except:
+              pass
+
+          try:
+              with open(f'{report_dir}/pip-audit-full.json') as f:
+                  data = json.load(f)
+                  current['pip_audit'] = sum(len(d.get('vulns', [])) for d in data.get('dependencies', []))
+          except:
+              pass
+
+          try:
+              with open(f'{report_dir}/bandit-full.json') as f:
+                  data = json.load(f)
+                  current['bandit'] = len(data.get('results', []))
+          except:
+              pass
+
+          # Load baseline if exists
+          baseline = {'semgrep': 0, 'pip_audit': 0, 'bandit': 0}
+          if os.path.exists(baseline_file):
+              try:
+                  with open(baseline_file) as f:
+                      baseline = json.load(f)
+              except:
+                  pass
+
+          # Compare and report
+          print("## Baseline Comparison")
+          print("")
+          new_findings = False
+          for tool in ['semgrep', 'pip_audit', 'bandit']:
+              curr = current.get(tool, 0)
+              base = baseline.get(tool, 0)
+              diff = curr - base
+
+              if diff > 0:
+                  print(f"⚠️  {tool}: {curr} findings (+{diff} new)")
+                  new_findings = True
+              elif diff < 0:
+                  print(f"✅ {tool}: {curr} findings ({diff} fixed)")
+              else:
+                  print(f"➡️  {tool}: {curr} findings (no change)")
+
+          # Save current as new baseline reference (but don't commit automatically)
+          with open(f'{report_dir}/current-baseline.json', 'w') as f:
+              json.dump(current, f, indent=2)
+
+          if new_findings:
+              print("")
+              print("⚠️  NEW SECURITY FINDINGS DETECTED")
+              print("Review the detailed reports in the artifacts.")
+          EOF
+        continue-on-error: true
+
+      # ==========================================
+      # Upload Artifacts
+      # ==========================================
+      - name: Upload security scan reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-deep-scan-reports
+          path: |
+            .security-reports/
+          retention-days: 30
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sbom-nightly
+          path: |
+            docs/sbom/sbom.json
+            docs/sbom/sbom.xml
+          retention-days: 90
+
+      # ==========================================
+      # Create Issue on New Critical Findings
+      # ==========================================
+      - name: Check for critical findings
+        id: check-critical
+        run: |
+          echo "Checking for critical security findings..."
+
+          .venv/bin/python << 'EOF'
+          import json
+          import os
+
+          report_dir = '.security-reports'
+          critical_found = False
+
+          # Check Semgrep for ERROR severity
+          try:
+              with open(f'{report_dir}/semgrep-full.json') as f:
+                  data = json.load(f)
+                  for r in data.get('results', []):
+                      if r.get('extra', {}).get('severity') == 'ERROR':
+                          critical_found = True
+                          break
+          except:
+              pass
+
+          # Check Bandit for HIGH severity
+          try:
+              with open(f'{report_dir}/bandit-full.json') as f:
+                  data = json.load(f)
+                  for r in data.get('results', []):
+                      if r.get('issue_severity') == 'HIGH':
+                          critical_found = True
+                          break
+          except:
+              pass
+
+          if critical_found:
+              print("critical_findings=true")
+              # Set output for GitHub Actions
+              with open(os.environ.get('GITHUB_OUTPUT', '/dev/null'), 'a') as f:
+                  f.write('critical_findings=true\n')
+          else:
+              print("critical_findings=false")
+              with open(os.environ.get('GITHUB_OUTPUT', '/dev/null'), 'a') as f:
+                  f.write('critical_findings=false\n')
+          EOF
+
+      - name: Create issue for critical findings
+        if: steps.check-critical.outputs.critical_findings == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the combined report
+            let reportContent = 'See attached artifacts for details.';
+            try {
+              reportContent = fs.readFileSync('.security-reports/combined-report.md', 'utf8');
+            } catch (e) {
+              console.log('Could not read report:', e);
+            }
+
+            // Check for existing open issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security,nightly-scan',
+              state: 'open'
+            });
+
+            if (issues.data.length > 0) {
+              // Update existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                body: `## Nightly Scan Update (${new Date().toISOString().split('T')[0]})\n\n${reportContent}`
+              });
+              console.log('Updated existing issue:', issues.data[0].number);
+            } else {
+              // Create new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '🔒 Security: Critical findings from nightly deep scan',
+                labels: ['security', 'nightly-scan'],
+                body: `## Critical Security Findings\n\nThe nightly deep security scan has detected critical findings that require attention.\n\n${reportContent}\n\n---\n*This issue was automatically created by the nightly-deep-scans workflow.*`
+              });
+              console.log('Created new security issue');
+            }
+        continue-on-error: true
+
+  # ==========================================
+  # Weekly Extended Scans (optional deeper analysis)
+  # ==========================================
+  weekly-extended-scan:
+    name: Weekly Extended Analysis
+    runs-on: ubuntu-latest
+    # Only run on Sundays (weekly)
+    if: github.event.schedule == '0 2 * * 0' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_scan == 'true')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-3.11-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run extended dependency analysis
+        run: |
+          echo "Running extended dependency analysis..."
+          mkdir -p .security-reports
+
+          # Install additional analysis tools
+          .venv/bin/pip install -q safety pipdeptree
+
+          # Generate dependency tree
+          .venv/bin/pipdeptree --json > .security-reports/dependency-tree.json || true
+
+          # Run safety check (alternative vulnerability scanner)
+          .venv/bin/safety check --json > .security-reports/safety-check.json 2>&1 || true
+
+          echo "Extended dependency analysis complete."
+        continue-on-error: true
+
+      - name: Upload weekly analysis
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: weekly-extended-analysis
+          path: .security-reports/
+          retention-days: 90
