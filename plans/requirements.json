@@ -1085,7 +1085,7 @@
         "Ensure model metadata fetching does not call OpenRouter when only lmstudio/* models are requested",
         "Provide clear, actionable errors when OpenRouter models are requested without credentials"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-023-external-endpoint-config-contract",
