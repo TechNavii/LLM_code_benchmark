@@ -902,7 +902,7 @@
         "Add verification steps (where practical) to ensure provenance is present and valid",
         "Keep the setup brownfield-safe (warn-only initially)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-016-sigstore-sign-artifacts",

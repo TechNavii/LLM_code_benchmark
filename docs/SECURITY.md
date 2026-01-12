@@ -395,6 +395,53 @@ Trivy complements other security tools in the pipeline:
 
 Trivy provides broader coverage (secrets, misconfigurations, container scanning) while pip-audit focuses specifically on Python PyPI vulnerabilities with better accuracy for that narrow scope.
 
+## SLSA Build Provenance
+
+This project generates [SLSA (Supply-chain Levels for Software Artifacts)](https://slsa.dev/) build provenance attestations for critical artifacts.
+
+### What Is SLSA Provenance?
+
+SLSA provenance is a cryptographically signed attestation that describes how software artifacts were built. It enables supply-chain security by providing verifiable evidence of:
+
+- **Source**: Where the artifact came from (repository, commit)
+- **Builder**: What system built the artifact (GitHub Actions workflow)
+- **Build Process**: How the artifact was created (build steps, inputs)
+
+### Attested Artifacts
+
+The following artifacts receive build provenance attestations:
+
+| Artifact | Description |
+|----------|-------------|
+| `sbom.json` | Software Bill of Materials (CycloneDX format) |
+| `server-requirements.txt` | Server dependency lockfile with hashes |
+| `harness-requirements.txt` | Harness dependency lockfile with hashes |
+| `requirements-dev.txt` | Dev tools lockfile with hashes |
+
+### Verifying Attestations
+
+```bash
+# Verify an artifact using GitHub CLI
+gh attestation verify docs/sbom/sbom.json --owner <repo-owner>
+
+# List all attestations for this repository
+gh attestation list --owner <repo-owner> --repo <repo-name>
+```
+
+### When Attestations Are Generated
+
+- On push to main/master (when lockfiles or SBOM files change)
+- Weekly (Mondays 5AM UTC) for freshness
+- On manual workflow trigger
+
+### SLSA Level
+
+This implementation achieves **SLSA Level 2**:
+- ✅ Provenance exists and is machine-readable (Level 1)
+- ✅ Build runs on hosted infrastructure (Level 2)
+
+See [SLSA-PROVENANCE.md](./SLSA-PROVENANCE.md) for full documentation.
+
 ## Reporting Security Issues
 
 If you discover a security vulnerability in this project, please report it by:

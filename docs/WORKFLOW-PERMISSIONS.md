@@ -12,12 +12,13 @@ This document describes the permission model for GitHub Actions workflows in thi
 
 ## Workflow Permission Summary
 
-| Workflow | contents | pull-requests | checks | security-events | actions | issues |
-|----------|----------|---------------|--------|-----------------|---------|--------|
-| quality-gates.yml | read | write | write | - | - | - |
-| secret-scanning.yml | read | - | - | - | - | - |
-| nightly-deep-scans.yml | read | - | - | - | - | - |
-| codeql.yml | read | - | - | write | read | - |
+| Workflow | contents | pull-requests | checks | security-events | actions | issues | id-token | attestations |
+|----------|----------|---------------|--------|-----------------|---------|--------|----------|--------------|
+| quality-gates.yml | read | write | write | - | - | - | - | - |
+| secret-scanning.yml | read | - | - | - | - | - | - | - |
+| nightly-deep-scans.yml | read | - | - | - | - | - | - | - |
+| codeql.yml | read | - | - | write | read | - | - | - |
+| slsa-provenance.yml | read | - | - | - | - | - | write | write |
 
 ### Permission Justifications
 
@@ -37,6 +38,11 @@ This document describes the permission model for GitHub Actions workflows in thi
 - `contents: read` - Checkout code for analysis
 - `security-events: write` - Upload SARIF results to Security tab
 - `actions: read` - Required by CodeQL action
+
+#### slsa-provenance.yml
+- `contents: read` - Checkout code, read lockfiles and SBOM
+- `id-token: write` - OIDC token for Sigstore-based signing
+- `attestations: write` - Submit attestations to GitHub attestation registry
 
 ## Periodic Review Checklist
 
