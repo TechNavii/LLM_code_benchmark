@@ -60,6 +60,10 @@ docs/sbom/
 .signatures/
 .fuzz-reports/
 
+# Local planning
+plans/
+progress.txt
+
 # IDE / editor
 .idea/
 .vscode/
