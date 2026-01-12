@@ -193,7 +193,7 @@ jobs:
         # Only post one comment per PR (from ubuntu-latest/Python 3.11 job)
         # Skip for fork PRs - requires pull-requests: write permission
         if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && env.IS_FORK_PR != 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v7
         with:
           script: |
             const fs = require('fs');
