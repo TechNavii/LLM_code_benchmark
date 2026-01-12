@@ -1,0 +1,46 @@
+{
+  "meta": {
+    "name": "Project Name",
+    "description": "Brief description of the project",
+    "projectDir": "app",
+    "structure": {
+      "src": "app/src/",
+      "tests": "app/tests/",
+      "public": "app/public/"
+    },
+    "validators": {
+      "typecheck": "cd app && pnpm typecheck",
+      "test": "cd app && pnpm test",
+      "lint": "cd app && pnpm lint"
+    },
+    "notes": [
+      "Additional notes or constraints for the agent"
+    ]
+  },
+  "features": [
+    {
+      "id": "foundation-001-project-setup",
+      "priority": 1,
+      "category": "foundation",
+      "description": "Scaffold the project with required tooling",
+      "steps": [
+        "Create directory structure",
+        "Initialize package manager and dependencies",
+        "Configure build and test scripts"
+      ],
+      "passes": false
+    },
+    {
+      "id": "core-001-feature-name",
+      "priority": 2,
+      "category": "core",
+      "description": "Implement the first core feature",
+      "steps": [
+        "Step 1 description",
+        "Step 2 description",
+        "Add unit tests"
+      ],
+      "passes": false
+    }
+  ]
+}
