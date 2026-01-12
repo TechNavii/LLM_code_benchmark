@@ -1098,7 +1098,7 @@
         "Add tests that OpenRouter metadata fetching is skipped when only lmstudio/* models are requested",
         "Ensure all tests are hermetic (no external network access)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-024-ui-static-asset-integrity",
