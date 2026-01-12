@@ -941,7 +941,7 @@
         "Optionally add basic rate limiting for mutating endpoints (configurable, off by default for local dev)",
         "Add tests for size limits/timeouts/rate limiting behavior"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-019-security-headers-contract",
