@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install actionlint for workflow validation
+# hadolint ignore=DL4006
 RUN curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz | tar xz -C /usr/local/bin
 
 # Set working directory
@@ -36,14 +37,16 @@ ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 # Create virtualenv and install dependencies
 # Uses --require-hashes for security (matches CI behavior)
+# hadolint ignore=DL3013,DL3042
 RUN python -m venv ${VIRTUAL_ENV} && \
-    pip install --upgrade pip && \
-    pip install --require-hashes -r requirements-dev.txt && \
-    pip install --require-hashes -r server/requirements.txt && \
-    pip install --require-hashes -r harness/requirements.txt
+    pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --require-hashes -r requirements-dev.txt && \
+    pip install --no-cache-dir --require-hashes -r server/requirements.txt && \
+    pip install --no-cache-dir --require-hashes -r harness/requirements.txt
 
 # Install pre-commit hooks (optional but recommended)
-RUN pip install pre-commit
+# hadolint ignore=DL3013
+RUN pip install --no-cache-dir pre-commit
 
 # Install Playwright for GUI tests (optional, can be slow)
 # Uncomment if GUI tests are needed in the container

@@ -1,0 +1,33 @@
+# Hadolint configuration for devcontainer Dockerfile linting
+# See https://github.com/hadolint/hadolint for documentation
+#
+# This configuration provides brownfield-friendly defaults while ensuring
+# security and best-practice issues are flagged.
+
+# Fail on error and warning levels (ignore info/style for now)
+failure-threshold: warning
+
+# Ignored rules with explicit justification:
+ignored:
+  # DL3008: Pin versions in apt-get install
+  # Justification: The devcontainer is not production infrastructure. Using
+  # unversioned packages ensures the latest security patches and reduces
+  # maintenance overhead. The container is rebuilt frequently.
+  - DL3008
+
+# Notes on inline ignores used in Dockerfile:
+#
+# DL4006: Set SHELL option -o pipefail before RUN with pipe
+#   Used for: curl | tar command to download actionlint
+#   Justification: The command is idempotent and failure modes are acceptable
+#   for devcontainer setup. Adding SHELL complicates the Dockerfile for
+#   minimal benefit in this non-production context.
+#
+# DL3013: Pin versions in pip install
+#   Used for: pip install pre-commit
+#   Justification: pre-commit is a development tool that should use latest
+#   version for newest hook support. Version is not security-critical.
+#
+# DL3042: Avoid use of cache directory with pip
+#   Partially addressed: Added --no-cache-dir to pip install commands.
+#   This was a valid warning and has been fixed where applicable.

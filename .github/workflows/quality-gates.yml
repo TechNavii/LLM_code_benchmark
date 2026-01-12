@@ -84,8 +84,25 @@ jobs:
             sudo mv /tmp/actionlint /usr/local/bin/
           fi
 
+      - name: Install hadolint
+        run: |
+          # Install hadolint for Dockerfile linting (OS-specific binaries)
+          HADOLINT_VERSION="2.12.0"
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" -o /tmp/hadolint
+            chmod +x /tmp/hadolint
+            sudo mv /tmp/hadolint /usr/local/bin/
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Darwin-x86_64" -o /tmp/hadolint
+            chmod +x /tmp/hadolint
+            sudo mv /tmp/hadolint /usr/local/bin/
+          fi
+
       - name: Run actionlint on workflows
         run: ./scripts/actionlint.sh
+
+      - name: Run hadolint on Dockerfiles
+        run: ./scripts/hadolint.sh
 
       - name: Check GitHub Actions are pinned to SHAs
         run: ./scripts/check-pinned-actions.sh

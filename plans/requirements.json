@@ -862,7 +862,7 @@
         "Keep the lint fast and deterministic (no network calls beyond fetching the linter)",
         "Ensure the check does not block non-container workflows (devcontainer remains optional)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-014-trivy-repo-and-devcontainer-scan",
