@@ -13,6 +13,7 @@ from server.config import get_settings
 from server.database import init_db
 from server.qa_database import init_db as init_qa_db
 from server.logging import configure_logging
+from server.security_headers import SecurityHeadersMiddleware
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +59,9 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Add security headers middleware (runs after CORS)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     app.include_router(router)
     app.include_router(qa_router)

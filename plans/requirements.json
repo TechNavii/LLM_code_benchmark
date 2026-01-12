@@ -928,7 +928,7 @@
         "Apply headers consistently to both code and QA routes where applicable",
         "Add tests verifying the headers are present on representative endpoints"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-021-request-limits-and-timeouts",
