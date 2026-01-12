@@ -28,6 +28,7 @@ from harness.run_harness import (
 from server import database
 from server.config import get_settings
 from server.monitoring import timed
+from server.path_security import PathTraversalError, safe_path_join, validate_run_id
 from server.progress import progress_manager
 from server.routes.auth import require_api_token
 from server.routes.background import run_in_thread_with_callbacks
@@ -389,11 +390,20 @@ class RetrySingleAttemptRequest(BaseModel):
 @router.get("/runs/{run_id}/api-errors", response_model=ApiErrorsInfoResponse, tags=["runs"])
 def get_api_errors(run_id: str) -> ApiErrorsInfoResponse:
     """Get information about api_error attempts in a run."""
-    summary = database.get_run(run_id)
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = database.get_run(validated_run_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    run_dir = Path(settings.runs_root) / run_id
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="Run directory not found")
 
@@ -421,11 +431,20 @@ def get_api_errors(run_id: str) -> ApiErrorsInfoResponse:
 @router.post("/runs/{run_id}/retry-api-errors", response_model=RetryApiErrorsResponse, tags=["runs"])
 async def retry_api_errors(run_id: str, _: None = Depends(require_api_token)) -> RetryApiErrorsResponse:
     """Retry only the api_error attempts from a previous run."""
-    summary = database.get_run(run_id)
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = database.get_run(validated_run_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    run_dir = Path(settings.runs_root) / run_id
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="Run directory not found")
 
@@ -505,11 +524,20 @@ async def retry_single_attempt(
     _: None = Depends(require_api_token),
 ) -> RetryApiErrorsResponse:
     """Retry a single failed attempt from a previous run."""
-    summary = database.get_run(run_id)
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = database.get_run(validated_run_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    run_dir = Path(settings.runs_root) / run_id
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="Run directory not found")
 
@@ -605,7 +633,16 @@ class ResumeIncompleteResponse(BaseModel):
 @router.get("/runs/{run_id}/incomplete", response_model=IncompleteAttemptsResponse)
 async def get_incomplete_attempts(run_id: str) -> IncompleteAttemptsResponse:
     """Get incomplete attempts for a run (started but didn't finish)."""
-    run_dir = Path(settings.runs_root) / run_id
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="Run directory not found")
 
@@ -624,7 +661,16 @@ async def get_incomplete_attempts(run_id: str) -> IncompleteAttemptsResponse:
 @router.post("/runs/{run_id}/resume", response_model=ResumeIncompleteResponse)
 async def resume_run(run_id: str, _: None = Depends(require_api_token)) -> ResumeIncompleteResponse:
     """Resume incomplete attempts for a run."""
-    run_dir = Path(settings.runs_root) / run_id
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="Run directory not found")
 

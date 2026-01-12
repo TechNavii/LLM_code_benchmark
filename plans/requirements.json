@@ -1033,7 +1033,7 @@
         "Add negative tests for traversal patterns and ensure safe error handling",
         "Avoid leaking filesystem paths in error messages returned to clients"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-022-filesystem-path-traversal-regression",

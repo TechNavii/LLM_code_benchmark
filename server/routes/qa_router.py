@@ -22,6 +22,7 @@ from harness.expert_questions import (
     retry_qa_failed_attempts,
 )
 from server.config import get_settings
+from server.path_security import PathTraversalError, safe_path_join, validate_run_id
 from server.qa_database import (
     delete_runs_for_model,
     get_run,
@@ -260,11 +261,20 @@ class QARetrySingleAttemptRequest(BaseModel):
 @router.get("/runs/{run_id}/api-errors", response_model=QAApiErrorsInfoResponse)
 async def qa_get_api_errors(run_id: str) -> QAApiErrorsInfoResponse:
     """Get information about api_error attempts in a QA run."""
-    summary = get_run(run_id)
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = get_run(validated_run_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="QA Run not found")
 
-    run_dir = Path(settings.runs_root) / "qa_runs" / run_id
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), "qa_runs", validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="QA Run directory not found")
 
@@ -292,11 +302,20 @@ async def qa_get_api_errors(run_id: str) -> QAApiErrorsInfoResponse:
 @router.post("/runs/{run_id}/retry-api-errors", response_model=QARetryApiErrorsResponse)
 async def qa_retry_api_errors(run_id: str, _: None = Depends(require_api_token)) -> QARetryApiErrorsResponse:
     """Retry only the api_error attempts from a previous QA run."""
-    summary = get_run(run_id)
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = get_run(validated_run_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="QA Run not found")
 
-    run_dir = Path(settings.runs_root) / "qa_runs" / run_id
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), "qa_runs", validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="QA Run directory not found")
 
@@ -377,11 +396,20 @@ async def qa_retry_single_attempt(
     _: None = Depends(require_api_token),
 ) -> QARetryApiErrorsResponse:
     """Retry a single failed attempt from a previous QA run."""
-    summary = get_run(run_id)
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = get_run(validated_run_id)
     if summary is None:
         raise HTTPException(status_code=404, detail="QA Run not found")
 
-    run_dir = Path(settings.runs_root) / "qa_runs" / run_id
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), "qa_runs", validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
     if not run_dir.exists():
         raise HTTPException(status_code=404, detail="QA Run directory not found")
 
