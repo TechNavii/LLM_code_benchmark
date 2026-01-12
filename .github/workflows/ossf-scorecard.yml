@@ -1,7 +1,9 @@
 name: OSSF Scorecard
 
 on:
-  # Run on push to default branch
+  # Run on push to default branch only - NOT on PRs
+  # This is intentional: Scorecard should only run on trusted code
+  # Fork PRs could manipulate the score by changing workflow files
   push:
     branches: [main, master]
   # Run on schedule (weekly on Tuesdays at 4:00 AM UTC)
@@ -9,6 +11,8 @@ on:
     - cron: '0 4 * * 2'
   # Allow manual trigger
   workflow_dispatch:
+  # NOTE: Do NOT add pull_request trigger - Scorecard should only run on
+  # trusted code from the default branch to avoid fork PR manipulation
 
 # Concurrency: only one scorecard run per branch at a time
 concurrency:
@@ -17,15 +21,13 @@ concurrency:
 
 # Required permissions for Scorecard
 # See https://github.com/ossf/scorecard-action#authentication-with-fine-grained-pat-optional
+# NOTE: id-token: write is required for publishing but is sensitive
+# This workflow only runs on push to main, never on fork PRs
 permissions:
-  # Required for all workflows
-  security-events: write
-  # Required to publish results
-  id-token: write
-  # Required for private repositories
-  contents: read
-  # Required to detect workflow changes
-  actions: read
+  security-events: write  # Required: upload SARIF results to Security tab
+  id-token: write         # Required: publish results to OpenSSF REST API
+  contents: read          # Required: checkout code
+  actions: read           # Required: detect workflow changes
 
 jobs:
   scorecard:

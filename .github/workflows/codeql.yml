@@ -21,6 +21,8 @@ on:
     - cron: '0 3 * * 0'
   workflow_dispatch:
     # Allow manual trigger for debugging
+  # NOTE: Do NOT use pull_request_target here - it runs with elevated permissions
+  # from the base branch, which can be exploited by malicious fork PRs
 
 # Only one CodeQL run per branch at a time
 concurrency:
@@ -28,10 +30,12 @@ concurrency:
   cancel-in-progress: true
 
 # Permissions required for CodeQL and security tab
+# Fork PRs: security-events: write is required for SARIF upload but GitHub
+# restricts this for fork PRs - CodeQL handles this gracefully
 permissions:
-  security-events: write
-  contents: read
-  actions: read
+  security-events: write  # Required: upload SARIF results
+  contents: read          # Required: checkout code
+  actions: read           # Required: detect workflow changes
 
 jobs:
   analyze:

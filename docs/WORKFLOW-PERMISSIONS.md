@@ -8,6 +8,7 @@ This document describes the permission model for GitHub Actions workflows in thi
 2. **Explicit Declarations**: All workflows declare permissions explicitly (no implicit defaults)
 3. **No Long-Lived Secrets**: Workflows use short-lived GITHUB_TOKEN instead of PATs where possible
 4. **PR Context Restriction**: Write permissions are restricted to PR contexts where applicable
+5. **Fork PR Hardening**: Fork PRs are treated with reduced trust (see below)
 
 ## Workflow Permission Summary
 
@@ -65,6 +66,13 @@ Review these items quarterly (or after significant workflow changes):
 - [ ] Push-triggered workflows don't have unnecessary write permissions
 - [ ] Scheduled workflows have minimal permissions
 
+### Fork PR Hardening
+- [ ] `pull_request_target` is NOT used (allows fork PRs with elevated permissions)
+- [ ] Fork PR detection: `github.event.pull_request.head.repo.full_name != github.repository`
+- [ ] Write permissions steps skip for fork PRs via `IS_FORK_PR` environment variable
+- [ ] Cache writes are disabled for fork PRs (use `actions/cache/restore` only)
+- [ ] PR comments/annotations skip for fork PRs
+
 ## Adding New Workflows
 
 When creating new workflows:
@@ -119,6 +127,83 @@ The `./scripts/check-pinned-actions.sh` script runs in CI and fails if any actio
 ### Exceptions
 
 Exceptions to SHA pinning require explicit justification and should be documented. Currently, no exceptions are allowed.
+
+## Fork PR Hardening
+
+Pull requests from forks require special handling to prevent security risks:
+
+### Threat Model
+
+Fork PRs can be used to:
+1. **Steal secrets**: Malicious code in PRs accessing `secrets.*`
+2. **Cache poisoning**: Writing malicious data to shared caches
+3. **Supply chain attacks**: Modifying workflow files to gain elevated access
+4. **Resource abuse**: Triggering expensive scans/builds
+
+### Protections Implemented
+
+#### 1. Avoid `pull_request_target`
+We use `pull_request` instead of `pull_request_target`. The latter runs with elevated permissions from the base branch, which can be exploited by malicious fork PRs.
+
+#### 2. Fork Detection
+Workflows detect fork PRs using:
+```yaml
+env:
+  IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+```
+
+#### 3. Conditional Permissions
+Steps requiring write permissions skip for fork PRs:
+- **PR Comments**: Diff coverage, dependency review comments
+- **Check Annotations**: Test result annotations
+- **Cache Writes**: Virtualenv cache saves
+
+```yaml
+# Example: Skip PR comments for forks
+- name: Post comment
+  if: env.IS_FORK_PR != 'true'
+  uses: actions/github-script@...
+```
+
+#### 4. Cache Poisoning Prevention
+Fork PRs use restore-only caching:
+```yaml
+# Restore-only for forks (no writes)
+- name: Cache virtualenv (restore-only for forks)
+  if: env.IS_FORK_PR == 'true'
+  uses: actions/cache/restore@...
+```
+
+Same-repo PRs and pushes get full cache read/write access.
+
+#### 5. Sensitive Workflows Exclude PRs
+Some workflows run only on push/schedule, never on PRs:
+- **ossf-scorecard.yml**: Runs on push to main only
+- **nightly-deep-scans.yml**: Runs on schedule/manual dispatch only
+
+### What Fork PRs Still Get
+
+Fork PRs still receive:
+- ✅ Full lint, typecheck, and test validation
+- ✅ Security scans (Bandit, Semgrep, pip-audit)
+- ✅ OpenAPI validation
+- ✅ JUnit/coverage XML artifacts (uploaded, not annotated)
+- ✅ SBOM generation
+
+Fork PRs do NOT get:
+- ❌ PR comments (diff coverage, dependency review)
+- ❌ Test result annotations
+- ❌ Cache writes (prevents poisoning)
+- ❌ OSSF Scorecard (requires id-token:write)
+
+### Adding New Workflows
+
+When adding workflows that handle PRs:
+1. Detect fork PRs with `IS_FORK_PR` environment variable
+2. Skip write-permission steps for forks
+3. Use `actions/cache/restore` instead of `actions/cache` for forks
+4. Avoid `pull_request_target` unless absolutely necessary (and well-audited)
+5. Document any exceptions with explicit justification
 
 ## Security Best Practices
 

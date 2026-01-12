@@ -13,17 +13,24 @@ concurrency:
   cancel-in-progress: true
 
 # Least-privilege permissions - explicitly set for security hardening
-# These are the minimum permissions required for all jobs in this workflow
+# For fork PRs, we restrict permissions further at the job level
+# Note: Fork PRs from external contributors run with read-only permissions by default
 permissions:
   contents: read          # Required: checkout code and read repository
-  pull-requests: write    # Required: PR comments (diff-cover, dependency-review)
-  checks: write           # Required: publish test results annotations
+  pull-requests: write    # Required: PR comments (diff-cover, dependency-review) - only for same-repo PRs
+  checks: write           # Required: publish test results annotations - only for same-repo PRs
+
+# Detect if this is a fork PR (used in job conditions)
+# Fork PRs: github.event.pull_request.head.repo.full_name != github.repository
 
 jobs:
   # Dependency Review - runs on PRs to detect vulnerable dependency changes
+  # NOTE: Skip for fork PRs - requires write permissions for PR comments
+  # Fork PRs will still get vulnerability detection via the quality-checks job validators
   dependency-review:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
+    # Only run for same-repo PRs (not forks) - comment-summary-in-pr requires write access
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -52,6 +59,10 @@ jobs:
         # Enforce supported Python versions (defined in pyproject.toml: requires-python = ">=3.11")
         python-version: ["3.11", "3.12"]
 
+    # Fork PR hardening: detect fork context for conditional caching and permissions
+    env:
+      IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -63,9 +74,23 @@ jobs:
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: "pip"
+          # Disable pip cache for fork PRs to prevent cache poisoning
+          cache: ${{ env.IS_FORK_PR == 'true' && '' || 'pip' }}
 
-      - name: Cache virtualenv
+      # Cache virtualenv - with fork PR restrictions
+      # Fork PRs: restore-only (no writes) to prevent cache poisoning attacks
+      # Same-repo PRs and pushes: full cache read/write
+      - name: Cache virtualenv (restore-only for forks)
+        if: env.IS_FORK_PR == 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ matrix.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ matrix.os }}-${{ matrix.python-version }}-
+
+      - name: Cache virtualenv (full access for same-repo)
+        if: env.IS_FORK_PR != 'true'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: .venv
@@ -161,7 +186,8 @@ jobs:
 
       - name: Post diff coverage summary to PR
         # Only post one comment per PR (from ubuntu-latest/Python 3.11 job)
-        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        # Skip for fork PRs - requires pull-requests: write permission
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && env.IS_FORK_PR != 'true'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         with:
           script: |
@@ -273,8 +299,9 @@ jobs:
 
       - name: Publish test results (Ubuntu only)
         # EnricoMi/publish-unit-test-result-action only supports Linux runners
+        # Skip for fork PRs - requires checks: write permission for annotations
         uses: EnricoMi/publish-unit-test-result-action@27d65e188ec43221b20d26de30f4892fad91df2f  # v2
-        if: always() && matrix.os == 'ubuntu-latest'
+        if: always() && matrix.os == 'ubuntu-latest' && env.IS_FORK_PR != 'true'
         with:
           files: junit.xml
           check_name: Test Results (${{ matrix.os }}/Python ${{ matrix.python-version }})

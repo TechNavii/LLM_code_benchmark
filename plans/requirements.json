@@ -889,7 +889,7 @@
         "Restrict caching behavior for fork PRs (disable cache writes and avoid restoring caches containing secrets)",
         "Keep workflow permissions least-privilege and scoped per job"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-015-slsa-provenance-attestations",

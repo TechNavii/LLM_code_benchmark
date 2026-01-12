@@ -12,6 +12,9 @@ on:
         required: false
         default: true
         type: boolean
+  # NOTE: No pull_request trigger - nightly scans run on trusted code only
+  # This prevents fork PRs from triggering expensive/sensitive scans
+  # Fork PRs are tested via the quality-gates workflow
 
 # Concurrency control: only cancel redundant runs for manual dispatches
 # Scheduled runs use a unique group to avoid being canceled
@@ -21,11 +24,11 @@ concurrency:
 
 # Least-privilege permissions: read-only by default
 # Nightly scans only need to read code and upload artifacts
+# This workflow only runs on schedule/manual dispatch, never on fork PRs
 permissions:
-  contents: read
-  # Note: If issue creation for critical findings is enabled,
-  # add 'issues: write' permission here
-  # Branch protection check needs to read repository settings
+  contents: read          # Required: checkout code
+  # issues: write         # Optional: enable for auto-issue creation on critical findings
+  # Branch protection check needs to read repository settings (uses GITHUB_TOKEN)
 
 jobs:
   deep-security-scans:
