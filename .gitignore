@@ -53,6 +53,7 @@ runs/
 docs/sbom/
 .benchmarks/
 .trivy-reports/
+.signatures/
 
 # IDE / editor
 .idea/

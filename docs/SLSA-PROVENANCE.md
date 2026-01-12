@@ -160,11 +160,38 @@ permissions:
 
 Current implementation achieves **SLSA Level 2** with provenance.
 
+## Sigstore Signing
+
+In addition to SLSA provenance, artifacts are cryptographically signed using Sigstore (cosign). This provides:
+
+- **Keyless signing**: Uses GitHub OIDC for authentication
+- **Transparency log**: Signatures recorded in Rekor
+- **Verification**: Can verify signatures independently of GitHub
+
+Sigstore signatures are stored alongside provenance artifacts:
+
+| Artifact | Contents |
+|----------|----------|
+| `sigstore-signatures-<sha>` | `.sig`, `.cert`, and `.bundle` files for each artifact |
+
+To verify Sigstore signatures:
+
+```bash
+cosign verify-blob \
+  --bundle .signatures/sbom.json.bundle \
+  --certificate-identity-regexp ".*" \
+  --certificate-oidc-issuer-regexp ".*" \
+  docs/sbom/sbom.json
+```
+
+See [SIGSTORE.md](./SIGSTORE.md) for full Sigstore documentation.
+
 ## Related Documentation
 
 - [SLSA Framework](https://slsa.dev/)
 - [in-toto Attestation Spec](https://github.com/in-toto/attestation)
 - [GitHub Attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
+- [Sigstore Documentation](./SIGSTORE.md)
 - [SBOM Documentation](./SBOM.md)
 - [Security Documentation](./SECURITY.md)
 - [Workflow Permissions](./WORKFLOW-PERMISSIONS.md)

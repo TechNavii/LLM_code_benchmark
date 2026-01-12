@@ -442,6 +442,52 @@ This implementation achieves **SLSA Level 2**:
 
 See [SLSA-PROVENANCE.md](./SLSA-PROVENANCE.md) for full documentation.
 
+## Sigstore Artifact Signing
+
+This project uses [Sigstore](https://sigstore.dev/) for keyless cryptographic signing of critical artifacts (SBOMs and lockfiles).
+
+### What Is Sigstore?
+
+Sigstore provides keyless signing using:
+- **Fulcio**: Certificate authority that issues short-lived certificates
+- **Rekor**: Transparency log that records all signatures
+- **GitHub OIDC**: Identity provider for authentication
+
+### Signed Artifacts
+
+The same artifacts that receive SLSA attestations are also signed with Sigstore:
+- `sbom.json` - Software Bill of Materials
+- `server-requirements.txt` - Server dependency lockfile
+- `harness-requirements.txt` - Harness dependency lockfile
+- `requirements-dev.txt` - Dev tools lockfile
+
+### Verifying Signatures
+
+```bash
+# Install cosign
+brew install cosign  # macOS
+# or see https://docs.sigstore.dev/cosign/system_config/installation/
+
+# Verify a signature using bundle
+cosign verify-blob \
+  --bundle .signatures/sbom.json.bundle \
+  --certificate-identity-regexp "https://github.com/OWNER/REPO/.github/workflows/.*" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  docs/sbom/sbom.json
+
+# Use the verification script
+./scripts/sign-artifacts.sh --verify
+```
+
+### Benefits
+
+- **Integrity**: Proves artifacts haven't been tampered with
+- **Authenticity**: Certificates prove artifacts came from this repository
+- **Non-repudiation**: Rekor log provides immutable evidence of signing
+- **No key management**: Keyless signing eliminates private key risks
+
+See [SIGSTORE.md](./SIGSTORE.md) for full documentation.
+
 ## Reporting Security Issues
 
 If you discover a security vulnerability in this project, please report it by:

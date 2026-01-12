@@ -41,8 +41,12 @@ This document describes the permission model for GitHub Actions workflows in thi
 
 #### slsa-provenance.yml
 - `contents: read` - Checkout code, read lockfiles and SBOM
-- `id-token: write` - OIDC token for Sigstore-based signing
+- `id-token: write` - OIDC token for GitHub attestations and Sigstore keyless signing (cosign)
 - `attestations: write` - Submit attestations to GitHub attestation registry
+
+Note: The `id-token: write` permission is required for:
+1. GitHub attestation API (`gh attestation create`)
+2. Sigstore keyless signing via cosign (OIDC authentication with Fulcio)
 
 ## Periodic Review Checklist
 

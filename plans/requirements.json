@@ -915,7 +915,7 @@
         "Add a verification step to ensure signatures validate in CI",
         "Keep signing limited to non-sensitive artifacts and avoid embedding secrets"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-020-http-security-headers",
