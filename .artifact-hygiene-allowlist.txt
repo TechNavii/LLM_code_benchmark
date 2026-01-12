@@ -1,0 +1,13 @@
+# Artifact Hygiene Allowlist
+# ==========================
+# This file lists files that are intentionally tracked despite being in
+# artifact directories or matching artifact patterns.
+#
+# Format: file_path # justification
+#
+# Guidelines:
+# - Each entry MUST have a justification explaining why it's tracked
+# - Prefer excluding files from tracking over adding allowlist entries
+# - Review this file periodically to remove stale entries
+#
+# Currently no files are allowlisted.

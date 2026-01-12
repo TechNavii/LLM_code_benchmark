@@ -1072,7 +1072,7 @@
         "Add a CI check that fails if any tracked files exist under ignored artifact directories",
         "Allow explicit allowlists only with clear justification"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-025-lmstudio-without-openrouter-key",

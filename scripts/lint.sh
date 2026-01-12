@@ -54,4 +54,7 @@ echo "Running vulture dead-code detection..."
 # Check .env.example for secrets and environment-specific values
 "${SCRIPT_DIR}/check-env-example-secrets.sh"
 
+# Check that no artifact files are accidentally tracked in git
+"${SCRIPT_DIR}/check-artifact-hygiene.sh"
+
 echo "✓ Lint checks passed"
