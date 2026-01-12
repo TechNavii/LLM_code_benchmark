@@ -876,7 +876,7 @@
         "Add an ignore/suppressions file with explicit justification for unavoidable findings",
         "Run in nightly CI (warn-only initially) and optionally surface results on PRs"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-009-fork-pr-hardening",

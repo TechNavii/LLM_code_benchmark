@@ -1149,3 +1149,230 @@ jobs:
           name: branch-protection-check
           path: protection-check.txt
           retention-days: 7
+
+  # ==========================================
+  # Trivy Security Scanning
+  # ==========================================
+  trivy-security-scan:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Trivy
+        run: |
+          echo "Installing Trivy..."
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.58.1
+          trivy --version
+
+      - name: Run filesystem vulnerability scan
+        id: fs-scan
+        run: |
+          echo "Running filesystem vulnerability and misconfiguration scan..."
+          mkdir -p .trivy-reports
+
+          # Run filesystem scan with JSON output
+          trivy fs \
+            --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --skip-dirs runs \
+            --skip-dirs tasks \
+            --skip-dirs .venv \
+            --skip-dirs .pytest_cache \
+            --skip-dirs __pycache__ \
+            --skip-dirs node_modules \
+            --skip-dirs .git \
+            --skip-dirs htmlcov \
+            --skip-dirs .benchmarks \
+            --skip-dirs .fuzz-reports \
+            --skip-dirs .trivy-reports \
+            --skip-dirs .security-reports \
+            --ignorefile .trivyignore \
+            --format json \
+            --output .trivy-reports/fs-scan.json \
+            . || true
+
+          # Also generate table output for summary
+          trivy fs \
+            --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --skip-dirs runs \
+            --skip-dirs tasks \
+            --skip-dirs .venv \
+            --skip-dirs .pytest_cache \
+            --skip-dirs __pycache__ \
+            --skip-dirs node_modules \
+            --skip-dirs .git \
+            --skip-dirs htmlcov \
+            --skip-dirs .benchmarks \
+            --skip-dirs .fuzz-reports \
+            --skip-dirs .trivy-reports \
+            --skip-dirs .security-reports \
+            --ignorefile .trivyignore \
+            --format table \
+            . > .trivy-reports/fs-scan.txt 2>&1 || true
+
+          echo "Filesystem scan complete."
+        continue-on-error: true
+
+      - name: Run Dockerfile config scan
+        id: dockerfile-scan
+        run: |
+          echo "Running Dockerfile configuration scan..."
+
+          if [ -f .devcontainer/Dockerfile ]; then
+            # Config scan for Dockerfile best practices
+            trivy config \
+              --severity HIGH,CRITICAL \
+              --ignorefile .trivyignore \
+              --format json \
+              --output .trivy-reports/dockerfile-config.json \
+              .devcontainer/Dockerfile || true
+
+            trivy config \
+              --severity HIGH,CRITICAL \
+              --ignorefile .trivyignore \
+              --format table \
+              .devcontainer/Dockerfile > .trivy-reports/dockerfile-config.txt 2>&1 || true
+
+            echo "Dockerfile config scan complete."
+          else
+            echo "No devcontainer Dockerfile found (devcontainer is optional)."
+            echo "Skipped" > .trivy-reports/dockerfile-config.txt
+          fi
+        continue-on-error: true
+
+      - name: Run base image scan
+        id: image-scan
+        run: |
+          echo "Running base image vulnerability scan..."
+
+          if [ -f .devcontainer/Dockerfile ]; then
+            # Extract base image from Dockerfile
+            BASE_IMAGE=$(grep "^FROM" .devcontainer/Dockerfile | head -1 | awk '{print $2}')
+            echo "Base image: ${BASE_IMAGE}"
+
+            if [ -n "${BASE_IMAGE}" ]; then
+              # Scan base image for OS package CVEs
+              trivy image \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --ignorefile .trivyignore \
+                --format json \
+                --output .trivy-reports/base-image.json \
+                "${BASE_IMAGE}" || true
+
+              trivy image \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --ignorefile .trivyignore \
+                --format table \
+                "${BASE_IMAGE}" > .trivy-reports/base-image.txt 2>&1 || true
+
+              echo "Base image scan complete."
+            else
+              echo "Could not extract base image."
+              echo "Skipped" > .trivy-reports/base-image.txt
+            fi
+          else
+            echo "No devcontainer Dockerfile found."
+            echo "Skipped" > .trivy-reports/base-image.txt
+          fi
+        continue-on-error: true
+
+      - name: Generate Trivy scan summary
+        if: always()
+        run: |
+          {
+            echo "## Trivy Security Scan Results"
+            echo ""
+            echo "Scans for vulnerabilities, misconfigurations, and secrets."
+            echo ""
+
+            echo "### Filesystem Scan"
+            if [ -f .trivy-reports/fs-scan.json ]; then
+              # Count findings from JSON
+              python3 -c "
+          import json
+          try:
+              with open('.trivy-reports/fs-scan.json') as f:
+                  data = json.load(f)
+              results = data.get('Results', [])
+              total_vulns = sum(len(r.get('Vulnerabilities', [])) for r in results)
+              total_misconf = sum(len(r.get('Misconfigurations', [])) for r in results)
+              total_secrets = sum(len(r.get('Secrets', [])) for r in results)
+              print(f'- **Vulnerabilities:** {total_vulns}')
+              print(f'- **Misconfigurations:** {total_misconf}')
+              print(f'- **Secrets:** {total_secrets}')
+              if total_vulns + total_misconf + total_secrets == 0:
+                  print('')
+                  print('No high/critical findings detected.')
+          except Exception as e:
+              print(f'Error parsing results: {e}')
+          "
+            else
+              echo "No results available."
+            fi
+            echo ""
+
+            echo "### Dockerfile Config Scan"
+            if [ -f .trivy-reports/dockerfile-config.json ]; then
+              python3 -c "
+          import json
+          try:
+              with open('.trivy-reports/dockerfile-config.json') as f:
+                  data = json.load(f)
+              results = data.get('Results', [])
+              total_misconf = sum(len(r.get('Misconfigurations', [])) for r in results)
+              print(f'- **Misconfigurations:** {total_misconf}')
+              if total_misconf == 0:
+                  print('No high/critical findings detected.')
+          except Exception as e:
+              print(f'Error parsing results: {e}')
+          "
+            elif grep -q "Skipped" .trivy-reports/dockerfile-config.txt 2>/dev/null; then
+              echo "Skipped (no devcontainer Dockerfile found)."
+            else
+              echo "No results available."
+            fi
+            echo ""
+
+            echo "### Base Image Scan"
+            if [ -f .trivy-reports/base-image.json ]; then
+              python3 -c "
+          import json
+          try:
+              with open('.trivy-reports/base-image.json') as f:
+                  data = json.load(f)
+              results = data.get('Results', [])
+              total_vulns = sum(len(r.get('Vulnerabilities', [])) for r in results)
+              print(f'- **OS Package CVEs:** {total_vulns} (unfixed excluded)')
+              if total_vulns == 0:
+                  print('No high/critical CVEs with available fixes.')
+          except Exception as e:
+              print(f'Error parsing results: {e}')
+          "
+            elif grep -q "Skipped" .trivy-reports/base-image.txt 2>/dev/null; then
+              echo "Skipped (no devcontainer Dockerfile found)."
+            else
+              echo "No results available."
+            fi
+            echo ""
+
+            echo "### Suppression Guidelines"
+            echo ""
+            echo "To suppress known/acceptable findings, add them to \`.trivyignore\` with explicit justification."
+            echo "See \`docs/SECURITY.md\` for the full suppression policy."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Trivy scan reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: trivy-scan-reports
+          path: .trivy-reports/
+          retention-days: 30

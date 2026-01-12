@@ -1,0 +1,93 @@
+# Trivy Ignore File
+# See https://aquasecurity.github.io/trivy/latest/docs/configuration/filtering/
+#
+# This file contains suppressions for known/acceptable findings.
+# Each suppression MUST include explicit justification.
+#
+# Format:
+#   # Justification: <reason why this is acceptable>
+#   <CVE-ID or vulnerability identifier>
+#
+# Categories of acceptable suppressions:
+# 1. False positives (vulnerability does not apply to our usage)
+# 2. Disputed vulnerabilities (contested by vendor/community)
+# 3. No fix available AND risk is mitigated by other controls
+# 4. Test/development dependencies only (not in production)
+#
+# DO NOT suppress without justification. All suppressions are reviewed.
+
+# =============================================================================
+# Exclusion Patterns (directories to skip)
+# Note: These are also specified in scripts/trivy.sh via --skip-dirs
+# =============================================================================
+
+# Task workspaces - user code, not part of core project
+tasks/
+
+# Run outputs - generated artifacts
+runs/
+
+# Virtual environment - managed dependencies
+.venv/
+
+# Cache directories
+.pytest_cache/
+__pycache__/
+node_modules/
+.benchmarks/
+.fuzz-reports/
+.trivy-reports/
+.security-reports/
+htmlcov/
+
+# Git internals
+.git/
+
+# =============================================================================
+# Known False Positives
+# =============================================================================
+
+# No specific suppressions yet - add as needed with justification
+
+# Example format:
+# # Justification: CVE-XXXX-XXXX affects feature X which we don't use.
+# # Our code only uses feature Y which is not affected.
+# # Tracking issue: https://github.com/org/repo/issues/XXX
+# CVE-XXXX-XXXX
+
+# =============================================================================
+# Development-Only Dependencies
+# =============================================================================
+
+# No specific suppressions yet - add as needed with justification
+
+# Example format:
+# # Justification: CVE-XXXX-XXXX affects package-name which is only used
+# # for development/testing. Not deployed in production environments.
+# # The vulnerability requires network access which is blocked in CI.
+# CVE-XXXX-XXXX
+
+# =============================================================================
+# Disputed/Contested Vulnerabilities
+# =============================================================================
+
+# No specific suppressions yet - add as needed with justification
+
+# Example format:
+# # Justification: CVE-XXXX-XXXX is disputed by the maintainer.
+# # See: https://github.com/package/repo/issues/XXX
+# # Risk is minimal as the attack vector requires admin access.
+# CVE-XXXX-XXXX
+
+# =============================================================================
+# Waiting for Upstream Fix
+# =============================================================================
+
+# No specific suppressions yet - add as needed with justification
+
+# Example format:
+# # Justification: CVE-XXXX-XXXX has no fix available yet.
+# # Tracking upstream: https://github.com/package/repo/issues/XXX
+# # Mitigated by: input validation in server/routes/router.py
+# # Review date: 2025-02-01
+# CVE-XXXX-XXXX

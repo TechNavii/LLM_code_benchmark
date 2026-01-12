@@ -282,6 +282,119 @@ Some checks may not apply to all projects. Known limitations:
 
 For persistent false positives, document them here and accept the reduced score in those areas.
 
+## Trivy Security Scanning
+
+This project uses [Trivy](https://aquasecurity.github.io/trivy/) for comprehensive security scanning of the repository filesystem and devcontainer.
+
+### What Trivy Scans
+
+Trivy performs multiple types of security analysis:
+
+| Scan Type | Description |
+|-----------|-------------|
+| Vulnerability | Scans dependencies (Python packages) for known CVEs |
+| Misconfiguration | Checks for insecure configuration patterns |
+| Secret | Detects accidentally committed secrets and credentials |
+| Dockerfile | Analyzes Dockerfile for security best practices |
+| Base Image | Scans devcontainer base image for OS package CVEs |
+
+### Running Trivy Locally
+
+```bash
+# Run all scans (filesystem + Dockerfile)
+./scripts/trivy.sh
+
+# Run filesystem scan only
+./scripts/trivy.sh --fs
+
+# Run Dockerfile scan only
+./scripts/trivy.sh --dockerfile
+
+# Generate JSON reports
+./scripts/trivy.sh --json
+
+# Brownfield mode (warn-only, don't fail)
+./scripts/trivy.sh --warn-only
+```
+
+### Installation
+
+Trivy must be installed locally to run scans:
+
+```bash
+# macOS
+brew install trivy
+
+# Linux
+curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+# Or use Docker
+docker run aquasec/trivy
+```
+
+### CI Integration
+
+Trivy runs in the nightly deep scan workflow (`.github/workflows/nightly-deep-scans.yml`):
+
+- **Filesystem scan**: Scans repository for vulnerabilities and misconfigurations
+- **Dockerfile config scan**: Checks devcontainer Dockerfile for best practices
+- **Base image scan**: Scans the devcontainer base image for OS package CVEs
+
+Results are uploaded as artifacts with 30-day retention.
+
+### Scope and Exclusions
+
+Trivy scans are scoped to match `meta.excludePatterns`:
+
+**Excluded directories:**
+- `runs/` - Generated run outputs
+- `tasks/` - User task workspaces
+- `.venv/` - Virtual environment (managed dependencies)
+- `.pytest_cache/`, `__pycache__/` - Cache directories
+- `node_modules/` - Node.js dependencies (if any)
+- `.git/` - Git internals
+- `.benchmarks/`, `.fuzz-reports/`, `.trivy-reports/` - Generated reports
+
+### Suppressing Findings
+
+To suppress known/acceptable findings, add them to `.trivyignore` with explicit justification:
+
+```
+# Justification: CVE-XXXX-XXXX affects feature X which we don't use.
+# Our code only uses feature Y which is not affected.
+# Tracking issue: https://github.com/org/repo/issues/XXX
+CVE-XXXX-XXXX
+```
+
+**Suppression categories:**
+
+1. **False positives** - Vulnerability does not apply to our usage
+2. **Disputed vulnerabilities** - Contested by vendor/community
+3. **No fix available** - Risk is mitigated by other controls
+4. **Development-only** - Not used in production environments
+
+All suppressions are reviewed and must include justification.
+
+### Enforcement Policy
+
+- **Current (brownfield)**: Warn-only mode in nightly scans
+- **Future**: May enforce failure on high/critical findings once baseline is understood
+
+### Relationship to Other Scanners
+
+Trivy complements other security tools in the pipeline:
+
+| Tool | Focus |
+|------|-------|
+| pip-audit | Python dependency vulnerabilities (PyPI) |
+| Trivy | Comprehensive scanning (dependencies, misconfig, secrets, containers) |
+| Bandit | Python SAST (code patterns) |
+| Semgrep | Multi-language SAST (custom rules) |
+| Gitleaks | Git history secret scanning |
+| CodeQL | Deep semantic code analysis |
+
+Trivy provides broader coverage (secrets, misconfigurations, container scanning) while pip-audit focuses specifically on Python PyPI vulnerabilities with better accuracy for that narrow scope.
+
 ## Reporting Security Issues
 
 If you discover a security vulnerability in this project, please report it by:

@@ -52,6 +52,7 @@ runs/
 *.sqlite
 docs/sbom/
 .benchmarks/
+.trivy-reports/
 
 # IDE / editor
 .idea/
