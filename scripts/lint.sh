@@ -51,4 +51,7 @@ echo "Running vulture dead-code detection..."
 # Check for hardcoded secrets, absolute paths, and environment-specific values
 "${SCRIPT_DIR}/check-hardcoded-values.sh"
 
+# Check .env.example for secrets and environment-specific values
+"${SCRIPT_DIR}/check-env-example-secrets.sh"
+
 echo "✓ Lint checks passed"

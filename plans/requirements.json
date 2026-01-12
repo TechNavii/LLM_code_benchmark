@@ -1007,7 +1007,7 @@
         "Ensure the check only reports key names / line numbers and never prints potential secret values",
         "Keep the policy brownfield-safe by allowing explicit, justified suppressions"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-021-validator-scripts-any-cwd",
