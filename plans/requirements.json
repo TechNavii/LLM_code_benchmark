@@ -1046,7 +1046,7 @@
         "Cover both code and QA routes where applicable",
         "Keep tests deterministic and independent of developer machine paths"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "ci-010-no-hardcoded-values-gate",
