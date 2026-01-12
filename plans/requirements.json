@@ -1020,7 +1020,7 @@
         "Keep tests hermetic and fast; do not require network access",
         "Ensure the behavior is consistent across supported OS/Python matrix"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-018-filesystem-boundary-hardening",
