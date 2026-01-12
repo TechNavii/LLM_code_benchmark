@@ -1111,7 +1111,7 @@
         "Use FastAPI TestClient to assert each referenced asset is served with a 200 response",
         "Keep the tests simple and hermetic (no Playwright required)"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }
