@@ -677,14 +677,29 @@ def _extract_single_line_answer(raw: str) -> str:
     # Now select the last non-empty line as the answer.
     lines = [ln.strip() for ln in (text.strip().splitlines() if text else [])]
     non_empty = [ln for ln in lines if ln]
+
+    def _cleanup(line: str) -> str:
+        cleaned = (line or "").strip()
+        cleaned = re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", cleaned)
+        cleaned = re.sub(
+            r"(?i)^(?:final\s+answer|final|answer)\s*[:\-–—]\s*",
+            "",
+            cleaned,
+        )
+        cleaned = re.sub(r"(?i)^(?:the\s+)?(?:final\s+)?answer\s+is\s+", "", cleaned)
+        cleaned = cleaned.strip().strip("`*_\"'")
+        cleaned = cleaned.strip(" .,:;!?")
+        cleaned = cleaned.strip("`*_\"'")
+        return cleaned
+
     if non_empty:
-        return non_empty[-1]
+        return _cleanup(non_empty[-1])
 
     # Fallback to the first non-empty line from the original content.
     orig_lines = [ln.strip() for ln in (raw.strip().splitlines() if raw else [])]
     for ln in orig_lines:
         if ln:
-            return ln
+            return _cleanup(ln)
     return ""
 
 
