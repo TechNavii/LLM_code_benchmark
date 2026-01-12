@@ -12,6 +12,8 @@ These tests are designed to be fast and run on every change to catch regressions
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -126,10 +128,17 @@ def test_models_capabilities_requires_model_id(client: TestClient) -> None:
 
 
 def test_models_capabilities_invalid_model_id(client: TestClient) -> None:
-    """Test that the models capabilities endpoint handles invalid model_id."""
-    response = client.get("/models/capabilities?model_id=nonexistent-model-xyz-123")
-    # Should return 404 for models that don't exist
-    assert response.status_code == 404
+    """Test that the models capabilities endpoint handles invalid model_id.
+
+    Note: This test mocks the external OpenRouter API call to ensure hermeticity.
+    When the API returns no matching models, the endpoint returns 404.
+    """
+    # Mock fetch_model_metadata to avoid external network calls
+    with patch("server.routes.router.fetch_model_metadata") as mock_fetch:
+        mock_fetch.return_value = {}  # No models found
+        response = client.get("/models/capabilities?model_id=nonexistent-model-xyz-123")
+        # Should return 404 for models that don't exist
+        assert response.status_code == 404
 
 
 # API Schema Tests

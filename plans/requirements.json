@@ -837,6 +837,137 @@
         "Ensure it works on macOS/Linux hosts"
       ],
       "passes": true
+    },
+    {
+      "id": "tests-018-no-network-hermeticity",
+      "priority": 62,
+      "category": "tests",
+      "description": "Enforce test hermeticity by blocking external network access during pytest runs",
+      "steps": [
+        "Add a pytest plugin (e.g., pytest-socket) to disable network access by default for the repository test suite",
+        "Allow only loopback/localhost connections where required (e.g., local ASGI TestClient), and require explicit per-test opt-in for any other sockets",
+        "Ensure the policy applies only to the repository test suite (exclude tasks/* suites) and does not break local dev workflows",
+        "Run the network-blocking configuration in CI to prevent accidental external calls"
+      ],
+      "passes": true
+    },
+    {
+      "id": "quality-019-hadolint-devcontainer-dockerfile",
+      "priority": 63,
+      "category": "quality",
+      "description": "Lint Dockerfiles (devcontainer) for security and best-practice issues",
+      "steps": [
+        "Add hadolint (or equivalent) to CI (containerized run acceptable) and lint .devcontainer/Dockerfile",
+        "Add a minimal configuration/ignore mechanism for unavoidable warnings with explicit justification",
+        "Keep the lint fast and deterministic (no network calls beyond fetching the linter)",
+        "Ensure the check does not block non-container workflows (devcontainer remains optional)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-014-trivy-repo-and-devcontainer-scan",
+      "priority": 64,
+      "category": "security",
+      "description": "Add Trivy (or equivalent) scanning for repo filesystem and devcontainer image/Dockerfile",
+      "steps": [
+        "Run a filesystem scan (repo root) for known vulnerable packages and common misconfigurations",
+        "Scan the devcontainer Dockerfile/image for OS package CVEs and insecure configuration",
+        "Exclude runs/, tasks/*, .venv/, and other generated artifacts consistent with meta.excludePatterns",
+        "Add an ignore/suppressions file with explicit justification for unavoidable findings",
+        "Run in nightly CI (warn-only initially) and optionally surface results on PRs"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-009-fork-pr-hardening",
+      "priority": 65,
+      "category": "ci",
+      "description": "Harden CI behavior for pull requests from forks to reduce secret and cache poisoning risk",
+      "steps": [
+        "Detect fork PR contexts and disable any steps that require write permissions (comments, check annotations) unless explicitly safe",
+        "Ensure workflows do not use pull_request_target unless strictly necessary and well-audited",
+        "Restrict caching behavior for fork PRs (disable cache writes and avoid restoring caches containing secrets)",
+        "Keep workflow permissions least-privilege and scoped per job"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-015-slsa-provenance-attestations",
+      "priority": 66,
+      "category": "security",
+      "description": "Generate SLSA build provenance attestations for key CI artifacts",
+      "steps": [
+        "Use GitHub's provenance/attestation support (or SLSA generator) to produce build provenance for SBOMs, lockfiles, and other critical artifacts",
+        "Store attestations as artifacts and/or publish them as provenance in the repository",
+        "Add verification steps (where practical) to ensure provenance is present and valid",
+        "Keep the setup brownfield-safe (warn-only initially)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-016-sigstore-sign-artifacts",
+      "priority": 67,
+      "category": "security",
+      "description": "Sign critical artifacts (SBOMs/lockfiles) with Sigstore (keyless) and verify signatures",
+      "steps": [
+        "Use cosign (keyless via GitHub OIDC) to sign SBOM artifacts and hashed lockfiles",
+        "Publish signatures alongside the artifacts (CI artifact or release attachment)",
+        "Add a verification step to ensure signatures validate in CI",
+        "Keep signing limited to non-sensitive artifacts and avoid embedding secrets"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-020-http-security-headers",
+      "priority": 68,
+      "category": "quality",
+      "description": "Add standard HTTP security headers for the FastAPI server (especially UI routes)",
+      "steps": [
+        "Add middleware to set headers like X-Content-Type-Options, Referrer-Policy, Permissions-Policy, and a CSP appropriate for the UI",
+        "Ensure defaults are safe but do not break the existing UI (allow configuration overrides where needed)",
+        "Apply headers consistently to both code and QA routes where applicable",
+        "Add tests verifying the headers are present on representative endpoints"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-021-request-limits-and-timeouts",
+      "priority": 69,
+      "category": "quality",
+      "description": "Add request size limits and enforce timeouts to reduce DoS/hang risk",
+      "steps": [
+        "Add a maximum request body size limit (413 on oversized requests) for relevant POST endpoints",
+        "Ensure outbound HTTP requests have explicit timeouts (and tests enforcing that policy)",
+        "Optionally add basic rate limiting for mutating endpoints (configurable, off by default for local dev)",
+        "Add tests for size limits/timeouts/rate limiting behavior"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-019-security-headers-contract",
+      "priority": 70,
+      "category": "tests",
+      "description": "Add contract tests asserting critical HTTP security headers are set",
+      "steps": [
+        "Add FastAPI TestClient tests covering representative endpoints (/health, /ui, /qa/ui, API endpoints)",
+        "Assert presence and expected values/structure for security headers (CSP, X-Content-Type-Options, etc.)",
+        "Keep tests stable by allowing configurable header values where appropriate",
+        "Ensure tests remain hermetic and fast"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-020-request-size-and-rate-limit",
+      "priority": 71,
+      "category": "tests",
+      "description": "Add tests for request size limiting and optional rate limiting",
+      "steps": [
+        "Add tests that submit oversized payloads to mutating endpoints and assert a 413-style response",
+        "If rate limiting is implemented, add tests that exceed the limit and assert 429 responses",
+        "Ensure behavior is configurable so local development is not hindered",
+        "Keep tests deterministic (no sleep-based timing flakes)"
+      ],
+      "passes": false
     }
   ]
 }

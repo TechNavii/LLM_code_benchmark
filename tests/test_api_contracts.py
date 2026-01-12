@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -163,21 +164,31 @@ class TestModelsCapabilitiesEndpointContract:
         assert "detail" in data
 
     def test_capabilities_unknown_model_returns_404(self, client: TestClient) -> None:
-        """Test /models/capabilities with unknown model returns 404."""
-        response = client.get("/models/capabilities?model_id=completely_unknown_model_xyz_123")
-        assert response.status_code == 404
-        data = response.json()
-        assert "detail" in data
-        assert "not found" in data["detail"].lower()
+        """Test /models/capabilities with unknown model returns 404.
+
+        Note: Mocks external OpenRouter API to ensure hermeticity.
+        """
+        with patch("server.routes.router.fetch_model_metadata") as mock_fetch:
+            mock_fetch.return_value = {}  # No models found
+            response = client.get("/models/capabilities?model_id=completely_unknown_model_xyz_123")
+            assert response.status_code == 404
+            data = response.json()
+            assert "detail" in data
+            assert "not found" in data["detail"].lower()
 
     def test_capabilities_error_response_shape(self, client: TestClient) -> None:
-        """Test error responses have consistent shape."""
-        response = client.get("/models/capabilities?model_id=unknown")
-        assert response.status_code == 404
-        data = response.json()
-        assert isinstance(data, dict)
-        assert "detail" in data
-        assert isinstance(data["detail"], str)
+        """Test error responses have consistent shape.
+
+        Note: Mocks external OpenRouter API to ensure hermeticity.
+        """
+        with patch("server.routes.router.fetch_model_metadata") as mock_fetch:
+            mock_fetch.return_value = {}  # No models found
+            response = client.get("/models/capabilities?model_id=unknown")
+            assert response.status_code == 404
+            data = response.json()
+            assert isinstance(data, dict)
+            assert "detail" in data
+            assert isinstance(data["detail"], str)
 
 
 class TestCreateRunValidationContract:
@@ -386,17 +397,28 @@ class TestErrorResponseConsistency:
     """Tests for consistent error response format across endpoints."""
 
     def test_404_responses_have_detail_field(self, client: TestClient) -> None:
-        """Test all 404 responses include a detail field."""
-        endpoints = [
+        """Test all 404 responses include a detail field.
+
+        Note: The /models/capabilities endpoint mocks external API to ensure hermeticity.
+        """
+        # Endpoints that don't need mocking (no external calls)
+        endpoints_no_mock = [
             "/runs/nonexistent_run",
             "/qa/runs/nonexistent_run",
-            "/models/capabilities?model_id=unknown_model",
         ]
-        for endpoint in endpoints:
+        for endpoint in endpoints_no_mock:
             response = client.get(endpoint)
             assert response.status_code == 404, f"Expected 404 for {endpoint}"
             data = response.json()
             assert "detail" in data, f"Missing 'detail' in 404 for {endpoint}"
+
+        # /models/capabilities makes external API calls - mock it
+        with patch("server.routes.router.fetch_model_metadata") as mock_fetch:
+            mock_fetch.return_value = {}  # No models found
+            response = client.get("/models/capabilities?model_id=unknown_model")
+            assert response.status_code == 404
+            data = response.json()
+            assert "detail" in data, "Missing 'detail' in 404 for /models/capabilities"
 
     def test_422_responses_have_detail_field(self, client: TestClient) -> None:
         """Test all 422 responses include a detail field."""
