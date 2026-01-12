@@ -2,7 +2,7 @@
   "meta": {
     "name": "Benchmark Harness: Quality Checks & Tests",
     "description": "Incrementally harden the benchmark harness (FastAPI server + Python harness + GUI) with reproducible validators, lint/format/type checks, test coverage, CI gates, and basic security scans.",
-    "projectDir": "/Users/tooru/Desktop/coding_test/benchmark",
+    "projectDir": ".",
     "structure": {
       "src": "server/",
       "tests": "tests/",
@@ -23,14 +23,15 @@
     "excludePatterns": [
       "runs/",
       ".venv/",
+      ".hypothesis/",
       ".pytest_cache/",
       "__pycache__/",
       "tasks/**/workspace/"
     ],
     "validators": {
-      "lint": "cd /Users/tooru/Desktop/coding_test/benchmark && ./scripts/lint.sh",
-      "typecheck": "cd /Users/tooru/Desktop/coding_test/benchmark && ./scripts/typecheck.sh",
-      "test": "cd /Users/tooru/Desktop/coding_test/benchmark && ./scripts/test.sh"
+      "lint": "./scripts/lint.sh",
+      "typecheck": "./scripts/typecheck.sh",
+      "test": "./scripts/test.sh"
     },
     "notes": [
       "This is a brownfield plan: prefer incremental, non-breaking changes and characterization tests around existing behavior.",
@@ -968,6 +969,149 @@
         "Keep tests deterministic (no sleep-based timing flakes)"
       ],
       "passes": true
+    },
+    {
+      "id": "quality-022-no-hardcoded-values",
+      "priority": 72,
+      "category": "quality",
+      "description": "Prevent hardcoded secrets, absolute filesystem paths, and environment-specific values from entering the repo",
+      "steps": [
+        "Add a repository scan that flags hardcoded secret-looking strings, absolute filesystem paths, and user-specific paths in tracked files",
+        "Make the scan configurable via allowlist/suppressions with explicit justification",
+        "Exclude generated artifacts/caches consistent with meta.excludePatterns",
+        "Integrate the scan into CI (and optionally ./scripts/lint.sh)"
+      ],
+      "passes": true
+    },
+    {
+      "id": "quality-023-configurable-external-endpoints",
+      "priority": 73,
+      "category": "quality",
+      "description": "Ensure external service endpoints are configurable (no hardcoded base URLs)",
+      "steps": [
+        "Inventory outbound HTTP calls (server and harness) and ensure their base URLs come from configuration (environment variables / settings models)",
+        "Provide safe local-dev defaults where appropriate, but require explicit configuration for non-local endpoints",
+        "Add tests verifying base URL resolution and that requests never silently fall back to an unintended external endpoint",
+        "Keep .env.example limited to key names / placeholders (no real values)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-017-example-config-no-secrets",
+      "priority": 74,
+      "category": "security",
+      "description": "Ensure example configuration files contain no secrets or environment-specific values",
+      "steps": [
+        "Enforce that .env.example contains only placeholder/empty values (no real tokens, passwords, or machine-specific paths)",
+        "Add a CI check that fails if example configs contain secret-like values or absolute filesystem paths",
+        "Ensure the check only reports key names / line numbers and never prints potential secret values",
+        "Keep the policy brownfield-safe by allowing explicit, justified suppressions"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-021-validator-scripts-any-cwd",
+      "priority": 75,
+      "category": "tests",
+      "description": "Verify validator scripts are portable and do not rely on hardcoded directories or the caller's working directory",
+      "steps": [
+        "Add subprocess-based tests that execute ./scripts/lint.sh, ./scripts/typecheck.sh, and ./scripts/test.sh from outside the repo root",
+        "Require scripts to resolve the repo root dynamically (e.g., based on script location) rather than relying on a hardcoded path",
+        "Keep tests hermetic and fast; do not require network access",
+        "Ensure the behavior is consistent across supported OS/Python matrix"
+      ],
+      "passes": false
+    },
+    {
+      "id": "security-018-filesystem-boundary-hardening",
+      "priority": 76,
+      "category": "security",
+      "description": "Harden filesystem interactions to prevent path traversal and unintended writes",
+      "steps": [
+        "Audit all places where user-controlled identifiers influence filesystem paths (run IDs, task IDs, filenames)",
+        "Ensure path joins are normalized and validated to stay within intended directories",
+        "Add negative tests for traversal patterns and ensure safe error handling",
+        "Avoid leaking filesystem paths in error messages returned to clients"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-022-filesystem-path-traversal-regression",
+      "priority": 77,
+      "category": "tests",
+      "description": "Add regression tests for path traversal and filesystem boundary enforcement",
+      "steps": [
+        "Add tests that attempt traversal-style identifiers and assert the server rejects them safely",
+        "Add tests ensuring artifact creation stays within the configured storage directory",
+        "Cover both code and QA routes where applicable",
+        "Keep tests deterministic and independent of developer machine paths"
+      ],
+      "passes": false
+    },
+    {
+      "id": "ci-010-no-hardcoded-values-gate",
+      "priority": 78,
+      "category": "ci",
+      "description": "Add a CI gate that blocks introduction of hardcoded secrets/paths/endpoints",
+      "steps": [
+        "Run the hardcoded-values scan as an early CI step and fail on new findings",
+        "Ensure CI output is safe (no printing suspected secret values)",
+        "Allow controlled suppressions with explicit justification and periodic review",
+        "Keep the gate scoped to tracked repo files and exclude caches/artifacts"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-024-repo-artifact-hygiene",
+      "priority": 79,
+      "category": "quality",
+      "description": "Ensure generated artifacts/caches are gitignored and never committed",
+      "steps": [
+        "Audit the repository for accidentally tracked tool caches (e.g., .hypothesis/, .pytest_cache/, .mypy_cache/, .ruff_cache/, htmlcov/, coverage artifacts)",
+        "Ensure .gitignore comprehensively covers generated artifacts including uncommon filenames (e.g., '.coverage 2')",
+        "Add a CI check that fails if any tracked files exist under ignored artifact directories",
+        "Allow explicit allowlists only with clear justification"
+      ],
+      "passes": false
+    },
+    {
+      "id": "quality-025-lmstudio-without-openrouter-key",
+      "priority": 80,
+      "category": "quality",
+      "description": "Allow LM Studio flows to run without OpenRouter credentials",
+      "steps": [
+        "Make OPENROUTER_API_KEY optional in settings and require it only when executing OpenRouter requests",
+        "Ensure server startup and /models/lmstudio endpoint work when OPENROUTER_API_KEY is unset",
+        "Ensure model metadata fetching does not call OpenRouter when only lmstudio/* models are requested",
+        "Provide clear, actionable errors when OpenRouter models are requested without credentials"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-023-external-endpoint-config-contract",
+      "priority": 81,
+      "category": "tests",
+      "description": "Add tests enforcing external endpoint configurability and LM Studio/OpenRouter gating",
+      "steps": [
+        "Add unit tests verifying OpenRouter base URLs are derived from configuration (no hardcoded URLs scattered across code)",
+        "Add tests that OpenRouter calls fail fast with a clear message when OPENROUTER_API_KEY is missing",
+        "Add tests that OpenRouter metadata fetching is skipped when only lmstudio/* models are requested",
+        "Ensure all tests are hermetic (no external network access)"
+      ],
+      "passes": false
+    },
+    {
+      "id": "tests-024-ui-static-asset-integrity",
+      "priority": 82,
+      "category": "tests",
+      "description": "Add lightweight tests verifying UI static assets referenced by HTML exist and are served",
+      "steps": [
+        "Parse gui/index.html and gui/qa/index.html for referenced /ui/* assets",
+        "Assert each referenced asset exists on disk in gui/",
+        "Use FastAPI TestClient to assert each referenced asset is served with a 200 response",
+        "Keep the tests simple and hermetic (no Playwright required)"
+      ],
+      "passes": false
     }
   ]
 }

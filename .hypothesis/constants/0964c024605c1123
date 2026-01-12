@@ -1,4 +1,0 @@
-# file: /Users/tooru/Desktop/coding_test/benchmark/server/routes/auth.py
-# hypothesis_version: 6.135.0
-
-[401, 'Authorization', 'Bearer ', 'Invalid bearer token', 'Missing bearer token']

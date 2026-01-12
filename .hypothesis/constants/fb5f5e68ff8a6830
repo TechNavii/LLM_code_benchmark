@@ -1,4 +1,0 @@
-# file: /Users/tooru/Desktop/coding_test/benchmark/server/database.py
-# hypothesis_version: 6.135.0
-
-[',', 'AttemptRecord', 'CASCADE', 'RunRecord', 'accuracy', 'all, delete-orphan', 'attempts', 'base', 'best', 'best_accuracy', 'cost', 'cost_at_best', 'cost_usd', 'duration', 'duration_at_best', 'duration_seconds', 'error', 'error_count', 'id', 'inf', 'macro_model_accuracy', 'metrics', 'model', 'model_id', 'models', 'overall', 'passed', 'run', 'run_dir', 'runs', 'runs.id', 'samples', 'status', 'summary.json', 'task_id', 'tasks', 'thinking_level', 'timestamp', 'timestamp_utc', 'timing', 'token_usage', 'total_cost', 'total_cost_usd', 'total_duration', 'usage']

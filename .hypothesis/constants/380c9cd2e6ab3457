@@ -1,4 +1,0 @@
-# file: /Users/tooru/Desktop/coding_test/benchmark/harness/config.py
-# hypothesis_version: 6.135.0
-
-[0.5, 10.0, 120.0, 300, 20000, 200000, '.env', 'OPENROUTER_API_KEY', '__', 'case_sensitive', 'env_file', 'env_nested_delimiter', 'runs', 'tasks']

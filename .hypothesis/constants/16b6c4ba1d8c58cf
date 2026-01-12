@@ -1,4 +1,0 @@
-# file: /Users/tooru/Desktop/coding_test/benchmark/server/validators.py
-# hypothesis_version: 6.135.0
-
-[0.0, 2.0, 'ValidatedRunRequest', '^[A-Za-z0-9._\\-/]+$', '^[a-zA-Z0-9_]+$', 'after', 'models', 'provider', 'tasks', 'thinking_level']

@@ -1,4 +1,0 @@
-# file: /Users/tooru/Desktop/coding_test/benchmark/harness/expert_questions/dataset.py
-# hypothesis_version: 6.135.0
-
-[b'<([0-9A-Fa-f]+)>', b'<([0-9A-Fa-f]+)>\\s*Tj', b'<([0-9A-Fa-f]+)>\\s+<([0-9A-Fa-f]+)>', b'BT(.*?)ET', b'\\[(.*?)\\]\\s*TJ', b'begincmap(.*?)endcmap', b'stream\\r?\\n(.*?)\\r?\\nendstream', 100, 1114111, '<sup>(.*?)</sup>', 'Answer', 'Each question above', 'Question', '[... omitted', '\\s+', '^(\\d{1,3})\\.\\s+(.*)$', 'big', 'ignore', 'latin-1', 'load_questions', 'utf-8']

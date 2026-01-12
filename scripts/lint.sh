@@ -48,4 +48,7 @@ echo "Running vulture dead-code detection..."
 # Check .env.example is synchronized with pydantic-settings models
 "${SCRIPT_DIR}/check-env-example.sh"
 
+# Check for hardcoded secrets, absolute paths, and environment-specific values
+"${SCRIPT_DIR}/check-hardcoded-values.sh"
+
 echo "✓ Lint checks passed"

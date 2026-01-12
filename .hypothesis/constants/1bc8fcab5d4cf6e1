@@ -1,4 +1,0 @@
-# file: /Users/tooru/Desktop/coding_test/benchmark/server/qa_database.py
-# hypothesis_version: 6.135.0
-
-[200, ',', 'CASCADE', 'QAAttemptRecord', 'QARunRecord', 'accuracy', 'all, delete-orphan', 'attempts', 'base', 'cost_usd', 'duration_seconds', 'error', 'error_count', 'expected_answer', 'get_run', 'id', 'inf', 'init_db', 'leaderboard', 'list_runs', 'metrics', 'model', 'model_answer', 'model_id', 'models', 'normalized_answer', 'normalized_expected', 'overall', 'passed', 'qa_attempts', 'qa_history.db', 'qa_runs', 'qa_runs.id', 'question_number', 'questions', 'run', 'run_dir', 'run_id', 'runs', 'sample_index', 'samples', 'save_run', 'status', 'summary.json', 'thinking_level', 'timestamp_utc', 'timing', 'token_usage', 'total_cost', 'total_cost_usd', 'total_duration', 'usage']
