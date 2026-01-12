@@ -994,7 +994,7 @@
         "Add tests verifying base URL resolution and that requests never silently fall back to an unintended external endpoint",
         "Keep .env.example limited to key names / placeholders (no real values)"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "security-017-example-config-no-secrets",
