@@ -954,7 +954,7 @@
         "Keep tests stable by allowing configurable header values where appropriate",
         "Ensure tests remain hermetic and fast"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "tests-020-request-size-and-rate-limit",
@@ -967,7 +967,7 @@
         "Ensure behavior is configurable so local development is not hindered",
         "Keep tests deterministic (no sleep-based timing flakes)"
       ],
-      "passes": false
+      "passes": true
     }
   ]
 }
