@@ -715,9 +715,9 @@ def _build_prompt(question: Question) -> str:
         )
 
     return (
-        "Answer the following benchmark question with a single word.\n"
+        "Answer the following benchmark question.\n"
         f"Question: {question.prompt}\n"
-        "Respond with only that single word—no other text."
+        "Respond with only the answer—no other text."
     )
 
 
