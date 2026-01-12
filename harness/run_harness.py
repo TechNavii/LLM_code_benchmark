@@ -18,6 +18,7 @@ import tempfile
 import textwrap
 import time
 import uuid
+from urllib.parse import urlparse
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -328,6 +329,74 @@ def _normalize_lmstudio_model_id(model: str) -> str:
     if model.startswith("lmstudio/"):
         return model.split("lmstudio/", 1)[1]
     return model
+
+
+def _resolve_lms_path() -> str | None:
+    resolved = shutil.which("lms")
+    if resolved:
+        return resolved
+    fallback = Path.home() / ".lmstudio" / "bin" / "lms"
+    if fallback.exists():
+        return str(fallback)
+    return None
+
+
+def _lmstudio_cli_instance_args(base_url: str) -> list[str]:
+    trimmed = (base_url or "").strip()
+    if not trimmed:
+        return []
+    if "://" not in trimmed:
+        trimmed = f"http://{trimmed}"
+    parsed = urlparse(trimmed)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 1234
+    return ["--host", host, "--port", str(port)]
+
+
+def _truncate_cli_output(value: str, *, limit: int = 2000) -> str:
+    cleaned = (value or "").strip()
+    if len(cleaned) > limit:
+        return f"{cleaned[:limit]}..."
+    return cleaned
+
+
+def unload_lmstudio_models(*, base_url: str | None = None, timeout: int = 30) -> bool:
+    """Best-effort cleanup of loaded LM Studio models.
+
+    Returns True when the unload command succeeds; otherwise logs a warning and returns False.
+    """
+
+    resolved_base_url = (base_url or SETTINGS.lmstudio_base_url or "").strip()
+    if not resolved_base_url:
+        logger.warning("LM Studio base URL is not configured; skipping model unload")
+        return False
+
+    lms_path = _resolve_lms_path()
+    if not lms_path:
+        logger.warning("LM Studio CLI 'lms' not found; skipping model unload")
+        return False
+
+    instance_args = _lmstudio_cli_instance_args(resolved_base_url)
+    try:
+        unload = subprocess.run(
+            [lms_path, "unload", "--all", *instance_args],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("Timed out unloading LM Studio models")
+        return False
+    except OSError as exc:
+        logger.warning("Unable to unload LM Studio models: %s", exc)
+        return False
+
+    if unload.returncode != 0:
+        detail = _truncate_cli_output(unload.stderr or unload.stdout)
+        logger.warning("Unable to unload LM Studio models: %s", detail or "unknown error")
+        return False
+
+    return True
 
 
 def _store_model_metadata(
@@ -2262,6 +2331,9 @@ def retry_api_error_attempts(
     logger.info("Retried: %d attempts", len(retried_attempts))
     logger.info("Status breakdown: %s", dict(status_counts))
 
+    if any(_is_lmstudio_model(model) for model in models):
+        unload_lmstudio_models()
+
     return summary
 
 
@@ -2401,6 +2473,9 @@ def retry_failed_attempts(
     logger.info("Retry complete. Results saved to %s", run_dir)
     logger.info("Retried: %d attempts", len(retried_attempts))
     logger.info("Status breakdown: %s", dict(status_counts))
+
+    if any(_is_lmstudio_model(model) for model in models):
+        unload_lmstudio_models()
 
     return summary
 
@@ -2642,6 +2717,9 @@ def resume_incomplete_run(
     logger.info("Total: %d attempts", len(all_attempts))
     logger.info("Status breakdown: %s", dict(status_counts))
 
+    if any(_is_lmstudio_model(model) for model in all_models):
+        unload_lmstudio_models()
+
     return summary
 
 
@@ -2875,6 +2953,9 @@ def run_tasks(
 
     latest_summary_path = RUN_ARTIFACTS / "latest_summary.json"
     store_text(latest_summary_path, json.dumps(summary, indent=2))
+
+    if any(_is_lmstudio_model(model) for model in original_models):
+        unload_lmstudio_models()
 
     return summary
 

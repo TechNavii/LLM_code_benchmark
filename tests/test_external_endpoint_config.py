@@ -430,6 +430,96 @@ def test_switch_lmstudio_model_rejects_invalid_model_id(monkeypatch) -> None:
     assert "Invalid" in response.json()["detail"]
 
 
+def test_run_tasks_unloads_lmstudio_models_after_completion(monkeypatch, tmp_path) -> None:
+    from harness import run_harness
+
+    called: dict[str, int] = {"count": 0}
+
+    def fake_unload(*, base_url: str | None = None, timeout: int = 30) -> bool:
+        assert base_url is None or isinstance(base_url, str)
+        assert timeout > 0
+        called["count"] += 1
+        return True
+
+    monkeypatch.setattr(run_harness, "unload_lmstudio_models", fake_unload)
+
+    def fake_evaluate_attempt(*args: Any, **kwargs: Any) -> dict:
+        assert args is not None
+        return {
+            "task_id": kwargs["task_id"],
+            "model": kwargs["model"],
+            "provider": kwargs["preferred_provider"],
+            "sample_index": kwargs["sample_index"],
+            "status": "passed",
+            "duration_seconds": 0.0,
+            "api_latency_seconds": 0.0,
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            "attempt_dir": "stub",
+        }
+
+    monkeypatch.setattr(run_harness, "evaluate_attempt", fake_evaluate_attempt)
+
+    def fake_compute_metrics(*args: Any, **kwargs: Any) -> dict:  # noqa: ARG001
+        assert args is not None
+        assert kwargs is not None
+        return {}
+
+    monkeypatch.setattr(run_harness, "compute_metrics", fake_compute_metrics)
+    monkeypatch.setattr(run_harness, "compute_metrics_by_thinking_level", fake_compute_metrics)
+
+    summary = run_harness.run_tasks(
+        tasks=["python_bugfix_prime_checker"],
+        models=["lmstudio/test-model"],
+        samples=1,
+        temperature=0.0,
+        max_tokens=16,
+        output_dir=tmp_path,
+        run_id="run_test_lmstudio_unload",
+    )
+
+    assert summary["run_id"] == "run_test_lmstudio_unload"
+    assert called["count"] == 1
+
+
+def test_run_question_benchmark_unloads_lmstudio_models_after_completion(monkeypatch, tmp_path) -> None:
+    from harness.expert_questions import run_benchmark
+
+    called: dict[str, int] = {"count": 0}
+
+    def fake_unload(*, base_url: str | None = None, timeout: int = 30) -> bool:
+        assert base_url is None or isinstance(base_url, str)
+        assert timeout > 0
+        called["count"] += 1
+        return True
+
+    monkeypatch.setattr(run_benchmark, "JUDGE_MODEL", None)
+    monkeypatch.setattr(run_benchmark, "unload_lmstudio_models", fake_unload)
+
+    def fake_call_completion(*args: Any, **kwargs: Any) -> tuple[str, dict[str, Any], float]:
+        assert args is not None
+        assert kwargs is not None
+        return (
+            "stub",
+            {"usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+            0.0,
+        )
+
+    monkeypatch.setattr(run_benchmark, "_call_completion", fake_call_completion)
+
+    summary = run_benchmark.run_question_benchmark(
+        models=["lmstudio/test-model"],
+        samples=1,
+        temperature=0.0,
+        max_tokens=16,
+        run_id="qa_test_lmstudio_unload",
+        output_dir=tmp_path,
+        question_limit=1,
+    )
+
+    assert summary["run_id"] == "qa_test_lmstudio_unload"
+    assert called["count"] == 1
+
+
 # =============================================================================
 # Expert Questions LM Studio URL Configuration Tests
 # =============================================================================

@@ -54,6 +54,7 @@ from harness.run_harness import (
     expand_models_with_thinking_variants,
     fetch_model_pricing,
     store_text,
+    unload_lmstudio_models,
 )
 from harness.expert_questions.dataset import Question, load_questions
 
@@ -1040,6 +1041,9 @@ def retry_qa_api_error_attempts(
         status_counts=status_counts,
     )
 
+    if any(_is_lmstudio_model(model) for model in models):
+        unload_lmstudio_models()
+
     return summary
 
 
@@ -1330,6 +1334,10 @@ def retry_qa_failed_attempts(
         retried=retried_count,
         accuracy=overall_accuracy,
     )
+
+    models_in_summary = [m for m in original_summary.get("models", []) if isinstance(m, str)]
+    if any(_is_lmstudio_model(model) for model in models_in_summary):
+        unload_lmstudio_models()
 
     return original_summary
 
@@ -1843,6 +1851,9 @@ def run_question_benchmark(
 
     latest_summary = QA_RUNS_ROOT / "latest_summary.json"
     store_text(latest_summary, json.dumps(summary, indent=2))
+
+    if any(_is_lmstudio_model(model) for model in requested_models):
+        unload_lmstudio_models()
 
     return summary
 
