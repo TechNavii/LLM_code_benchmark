@@ -1,0 +1,322 @@
+name: Quality Gates
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+# Cancel in-progress runs for the same branch/PR to reduce CI load
+# New pushes to the same branch will cancel older in-progress runs
+concurrency:
+  group: quality-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least-privilege permissions - explicitly set for security hardening
+# For fork PRs, we restrict permissions further at the job level
+# Note: Fork PRs from external contributors run with read-only permissions by default
+permissions:
+  contents: read          # Required: checkout code and read repository
+  pull-requests: write    # Required: PR comments (diff-cover, dependency-review) - only for same-repo PRs
+  checks: write           # Required: publish test results annotations - only for same-repo PRs
+
+# Detect if this is a fork PR (used in job conditions)
+# Fork PRs: github.event.pull_request.head.repo.full_name != github.repository
+
+jobs:
+  # Dependency Review - runs on PRs to detect vulnerable dependency changes
+  # NOTE: Skip for fork PRs - requires write permissions for PR comments
+  # Fork PRs will still get vulnerability detection via the quality-checks job validators
+  dependency-review:
+    runs-on: ubuntu-latest
+    # Only run for same-repo PRs (not forks) - comment-summary-in-pr requires write access
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@3c4e3dcb1aa7874d2c16be7d79418e9b7efd6261  # v4
+        with:
+          # Fail on high and critical severity vulnerabilities
+          fail-on-severity: high
+          # Deny specific problematic licenses (optional, can be expanded)
+          deny-licenses: GPL-3.0, AGPL-3.0
+          # Block PRs that introduce vulnerable dependencies
+          comment-summary-in-pr: on-failure
+          # Note: The action automatically scans manifest files changed in the PR
+          # tasks/* workspace deps are excluded since they are not committed to the repo
+          # Use warn-only: true for brownfield-friendly approach to unknown licenses
+          warn-only: false
+
+  quality-checks:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        # Run on both Ubuntu and macOS for cross-platform script compatibility
+        os: [ubuntu-latest, macos-latest]
+        # Enforce supported Python versions (defined in pyproject.toml: requires-python = ">=3.11")
+        python-version: ["3.11", "3.12"]
+
+    # Fork PR hardening: detect fork context for conditional caching and permissions
+    env:
+      IS_FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Fetch full history for diff-cover comparison
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          # Disable pip cache for fork PRs to prevent cache poisoning
+          cache: ${{ env.IS_FORK_PR == 'true' && '' || 'pip' }}
+
+      # Cache virtualenv - with fork PR restrictions
+      # Fork PRs: restore-only (no writes) to prevent cache poisoning attacks
+      # Same-repo PRs and pushes: full cache read/write
+      - name: Cache virtualenv (restore-only for forks)
+        if: env.IS_FORK_PR == 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ matrix.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ matrix.os }}-${{ matrix.python-version }}-
+
+      - name: Cache virtualenv (full access for same-repo)
+        if: env.IS_FORK_PR != 'true'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ matrix.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ matrix.os }}-${{ matrix.python-version }}-
+
+      - name: Install actionlint
+        run: |
+          # Install actionlint for workflow linting (OS-specific binaries)
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz | tar xz -C /tmp
+            sudo mv /tmp/actionlint /usr/local/bin/
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_darwin_amd64.tar.gz | tar xz -C /tmp
+            sudo mv /tmp/actionlint /usr/local/bin/
+          fi
+
+      - name: Install hadolint
+        run: |
+          # Install hadolint for Dockerfile linting (OS-specific binaries)
+          HADOLINT_VERSION="2.12.0"
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" -o /tmp/hadolint
+            chmod +x /tmp/hadolint
+            sudo mv /tmp/hadolint /usr/local/bin/
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+            curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Darwin-x86_64" -o /tmp/hadolint
+            chmod +x /tmp/hadolint
+            sudo mv /tmp/hadolint /usr/local/bin/
+          fi
+
+      - name: Run actionlint on workflows
+        run: ./scripts/actionlint.sh
+
+      - name: Run hadolint on Dockerfiles
+        run: ./scripts/hadolint.sh
+
+      - name: Check GitHub Actions are pinned to SHAs
+        run: ./scripts/check-pinned-actions.sh
+
+      - name: Run ShellCheck on scripts
+        run: ./scripts/shellcheck.sh
+
+      - name: Check dependency lock files
+        run: ./scripts/check-deps.sh
+
+      - name: Check dependency hashes integrity
+        run: ./scripts/check-hashes.sh
+
+      # Run hardcoded values scan early for fast feedback on secrets/paths
+      # This runs before full lint to fail fast on security issues
+      - name: Check for hardcoded secrets and paths
+        run: ./scripts/check-hardcoded-values.sh
+
+      - name: Run lint checks
+        run: ./scripts/lint.sh
+
+      - name: Run type checking
+        run: ./scripts/typecheck.sh
+
+      - name: Run tests with coverage (strict warnings)
+        run: ./scripts/test.sh -W error::DeprecationWarning -W error::PendingDeprecationWarning -W error::RuntimeWarning -W error::ResourceWarning
+        env:
+          CI: true
+
+      - name: Run diff coverage analysis
+        id: diff-cover
+        if: github.event_name == 'pull_request'
+        run: |
+          # Generate diff-cover report in markdown format for PR comment
+          # Brownfield-friendly: warn-only mode initially (DIFF_COVER_WARN_ONLY=true)
+          # Set DIFF_COVER_FAIL_UNDER to enforce minimum coverage on changed lines
+          DIFF_COVER_WARN_ONLY=true \
+          DIFF_COVER_HTML=diff-cover.html \
+          ./scripts/diff-cover.sh 2>&1 | tee diff-cover-output.txt
+
+          # Extract summary for PR comment using grouped redirects (SC2129)
+          {
+            echo "## Diff Coverage Report (${{ matrix.os }}/Python ${{ matrix.python-version }})"
+            echo ""
+            # Extract coverage percentage from diff-cover output
+            if grep -q "Diff Coverage:" diff-cover-output.txt; then
+              grep "Diff Coverage:" diff-cover-output.txt
+            else
+              echo "No changed lines found in coverage scope."
+            fi
+            echo ""
+            echo "<details>"
+            echo "<summary>Full diff coverage output</summary>"
+            echo ""
+            echo '```'
+            cat diff-cover-output.txt
+            echo '```'
+            echo "</details>"
+          } > diff-cover-summary.md
+        continue-on-error: true
+
+      - name: Post diff coverage summary to PR
+        # Only post one comment per PR (from ubuntu-latest/Python 3.11 job)
+        # Skip for fork PRs - requires pull-requests: write permission
+        if: github.event_name == 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11' && env.IS_FORK_PR != 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the diff-cover summary
+            let summary = '';
+            try {
+              summary = fs.readFileSync('diff-cover-summary.md', 'utf8');
+            } catch (e) {
+              summary = '## Diff Coverage Report\n\nNo diff coverage data available.';
+            }
+
+            // Find existing comment to update
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('## Diff Coverage Report')
+            );
+
+            const body = summary + '\n\n---\n*Posted by Quality Gates CI*';
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Upload diff coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: github.event_name == 'pull_request'
+        with:
+          name: diff-cover-report-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            diff-cover.html
+            diff-cover-output.txt
+            diff-cover-summary.md
+          retention-days: 7
+
+      - name: Run security scan
+        run: ./scripts/security-scan.sh
+
+      - name: Run Bandit SAST scan
+        run: ./scripts/bandit.sh
+
+      - name: Run Semgrep security scan
+        run: ./scripts/semgrep.sh
+
+      - name: Run license compliance scan
+        run: ./scripts/license-scan.sh
+
+      - name: Generate SBOM
+        run: ./scripts/sbom.sh
+
+      - name: Validate OpenAPI schema
+        run: ./scripts/openapi-validate.sh
+
+      - name: Check for OpenAPI breaking changes
+        run: ./scripts/openapi-diff.sh
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
+        if: success()
+        with:
+          files: .coverage
+          fail_ci_if_error: false
+        continue-on-error: true
+
+      - name: Upload coverage HTML report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: coverage-report-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: htmlcov/
+          retention-days: 7
+
+      - name: Upload JUnit test results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: junit-results-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: junit.xml
+          retention-days: 7
+
+      - name: Upload coverage XML
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: coverage-xml-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 7
+
+      - name: Publish test results (Ubuntu only)
+        # EnricoMi/publish-unit-test-result-action only supports Linux runners
+        # Skip for fork PRs - requires checks: write permission for annotations
+        uses: EnricoMi/publish-unit-test-result-action@27d65e188ec43221b20d26de30f4892fad91df2f  # v2
+        if: always() && matrix.os == 'ubuntu-latest' && env.IS_FORK_PR != 'true'
+        with:
+          files: junit.xml
+          check_name: Test Results (${{ matrix.os }}/Python ${{ matrix.python-version }})
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: sbom-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            docs/sbom/sbom.json
+            docs/sbom/sbom.xml
+          retention-days: 30

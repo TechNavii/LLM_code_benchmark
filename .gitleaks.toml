@@ -1,0 +1,29 @@
+# Gitleaks configuration for secret scanning
+# See https://github.com/gitleaks/gitleaks for details
+
+title = "Gitleaks configuration for Benchmark Harness"
+
+# Allowlist specific patterns or files that are false positives
+[allowlist]
+description = "Allowlisted files and patterns"
+paths = [
+    # Example files that commonly trigger false positives
+    '''\.env\.example$''',
+    '''SECURITY\.md$''',
+    '''\.gitleaks\.toml$''',
+]
+
+# Allowlist specific values known to be safe (examples, documentation, etc.)
+regexes = [
+    # Example API keys and tokens in documentation
+    '''(sk|pk)_test_[a-zA-Z0-9]+''',  # Test keys
+    '''example_[a-zA-Z0-9_]+''',       # Example values
+    '''your_api_key_here''',           # Placeholder text
+]
+
+# Additional custom rules can be added here
+# [[rules]]
+# id = "custom-rule-name"
+# description = "Description of what this rule detects"
+# regex = '''your-regex-pattern'''
+# tags = ["key", "custom"]

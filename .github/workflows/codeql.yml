@@ -1,0 +1,95 @@
+name: CodeQL Analysis
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      # Trigger on changes to source code only
+      - 'server/**'
+      - 'harness/**'
+      - 'gui/**'
+      - 'conftest.py'
+  pull_request:
+    branches: [main, master]
+    paths:
+      - 'server/**'
+      - 'harness/**'
+      - 'gui/**'
+      - 'conftest.py'
+  schedule:
+    # Run weekly on Sundays at 3:00 AM UTC (after nightly scans)
+    - cron: '0 3 * * 0'
+  workflow_dispatch:
+    # Allow manual trigger for debugging
+  # NOTE: Do NOT use pull_request_target here - it runs with elevated permissions
+  # from the base branch, which can be exploited by malicious fork PRs
+
+# Only one CodeQL run per branch at a time
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+# Permissions required for CodeQL and security tab
+# Fork PRs: security-events: write is required for SARIF upload but GitHub
+# restricts this for fork PRs - CodeQL handles this gracefully
+permissions:
+  security-events: write  # Required: upload SARIF results
+  contents: read          # Required: checkout code
+  actions: read           # Required: detect workflow changes
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # CodeQL supports: cpp, csharp, go, java, javascript, python, ruby, swift
+        language: ['python', 'javascript']
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      # Initialize CodeQL tools for scanning
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@45c373516f557556c15d420e3f5e0aa3d64366bc  # v3
+        with:
+          languages: ${{ matrix.language }}
+          # Configure paths to scan (consistent with meta.lintScope)
+          # and paths to exclude (consistent with meta.excludePatterns)
+          config: |
+            paths:
+              - server
+              - harness
+              - gui
+              - conftest.py
+            paths-ignore:
+              - runs
+              - .venv
+              - .pytest_cache
+              - '**/node_modules'
+              - '**/__pycache__'
+              - 'tasks/**/workspace'
+              - '**/*.pyc'
+          # Use security-and-quality queries for comprehensive analysis
+          # Brownfield-safe: start with default queries, expand later
+          queries: +security-and-quality
+
+      # For Python, we don't need to build - CodeQL can analyze source directly
+      # For JavaScript, CodeQL also analyzes source directly (no build needed)
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@45c373516f557556c15d420e3f5e0aa3d64366bc  # v3
+
+      # Perform CodeQL Analysis
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@45c373516f557556c15d420e3f5e0aa3d64366bc  # v3
+        with:
+          category: "/language:${{ matrix.language }}"
+          # Upload SARIF results to GitHub Security tab
+          upload: true
+          # Brownfield-safe: warn-only initially
+          # To fail on high/critical alerts, add:
+          # fail-on: error
+          # For now, we report all findings without failing the job

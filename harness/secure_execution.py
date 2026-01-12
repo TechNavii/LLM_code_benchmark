@@ -6,7 +6,7 @@ import logging
 import resource
 import subprocess
 from pathlib import Path
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ def secure_run(
     workspace_path: Path,
     timeout: int = 300,
     max_memory_mb: int = 512,
-    env: Optional[dict[str, str]] = None,
-    cwd: Optional[Path] = None,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess:
     """Execute a subprocess with basic resource limits and sanitisation."""
 

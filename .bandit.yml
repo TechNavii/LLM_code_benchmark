@@ -1,0 +1,15 @@
+# Bandit SAST configuration for benchmark harness
+# Scoped to server/ and harness/ (excludes tasks/* workspaces and test directories)
+
+exclude_dirs:
+  - '/tests'
+  - 'harness/tests'
+
+# Skip low-severity or noisy checks:
+# B101: assert_used - asserts acceptable for invariants and type narrowing
+# B404: import subprocess - subprocess necessary for harness execution
+# B603: subprocess_without_shell_equals_true - we use shell=False (secure)
+skips:
+  - B101
+  - B404
+  - B603

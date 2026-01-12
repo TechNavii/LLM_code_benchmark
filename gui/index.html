@@ -3,28 +3,58 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Benchmark Harness Dashboard</title>
-  <link rel="stylesheet" href="/ui/style.css" />
+  <title>Code Tasks • Benchmark Harness</title>
+  <link rel="stylesheet" href="/ui/style.css?v=20260110_6" />
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <nav class="nav-bar" role="navigation" aria-label="Main navigation">
+    <a href="/ui/index.html" class="nav-brand">Benchmark Harness</a>
+    <div class="nav-tabs">
+      <a href="/ui/index.html" class="nav-tab active" aria-current="page">Code Tasks</a>
+      <a href="/ui/qa/index.html" class="nav-tab">QA Questions</a>
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-shortcuts">Press <kbd>?</kbd> for shortcuts</div>
+  </nav>
+
   <header>
-    <h1>Benchmark Harness Dashboard</h1>
+    <h1>Code Tasks Dashboard</h1>
     <p class="tagline">Monitor model performance with live runs, rich metrics, and neon-fast insights.</p>
   </header>
 
-  <main class="dashboard-grid">
+  <main class="dashboard-grid" id="main-content" role="main">
     <section class="card launch-card">
       <h2>Launch Run</h2>
-      <form id="run-form">
+      <form id="run-form" onsubmit="return false">
         <label>
-          Model ID(s)
-          <input type="text" id="model-input" placeholder="google/gemini-2.5-flash-lite" required />
+          Model source
+          <select id="model-source-select" class="form-select">
+            <option value="openrouter" selected>OpenRouter</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
         </label>
-        <div id="model-capabilities" class="helper-note"></div>
-        <label>
-          Provider (optional)
-          <input type="text" id="provider-input" placeholder="Z.AI" />
-        </label>
+
+        <div id="openrouter-fields">
+          <label>
+            Model ID(s)
+            <input type="text" id="model-input" placeholder="google/gemini-2.5-flash-lite" required />
+          </label>
+          <div id="model-capabilities" class="helper-note"></div>
+          <label>
+            Provider (optional)
+            <input type="text" id="provider-input" placeholder="Z.AI" />
+          </label>
+        </div>
+
+        <div id="lmstudio-fields" hidden>
+          <label>
+            LM Studio model
+            <select id="lmstudio-model-select" class="form-select"></select>
+          </label>
+          <div id="lmstudio-model-note" class="helper-note"></div>
+        </div>
         <label>
           Tasks (optional, comma separated)
           <input type="text" id="task-input" placeholder="python_tool_weather_cli,go_feature_wordcount" />
@@ -83,9 +113,10 @@
       <div id="run-status" class="status"></div>
     </section>
 
-    <section class="card accent-card leaderboard-card">
-      <h2>Leaderboard</h2>
+    <section class="card accent-card leaderboard-card" aria-labelledby="leaderboard-heading">
+      <h2 id="leaderboard-heading">Leaderboard</h2>
       <div id="leaderboard-status" class="status"></div>
+      <div id="leaderboard-filter-container"></div>
       <div class="table-wrapper">
       <table>
         <thead>
@@ -104,14 +135,22 @@
       </div>
     </section>
 
-    <section class="card accent-card results-card results-empty" id="results-card" hidden>
-      <h2>Latest Run Results (<span id="run-id"></span>)</h2>
+    <section class="card accent-card results-card results-empty" id="results-card" hidden aria-labelledby="results-heading">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <h2 id="results-heading">Latest Run Results (<span id="run-id"></span>)</h2>
+        <div class="export-buttons" id="export-buttons">
+          <button type="button" class="ghost" id="export-csv-btn" aria-label="Export results to CSV">Export CSV</button>
+          <button type="button" class="ghost" id="export-json-btn" aria-label="Export results to JSON">Export JSON</button>
+        </div>
+      </div>
       <div class="results-placeholder" id="results-placeholder">
         <p>Start a run to see live attempt results here.</p>
       </div>
+      <div id="progress-container"></div>
       <div class="metrics" id="aggregate-metrics"></div>
+      <div id="results-filter-container"></div>
       <div class="table-wrapper">
-      <table>
+      <table id="results-table">
         <thead>
           <tr>
             <th class="task-header">Task</th>
@@ -128,10 +167,15 @@
       </table>
       </div>
     </section>
-    <section class="card recent-card">
-      <h2>Recent Runs</h2>
+    <section class="card recent-card" aria-labelledby="history-heading">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <h2 id="history-heading">Recent Runs</h2>
+        <div class="export-buttons">
+          <button type="button" class="ghost" id="export-history-csv" aria-label="Export history to CSV">Export CSV</button>
+        </div>
+      </div>
       <div class="table-wrapper">
-      <table>
+      <table id="history-table">
         <thead>
           <tr>
             <th>Run ID</th>
@@ -140,14 +184,18 @@
             <th>Accuracy</th>
             <th>Total Cost (USD)</th>
             <th>Duration (s)</th>
+            <th>Errors</th>
+            <th class="actions-header">Actions</th>
           </tr>
         </thead>
         <tbody id="history-body"></tbody>
       </table>
       </div>
+      <div id="history-pagination"></div>
     </section>
   </main>
 
-  <script src="/ui/main.js" type="module"></script>
+  <script src="/ui/model-source.js?v=20260110_6"></script>
+  <script src="/ui/main.js?v=20260110_6" type="module"></script>
 </body>
 </html>

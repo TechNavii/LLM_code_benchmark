@@ -13,6 +13,8 @@ from server.config import get_settings
 from server.database import init_db
 from server.qa_database import init_db as init_qa_db
 from server.logging import configure_logging
+from server.request_limits import RateLimitMiddleware, RequestSizeLimitMiddleware
+from server.security_headers import SecurityHeadersMiddleware
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +60,16 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Add security headers middleware (runs after CORS)
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # Add request size limit middleware (10MB default, configurable via MAX_REQUEST_BODY_SIZE)
+    app.add_middleware(RequestSizeLimitMiddleware)
+
+    # Add optional rate limiting middleware (disabled by default, enable via ENABLE_RATE_LIMITING=true)
+    # Only limits POST/PUT/PATCH/DELETE requests to prevent DoS on mutating endpoints
+    app.add_middleware(RateLimitMiddleware)
 
     app.include_router(router)
     app.include_router(qa_router)

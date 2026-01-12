@@ -14,12 +14,11 @@ source "$VENV_DIR/bin/activate"
 # uvicorn expects to import the server package from the repo root
 cd "$ROOT_DIR"
 
-if ! python -c "import requests" >/dev/null 2>&1; then
-  echo "[devserver] Installing Python dependencies"
+if ! python -c "import fastapi, pydantic_settings, requests, sqlalchemy, uvicorn" >/dev/null 2>&1; then
+  echo "[devserver] Installing Python dependencies (with hash verification)"
   python -m pip install --disable-pip-version-check -q --upgrade pip
-  python -m pip install --disable-pip-version-check -q -r "$ROOT_DIR/server/requirements.txt"
-  python -m pip install --disable-pip-version-check -q -r "$ROOT_DIR/harness/requirements.txt" || true
-  python -m pip install --disable-pip-version-check -q requests
+  python -m pip install --disable-pip-version-check -q --require-hashes -r "$ROOT_DIR/server/requirements.txt"
+  python -m pip install --disable-pip-version-check -q --require-hashes -r "$ROOT_DIR/harness/requirements.txt"
 fi
 
 UVICORN_ARGS=(

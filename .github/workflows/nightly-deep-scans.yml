@@ -1,0 +1,1381 @@
+name: Nightly Deep Scans
+
+on:
+  schedule:
+    # Run nightly at 2:00 AM UTC
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    # Allow manual trigger for debugging
+    inputs:
+      full_scan:
+        description: "Run full extended scans"
+        required: false
+        default: true
+        type: boolean
+  # NOTE: No pull_request trigger - nightly scans run on trusted code only
+  # This prevents fork PRs from triggering expensive/sensitive scans
+  # Fork PRs are tested via the quality-gates workflow
+
+# Concurrency control: only cancel redundant runs for manual dispatches
+# Scheduled runs use a unique group to avoid being canceled
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'schedule' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+
+# Least-privilege permissions: read-only by default
+# Nightly scans only need to read code and upload artifacts
+# This workflow only runs on schedule/manual dispatch, never on fork PRs
+permissions:
+  contents: read          # Required: checkout code
+  # issues: write         # Optional: enable for auto-issue creation on critical findings
+  # Branch protection check needs to read repository settings (uses GITHUB_TOKEN)
+
+jobs:
+  deep-security-scans:
+    name: Deep Security Scans
+    runs-on: ubuntu-latest
+    # Use same Python version as PR workflow
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          # Full clone for baseline comparison
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      # ==========================================
+      # Full Semgrep Scan (extended rulesets)
+      # ==========================================
+      - name: Run full Semgrep scan
+        run: |
+          echo "Running extended Semgrep scan with full rulesets..."
+
+          # Create findings directory
+          mkdir -p .security-reports
+
+          # Run with both custom rules and Semgrep registry rulesets
+          .venv/bin/semgrep scan \
+            --config .semgrep.yml \
+            --config "p/python" \
+            --config "p/javascript" \
+            --config "p/security-audit" \
+            --config "p/secrets" \
+            --exclude 'tasks/' \
+            --exclude 'runs/' \
+            --exclude '.venv/' \
+            --exclude '.pytest_cache/' \
+            --exclude '__pycache__/' \
+            --exclude '*.pyc' \
+            --exclude 'node_modules/' \
+            --metrics off \
+            --json > .security-reports/semgrep-full.json \
+            server/ harness/ gui/ || true
+
+          # Generate summary
+          .venv/bin/python -c "
+          import json
+          import sys
+
+          try:
+              with open('.security-reports/semgrep-full.json') as f:
+                  data = json.load(f)
+
+              results = data.get('results', [])
+              errors_count = len(results)
+
+              # Count by severity
+              by_severity = {}
+              for r in results:
+                  sev = r.get('extra', {}).get('severity', 'UNKNOWN')
+                  by_severity[sev] = by_severity.get(sev, 0) + 1
+
+              print('## Semgrep Full Scan Results')
+              print(f'Total findings: {errors_count}')
+              for sev, count in sorted(by_severity.items()):
+                  print(f'  - {sev}: {count}')
+
+              # Save summary
+              with open('.security-reports/semgrep-summary.txt', 'w') as f:
+                  f.write(f'Total findings: {errors_count}\n')
+                  for sev, count in sorted(by_severity.items()):
+                      f.write(f'{sev}: {count}\n')
+          except Exception as e:
+              print(f'Error processing Semgrep results: {e}')
+              sys.exit(0)
+          "
+        continue-on-error: true
+
+      # ==========================================
+      # Full pip-audit Scan
+      # ==========================================
+      - name: Run full pip-audit scan
+        run: |
+          echo "Running full pip-audit vulnerability scan..."
+
+          # Ensure pip-audit is installed
+          .venv/bin/pip install -q pip-audit
+
+          # Create combined requirements for scanning
+          cat server/requirements.txt harness/requirements.txt requirements-dev.txt > /tmp/all-requirements.txt
+
+          # Run pip-audit with JSON output for processing
+          .venv/bin/pip-audit \
+            -r /tmp/all-requirements.txt \
+            --format json \
+            --output .security-reports/pip-audit-full.json || true
+
+          # Generate summary
+          .venv/bin/python -c "
+          import json
+          import sys
+
+          try:
+              with open('.security-reports/pip-audit-full.json') as f:
+                  data = json.load(f)
+
+              vulns = data.get('dependencies', [])
+              vuln_count = sum(len(d.get('vulns', [])) for d in vulns)
+
+              print('## pip-audit Full Scan Results')
+              print(f'Vulnerable dependencies: {len([d for d in vulns if d.get(\"vulns\")])}')
+              print(f'Total vulnerabilities: {vuln_count}')
+
+              # List high/critical vulnerabilities
+              for dep in vulns:
+                  for v in dep.get('vulns', []):
+                      severity = v.get('fix_versions', ['unknown'])[0] if v.get('fix_versions') else 'no fix'
+                      print(f'  - {dep[\"name\"]}: {v.get(\"id\", \"unknown\")} (fix: {severity})')
+
+              # Save summary
+              with open('.security-reports/pip-audit-summary.txt', 'w') as f:
+                  f.write(f'Vulnerable dependencies: {len([d for d in vulns if d.get(\"vulns\")])}\n')
+                  f.write(f'Total vulnerabilities: {vuln_count}\n')
+          except Exception as e:
+              print(f'Error processing pip-audit results: {e}')
+              sys.exit(0)
+          "
+        continue-on-error: true
+
+      # ==========================================
+      # Full Bandit Scan
+      # ==========================================
+      - name: Run full Bandit scan
+        run: |
+          echo "Running full Bandit SAST scan..."
+
+          # Run Bandit with all checks enabled (deeper than PR scan)
+          .venv/bin/bandit \
+            -c .bandit.yml \
+            -r server/ harness/ \
+            -f json \
+            -o .security-reports/bandit-full.json || true
+
+          # Generate summary
+          .venv/bin/python -c "
+          import json
+          import sys
+
+          try:
+              with open('.security-reports/bandit-full.json') as f:
+                  data = json.load(f)
+
+              results = data.get('results', [])
+              metrics = data.get('metrics', {})
+
+              print('## Bandit Full Scan Results')
+              print(f'Total issues: {len(results)}')
+
+              # Count by severity
+              by_severity = {}
+              for r in results:
+                  sev = r.get('issue_severity', 'UNKNOWN')
+                  by_severity[sev] = by_severity.get(sev, 0) + 1
+
+              for sev, count in sorted(by_severity.items()):
+                  print(f'  - {sev}: {count}')
+
+              # Save summary
+              with open('.security-reports/bandit-summary.txt', 'w') as f:
+                  f.write(f'Total issues: {len(results)}\n')
+                  for sev, count in sorted(by_severity.items()):
+                      f.write(f'{sev}: {count}\n')
+          except Exception as e:
+              print(f'Error processing Bandit results: {e}')
+              sys.exit(0)
+          "
+        continue-on-error: true
+
+      # ==========================================
+      # License Compliance Scan
+      # ==========================================
+      - name: Run license compliance scan
+        run: |
+          echo "Running license compliance scan..."
+
+          # Run the license scan script
+          ./scripts/license-scan.sh > .security-reports/license-scan.log 2>&1 || true
+
+          # Copy inventory to reports
+          cp docs/license-inventory.txt .security-reports/ 2>/dev/null || true
+
+          echo "License scan completed. See .security-reports/license-inventory.txt"
+        continue-on-error: true
+
+      # ==========================================
+      # SBOM Generation
+      # ==========================================
+      - name: Generate SBOM
+        run: |
+          echo "Generating Software Bill of Materials..."
+
+          # Run SBOM generation
+          ./scripts/sbom.sh > .security-reports/sbom.log 2>&1 || true
+
+          # Copy SBOMs to reports
+          cp docs/sbom/sbom.json .security-reports/ 2>/dev/null || true
+          cp docs/sbom/sbom.xml .security-reports/ 2>/dev/null || true
+
+          echo "SBOM generation completed."
+        continue-on-error: true
+
+      # ==========================================
+      # Generate Combined Report
+      # ==========================================
+      - name: Generate combined security report
+        run: |
+          echo "Generating combined security report..."
+
+          .venv/bin/python << 'EOF'
+          import json
+          import os
+          from datetime import datetime
+
+          report_dir = '.security-reports'
+
+          # Collect summaries
+          summaries = []
+          summaries.append(f"# Nightly Deep Security Scan Report")
+          summaries.append(f"Date: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}")
+          summaries.append(f"Commit: {os.environ.get('GITHUB_SHA', 'unknown')[:8]}")
+          summaries.append("")
+
+          # Semgrep summary
+          summaries.append("## Semgrep (Extended Rulesets)")
+          try:
+              with open(f'{report_dir}/semgrep-summary.txt') as f:
+                  summaries.append(f.read())
+          except:
+              summaries.append("No results available")
+          summaries.append("")
+
+          # pip-audit summary
+          summaries.append("## pip-audit (Vulnerability Scan)")
+          try:
+              with open(f'{report_dir}/pip-audit-summary.txt') as f:
+                  summaries.append(f.read())
+          except:
+              summaries.append("No results available")
+          summaries.append("")
+
+          # Bandit summary
+          summaries.append("## Bandit (SAST)")
+          try:
+              with open(f'{report_dir}/bandit-summary.txt') as f:
+                  summaries.append(f.read())
+          except:
+              summaries.append("No results available")
+          summaries.append("")
+
+          # License scan
+          summaries.append("## License Compliance")
+          if os.path.exists(f'{report_dir}/license-inventory.txt'):
+              summaries.append("License inventory generated successfully.")
+          else:
+              summaries.append("License scan failed or no results.")
+          summaries.append("")
+
+          # SBOM
+          summaries.append("## SBOM Generation")
+          if os.path.exists(f'{report_dir}/sbom.json'):
+              summaries.append("SBOM generated successfully (CycloneDX format).")
+          else:
+              summaries.append("SBOM generation failed or no results.")
+          summaries.append("")
+
+          # Write combined report
+          with open(f'{report_dir}/combined-report.md', 'w') as f:
+              f.write('\n'.join(summaries))
+
+          print('\n'.join(summaries))
+          EOF
+
+      # ==========================================
+      # Baseline Comparison (track new findings)
+      # ==========================================
+      - name: Compare with baseline
+        run: |
+          echo "Comparing with baseline findings..."
+
+          # Note: baseline_file path is defined in the Python script below
+          .venv/bin/python << 'EOF'
+          import json
+          import os
+
+          report_dir = '.security-reports'
+          baseline_file = '.security-baseline.json'
+
+          # Load current findings
+          current = {
+              'semgrep': 0,
+              'pip_audit': 0,
+              'bandit': 0
+          }
+
+          try:
+              with open(f'{report_dir}/semgrep-full.json') as f:
+                  data = json.load(f)
+                  current['semgrep'] = len(data.get('results', []))
+          except:
+              pass
+
+          try:
+              with open(f'{report_dir}/pip-audit-full.json') as f:
+                  data = json.load(f)
+                  current['pip_audit'] = sum(len(d.get('vulns', [])) for d in data.get('dependencies', []))
+          except:
+              pass
+
+          try:
+              with open(f'{report_dir}/bandit-full.json') as f:
+                  data = json.load(f)
+                  current['bandit'] = len(data.get('results', []))
+          except:
+              pass
+
+          # Load baseline if exists
+          baseline = {'semgrep': 0, 'pip_audit': 0, 'bandit': 0}
+          if os.path.exists(baseline_file):
+              try:
+                  with open(baseline_file) as f:
+                      baseline = json.load(f)
+              except:
+                  pass
+
+          # Compare and report
+          print("## Baseline Comparison")
+          print("")
+          new_findings = False
+          for tool in ['semgrep', 'pip_audit', 'bandit']:
+              curr = current.get(tool, 0)
+              base = baseline.get(tool, 0)
+              diff = curr - base
+
+              if diff > 0:
+                  print(f"⚠️  {tool}: {curr} findings (+{diff} new)")
+                  new_findings = True
+              elif diff < 0:
+                  print(f"✅ {tool}: {curr} findings ({diff} fixed)")
+              else:
+                  print(f"➡️  {tool}: {curr} findings (no change)")
+
+          # Save current as new baseline reference (but don't commit automatically)
+          with open(f'{report_dir}/current-baseline.json', 'w') as f:
+              json.dump(current, f, indent=2)
+
+          if new_findings:
+              print("")
+              print("⚠️  NEW SECURITY FINDINGS DETECTED")
+              print("Review the detailed reports in the artifacts.")
+          EOF
+        continue-on-error: true
+
+      # ==========================================
+      # Upload Artifacts
+      # ==========================================
+      - name: Upload security scan reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: security-deep-scan-reports
+          path: |
+            .security-reports/
+          retention-days: 30
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: sbom-nightly
+          path: |
+            docs/sbom/sbom.json
+            docs/sbom/sbom.xml
+          retention-days: 90
+
+      # ==========================================
+      # Create Issue on New Critical Findings
+      # ==========================================
+      - name: Check for critical findings
+        id: check-critical
+        run: |
+          echo "Checking for critical security findings..."
+
+          .venv/bin/python << 'EOF'
+          import json
+          import os
+
+          report_dir = '.security-reports'
+          critical_found = False
+
+          # Check Semgrep for ERROR severity
+          try:
+              with open(f'{report_dir}/semgrep-full.json') as f:
+                  data = json.load(f)
+                  for r in data.get('results', []):
+                      if r.get('extra', {}).get('severity') == 'ERROR':
+                          critical_found = True
+                          break
+          except:
+              pass
+
+          # Check Bandit for HIGH severity
+          try:
+              with open(f'{report_dir}/bandit-full.json') as f:
+                  data = json.load(f)
+                  for r in data.get('results', []):
+                      if r.get('issue_severity') == 'HIGH':
+                          critical_found = True
+                          break
+          except:
+              pass
+
+          if critical_found:
+              print("critical_findings=true")
+              # Set output for GitHub Actions
+              with open(os.environ.get('GITHUB_OUTPUT', '/dev/null'), 'a') as f:
+                  f.write('critical_findings=true\n')
+          else:
+              print("critical_findings=false")
+              with open(os.environ.get('GITHUB_OUTPUT', '/dev/null'), 'a') as f:
+                  f.write('critical_findings=false\n')
+          EOF
+
+      - name: Create issue for critical findings
+        if: steps.check-critical.outputs.critical_findings == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the combined report
+            let reportContent = 'See attached artifacts for details.';
+            try {
+              reportContent = fs.readFileSync('.security-reports/combined-report.md', 'utf8');
+            } catch (e) {
+              console.log('Could not read report:', e);
+            }
+
+            // Check for existing open issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'security,nightly-scan',
+              state: 'open'
+            });
+
+            if (issues.data.length > 0) {
+              // Update existing issue
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues.data[0].number,
+                body: `## Nightly Scan Update (${new Date().toISOString().split('T')[0]})\n\n${reportContent}`
+              });
+              console.log('Updated existing issue:', issues.data[0].number);
+            } else {
+              // Create new issue
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: '🔒 Security: Critical findings from nightly deep scan',
+                labels: ['security', 'nightly-scan'],
+                body: `## Critical Security Findings\n\nThe nightly deep security scan has detected critical findings that require attention.\n\n${reportContent}\n\n---\n*This issue was automatically created by the nightly-deep-scans workflow.*`
+              });
+              console.log('Created new security issue');
+            }
+        continue-on-error: true
+
+  # ==========================================
+  # Weekly Extended Scans (optional deeper analysis)
+  # ==========================================
+  weekly-extended-scan:
+    name: Weekly Extended Analysis
+    runs-on: ubuntu-latest
+    # Only run on Sundays (weekly)
+    if: github.event.schedule == '0 2 * * 0' || (github.event_name == 'workflow_dispatch' && github.event.inputs.full_scan == 'true')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-3.11-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-3.11-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run extended dependency analysis
+        run: |
+          echo "Running extended dependency analysis..."
+          mkdir -p .security-reports
+
+          # Install additional analysis tools
+          .venv/bin/pip install -q safety pipdeptree
+
+          # Generate dependency tree
+          .venv/bin/pipdeptree --json > .security-reports/dependency-tree.json || true
+
+          # Run safety check (alternative vulnerability scanner)
+          .venv/bin/safety check --json > .security-reports/safety-check.json 2>&1 || true
+
+          echo "Extended dependency analysis complete."
+        continue-on-error: true
+
+      - name: Upload weekly analysis
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: weekly-extended-analysis
+          path: .security-reports/
+          retention-days: 90
+
+  # ==========================================
+  # Randomized Test Order (detect order dependencies)
+  # ==========================================
+  test-order-randomization:
+    name: Randomized Test Order
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run tests with randomized order
+        id: random-tests
+        run: |
+          echo "Running tests with randomized order..."
+          echo "pytest-randomly will automatically randomize test order"
+
+          # Generate a random seed (or use fixed seed for reproducibility debugging)
+          RANDOM_SEED=${PYTEST_RANDOMLY_SEED:-$RANDOM}
+          echo "Using random seed: ${RANDOM_SEED}"
+          echo "random_seed=${RANDOM_SEED}" >> "$GITHUB_OUTPUT"
+
+          # Run tests with randomized order
+          # pytest-randomly is enabled by default when installed
+          # Log the seed for reproducibility
+          .venv/bin/pytest \
+            tests/ harness/tests/ \
+            -p randomly \
+            --randomly-seed="${RANDOM_SEED}" \
+            -v \
+            --tb=short \
+            --junit-xml=junit-random.xml \
+            2>&1 | tee random-test-output.txt
+
+          # Check for test order dependencies
+          echo ""
+          echo "Tests completed with seed: ${RANDOM_SEED}"
+          echo "To reproduce this exact order, run:"
+          echo "  pytest tests/ harness/tests/ --randomly-seed=${RANDOM_SEED}"
+
+      - name: Log random seed for reproducibility
+        if: always()
+        run: |
+          {
+            echo "## Test Order Randomization Results"
+            echo ""
+            echo "**Random Seed:** \`${{ steps.random-tests.outputs.random_seed }}\`"
+            echo ""
+            echo "To reproduce locally:"
+            echo "\`\`\`bash"
+            echo "pytest tests/ harness/tests/ --randomly-seed=${{ steps.random-tests.outputs.random_seed }}"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: random-test-results
+          path: |
+            junit-random.xml
+            random-test-output.txt
+          retention-days: 7
+
+  # ==========================================
+  # OpenAPI Fuzz Testing (Schemathesis)
+  # ==========================================
+  openapi-fuzz-tests:
+    name: OpenAPI Fuzz Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Run OpenAPI fuzz tests
+        id: fuzz-tests
+        run: |
+          echo "Running OpenAPI fuzz tests with Schemathesis..."
+          echo ""
+
+          # Run fuzz tests with bounded examples and timeout
+          # Use 100 examples per endpoint for nightly runs
+          ./scripts/openapi-fuzz.sh --max-examples 100 2>&1 | tee fuzz-output.txt
+
+          echo ""
+          echo "Fuzz testing complete."
+        continue-on-error: true
+
+      - name: Generate fuzz test summary
+        if: always()
+        run: |
+          {
+            echo "## OpenAPI Fuzz Test Results"
+            echo ""
+            if [ -f .fuzz-reports/fuzz-report.json ]; then
+              # Extract summary from JSON report
+              .venv/bin/python -c "
+          import json
+          with open('.fuzz-reports/fuzz-report.json') as f:
+              data = json.load(f)
+          print(f\"**Timestamp:** {data['timestamp']}\")
+          print(f\"**Endpoints Tested:** {data['endpoints_tested']}\")
+          print(f\"**Total Requests:** {data['total_requests']}\")
+          print(f\"**Passed:** {data['passed']}\")
+          print(f\"**Failures:** {len(data['failures'])}\")
+          print(f\"**5xx Errors:** {len(data['errors'])}\")
+          print('')
+          if data['errors']:
+              print('### Server Errors (5xx)')
+              for e in data['errors']:
+                  print(f\"- {e['method']} {e['path']}: HTTP {e['status_code']}\")
+          if data['failures']:
+              print('### Validation Failures')
+              for f in data['failures'][:5]:  # Limit to first 5
+                  print(f\"- {f['method']} {f['path']}\")
+          "
+            else
+              echo "No fuzz report found."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload fuzz test report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: openapi-fuzz-report
+          path: |
+            .fuzz-reports/
+            fuzz-output.txt
+          retention-days: 30
+
+  # ==========================================
+  # GUI Headless Browser Smoke Tests (Playwright)
+  # ==========================================
+  gui-headless-smoke:
+    name: GUI Headless Smoke Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Install Playwright browsers
+        run: |
+          echo "Installing Playwright Chromium browser..."
+          .venv/bin/playwright install chromium
+          .venv/bin/playwright install-deps chromium
+
+      - name: Run GUI smoke tests
+        id: gui-tests
+        run: |
+          echo "Running GUI headless browser smoke tests..."
+          echo ""
+
+          # Run GUI tests with Playwright (chromium, headless)
+          .venv/bin/pytest tests/test_gui_smoke.py \
+            -v \
+            --tb=short \
+            --junit-xml=junit-gui.xml \
+            2>&1 | tee gui-test-output.txt
+
+          echo ""
+          echo "GUI smoke tests complete."
+        continue-on-error: true
+
+      - name: Generate GUI test summary
+        if: always()
+        run: |
+          {
+            echo "## GUI Headless Browser Smoke Tests"
+            echo ""
+            echo "**Browser:** Chromium (headless)"
+            echo ""
+            if [ -f junit-gui.xml ]; then
+              # Count tests from JUnit XML
+              TOTAL=$(grep -c 'testcase' junit-gui.xml || echo "0")
+              FAILURES=$(grep -c '<failure' junit-gui.xml || echo "0")
+              echo "**Tests Run:** ${TOTAL}"
+              echo "**Failures:** ${FAILURES}"
+              if [ "$FAILURES" = "0" ]; then
+                echo ""
+                echo "✅ All GUI smoke tests passed!"
+              else
+                echo ""
+                echo "⚠️ Some GUI tests failed. See artifacts for details."
+              fi
+            else
+              echo "No test results found."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload GUI test artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: gui-headless-test-results
+          path: |
+            junit-gui.xml
+            gui-test-output.txt
+            test-results/
+          retention-days: 7
+
+  # ==========================================
+  # Harness-Server E2E Integration Tests
+  # ==========================================
+  harness-server-e2e:
+    name: Harness-Server E2E Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run E2E tests
+        id: e2e-tests
+        run: |
+          echo "Running harness-server E2E integration tests..."
+          echo ""
+
+          # Run E2E tests (uses mock responses, no real LLM calls)
+          .venv/bin/pytest tests/test_harness_server_e2e.py \
+            -v \
+            --tb=short \
+            --junit-xml=junit-e2e.xml \
+            2>&1 | tee e2e-test-output.txt
+
+          echo ""
+          echo "E2E tests complete."
+        continue-on-error: true
+
+      - name: Generate E2E test summary
+        if: always()
+        run: |
+          {
+            echo "## Harness-Server E2E Integration Tests"
+            echo ""
+            echo "Tests the full integration between FastAPI server and harness using mock model responses."
+            echo ""
+            if [ -f junit-e2e.xml ]; then
+              TOTAL=$(grep -c 'testcase' junit-e2e.xml || echo "0")
+              FAILURES=$(grep -c '<failure' junit-e2e.xml || echo "0")
+              echo "**Tests Run:** ${TOTAL}"
+              echo "**Failures:** ${FAILURES}"
+              if [ "$FAILURES" = "0" ]; then
+                echo ""
+                echo "All E2E tests passed!"
+              else
+                echo ""
+                echo "Some E2E tests failed. See artifacts for details."
+              fi
+            else
+              echo "No test results found."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload E2E test artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: |
+            junit-e2e.xml
+            e2e-test-output.txt
+          retention-days: 7
+
+  # ==========================================
+  # Performance Regression Benchmarks
+  # ==========================================
+  performance-benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache virtualenv
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: |
+            venv-${{ runner.os }}-${{ matrix.python-version }}-
+
+      - name: Cache benchmark baselines
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+        with:
+          path: .benchmarks
+          key: benchmarks-${{ runner.os }}-${{ matrix.python-version }}
+          restore-keys: |
+            benchmarks-${{ runner.os }}-${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r requirements-dev.txt
+          .venv/bin/pip install -r server/requirements.txt
+          .venv/bin/pip install -r harness/requirements.txt
+
+      - name: Run performance benchmarks
+        id: benchmarks
+        run: |
+          echo "Running performance regression benchmarks..."
+          echo ""
+
+          # Create benchmarks directory
+          mkdir -p .benchmarks
+
+          # Check if baseline exists
+          if ls .benchmarks/*baseline* >/dev/null 2>&1; then
+            echo "Baseline found, comparing against it..."
+            COMPARE_FLAG="--compare"
+          else
+            echo "No baseline found, creating initial baseline..."
+            COMPARE_FLAG="--save"
+          fi
+
+          # Run benchmarks with JSON output
+          # Fail threshold: 20% regression (brownfield-friendly)
+          ./scripts/benchmark.sh ${COMPARE_FLAG} --json --fail-threshold 20 2>&1 | tee benchmark-output.txt
+
+          # Save new baseline for future comparisons
+          if [ "${COMPARE_FLAG}" = "--compare" ]; then
+            echo ""
+            echo "Saving updated baseline..."
+            ./scripts/benchmark.sh --save 2>&1 || true
+          fi
+
+          echo ""
+          echo "Benchmarks complete."
+        continue-on-error: true
+
+      - name: Generate benchmark summary
+        if: always()
+        run: |
+          {
+            echo "## Performance Regression Benchmarks"
+            echo ""
+            echo "Benchmarks for critical hot paths:"
+            echo "- Patch normalization (\`_is_probably_valid_patch\`, \`_normalize_patch_format\`)"
+            echo "- Database queries (\`get_session\`, \`list_runs\`, \`get_run\`)"
+            echo "- Progress dispatch (\`publish_attempt\`, \`_append_event\`)"
+            echo ""
+            echo "**Regression Threshold:** 20% (brownfield-friendly slack)"
+            echo ""
+            if [ -f .benchmarks/results.json ]; then
+              # Extract key metrics from JSON report
+              .venv/bin/python -c "
+          import json
+
+          with open('.benchmarks/results.json') as f:
+              data = json.load(f)
+
+          benchmarks = data.get('benchmarks', [])
+          print(f'**Benchmarks Run:** {len(benchmarks)}')
+          print('')
+          print('### Key Results')
+          print('')
+          print('| Benchmark | Mean (ms) | Std Dev | Iterations |')
+          print('|-----------|-----------|---------|------------|')
+          for b in benchmarks[:15]:  # Limit to first 15
+              name = b.get('name', 'unknown').split('::')[-1]
+              mean_ns = b.get('stats', {}).get('mean', 0)
+              mean_ms = mean_ns * 1000  # Convert to ms
+              stddev = b.get('stats', {}).get('stddev', 0) * 1000
+              iterations = b.get('stats', {}).get('iterations', 0)
+              print(f'| {name[:40]} | {mean_ms:.4f} | {stddev:.4f} | {iterations} |')
+          if len(benchmarks) > 15:
+              print(f'| ... and {len(benchmarks) - 15} more | | | |')
+          "
+            else
+              echo "No benchmark results found. Check the benchmark-output.txt artifact."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: performance-benchmark-results
+          path: |
+            .benchmarks/
+            benchmark-output.txt
+          retention-days: 30
+
+  # ==========================================
+  # Branch Protection Verification
+  # ==========================================
+  branch-protection-check:
+    name: Branch Protection Check
+    runs-on: ubuntu-latest
+    # Only run on scheduled runs (not manual triggers without specific intent)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Check branch protection settings
+        id: check-protection
+        env:
+          # Use GITHUB_TOKEN for API access (read-only)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Warn-only mode for brownfield safety
+          WARN_ONLY: "true"
+        run: |
+          echo "Checking branch protection settings for main branch..."
+          echo ""
+
+          # Install jq if not available
+          which jq || sudo apt-get install -y jq
+
+          # Run the check script
+          ./scripts/check-branch-protection.sh main 2>&1 | tee protection-check.txt
+
+          # Capture exit code
+          EXIT_CODE=${PIPESTATUS[0]}
+          echo "exit_code=${EXIT_CODE}" >> "$GITHUB_OUTPUT"
+
+          echo ""
+          echo "Branch protection check completed."
+
+      - name: Generate protection check summary
+        if: always()
+        run: |
+          {
+            echo "## Branch Protection Verification"
+            echo ""
+            echo "Verifies that the \`main\` branch has proper protection rules as documented in \`docs/BRANCH_PROTECTION.md\`."
+            echo ""
+            if [ -f protection-check.txt ]; then
+              echo '```'
+              cat protection-check.txt
+              echo '```'
+            else
+              echo "No protection check output found."
+            fi
+            echo ""
+            echo "**Exit Code:** ${{ steps.check-protection.outputs.exit_code }}"
+            echo ""
+            if [ "${{ steps.check-protection.outputs.exit_code }}" = "0" ]; then
+              echo "✅ Branch protection is properly configured!"
+            elif [ "${{ steps.check-protection.outputs.exit_code }}" = "1" ]; then
+              echo "⚠️ Branch protection needs configuration. See \`docs/BRANCH_PROTECTION.md\`."
+            else
+              echo "ℹ️ Unable to verify branch protection (may need additional permissions)."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload protection check results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: branch-protection-check
+          path: protection-check.txt
+          retention-days: 7
+
+  # ==========================================
+  # Trivy Security Scanning
+  # ==========================================
+  trivy-security-scan:
+    name: Trivy Security Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Trivy
+        run: |
+          echo "Installing Trivy..."
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.58.1
+          trivy --version
+
+      - name: Run filesystem vulnerability scan
+        id: fs-scan
+        run: |
+          echo "Running filesystem vulnerability and misconfiguration scan..."
+          mkdir -p .trivy-reports
+
+          # Run filesystem scan with JSON output
+          trivy fs \
+            --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --skip-dirs runs \
+            --skip-dirs tasks \
+            --skip-dirs .venv \
+            --skip-dirs .pytest_cache \
+            --skip-dirs __pycache__ \
+            --skip-dirs node_modules \
+            --skip-dirs .git \
+            --skip-dirs htmlcov \
+            --skip-dirs .benchmarks \
+            --skip-dirs .fuzz-reports \
+            --skip-dirs .trivy-reports \
+            --skip-dirs .security-reports \
+            --ignorefile .trivyignore \
+            --format json \
+            --output .trivy-reports/fs-scan.json \
+            . || true
+
+          # Also generate table output for summary
+          trivy fs \
+            --scanners vuln,misconfig,secret \
+            --severity HIGH,CRITICAL \
+            --skip-dirs runs \
+            --skip-dirs tasks \
+            --skip-dirs .venv \
+            --skip-dirs .pytest_cache \
+            --skip-dirs __pycache__ \
+            --skip-dirs node_modules \
+            --skip-dirs .git \
+            --skip-dirs htmlcov \
+            --skip-dirs .benchmarks \
+            --skip-dirs .fuzz-reports \
+            --skip-dirs .trivy-reports \
+            --skip-dirs .security-reports \
+            --ignorefile .trivyignore \
+            --format table \
+            . > .trivy-reports/fs-scan.txt 2>&1 || true
+
+          echo "Filesystem scan complete."
+        continue-on-error: true
+
+      - name: Run Dockerfile config scan
+        id: dockerfile-scan
+        run: |
+          echo "Running Dockerfile configuration scan..."
+
+          if [ -f .devcontainer/Dockerfile ]; then
+            # Config scan for Dockerfile best practices
+            trivy config \
+              --severity HIGH,CRITICAL \
+              --ignorefile .trivyignore \
+              --format json \
+              --output .trivy-reports/dockerfile-config.json \
+              .devcontainer/Dockerfile || true
+
+            trivy config \
+              --severity HIGH,CRITICAL \
+              --ignorefile .trivyignore \
+              --format table \
+              .devcontainer/Dockerfile > .trivy-reports/dockerfile-config.txt 2>&1 || true
+
+            echo "Dockerfile config scan complete."
+          else
+            echo "No devcontainer Dockerfile found (devcontainer is optional)."
+            echo "Skipped" > .trivy-reports/dockerfile-config.txt
+          fi
+        continue-on-error: true
+
+      - name: Run base image scan
+        id: image-scan
+        run: |
+          echo "Running base image vulnerability scan..."
+
+          if [ -f .devcontainer/Dockerfile ]; then
+            # Extract base image from Dockerfile
+            BASE_IMAGE=$(grep "^FROM" .devcontainer/Dockerfile | head -1 | awk '{print $2}')
+            echo "Base image: ${BASE_IMAGE}"
+
+            if [ -n "${BASE_IMAGE}" ]; then
+              # Scan base image for OS package CVEs
+              trivy image \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --ignorefile .trivyignore \
+                --format json \
+                --output .trivy-reports/base-image.json \
+                "${BASE_IMAGE}" || true
+
+              trivy image \
+                --severity HIGH,CRITICAL \
+                --ignore-unfixed \
+                --ignorefile .trivyignore \
+                --format table \
+                "${BASE_IMAGE}" > .trivy-reports/base-image.txt 2>&1 || true
+
+              echo "Base image scan complete."
+            else
+              echo "Could not extract base image."
+              echo "Skipped" > .trivy-reports/base-image.txt
+            fi
+          else
+            echo "No devcontainer Dockerfile found."
+            echo "Skipped" > .trivy-reports/base-image.txt
+          fi
+        continue-on-error: true
+
+      - name: Generate Trivy scan summary
+        if: always()
+        run: |
+          {
+            echo "## Trivy Security Scan Results"
+            echo ""
+            echo "Scans for vulnerabilities, misconfigurations, and secrets."
+            echo ""
+
+            echo "### Filesystem Scan"
+            if [ -f .trivy-reports/fs-scan.json ]; then
+              # Count findings from JSON
+              python3 -c "
+          import json
+          try:
+              with open('.trivy-reports/fs-scan.json') as f:
+                  data = json.load(f)
+              results = data.get('Results', [])
+              total_vulns = sum(len(r.get('Vulnerabilities', [])) for r in results)
+              total_misconf = sum(len(r.get('Misconfigurations', [])) for r in results)
+              total_secrets = sum(len(r.get('Secrets', [])) for r in results)
+              print(f'- **Vulnerabilities:** {total_vulns}')
+              print(f'- **Misconfigurations:** {total_misconf}')
+              print(f'- **Secrets:** {total_secrets}')
+              if total_vulns + total_misconf + total_secrets == 0:
+                  print('')
+                  print('No high/critical findings detected.')
+          except Exception as e:
+              print(f'Error parsing results: {e}')
+          "
+            else
+              echo "No results available."
+            fi
+            echo ""
+
+            echo "### Dockerfile Config Scan"
+            if [ -f .trivy-reports/dockerfile-config.json ]; then
+              python3 -c "
+          import json
+          try:
+              with open('.trivy-reports/dockerfile-config.json') as f:
+                  data = json.load(f)
+              results = data.get('Results', [])
+              total_misconf = sum(len(r.get('Misconfigurations', [])) for r in results)
+              print(f'- **Misconfigurations:** {total_misconf}')
+              if total_misconf == 0:
+                  print('No high/critical findings detected.')
+          except Exception as e:
+              print(f'Error parsing results: {e}')
+          "
+            elif grep -q "Skipped" .trivy-reports/dockerfile-config.txt 2>/dev/null; then
+              echo "Skipped (no devcontainer Dockerfile found)."
+            else
+              echo "No results available."
+            fi
+            echo ""
+
+            echo "### Base Image Scan"
+            if [ -f .trivy-reports/base-image.json ]; then
+              python3 -c "
+          import json
+          try:
+              with open('.trivy-reports/base-image.json') as f:
+                  data = json.load(f)
+              results = data.get('Results', [])
+              total_vulns = sum(len(r.get('Vulnerabilities', [])) for r in results)
+              print(f'- **OS Package CVEs:** {total_vulns} (unfixed excluded)')
+              if total_vulns == 0:
+                  print('No high/critical CVEs with available fixes.')
+          except Exception as e:
+              print(f'Error parsing results: {e}')
+          "
+            elif grep -q "Skipped" .trivy-reports/base-image.txt 2>/dev/null; then
+              echo "Skipped (no devcontainer Dockerfile found)."
+            else
+              echo "No results available."
+            fi
+            echo ""
+
+            echo "### Suppression Guidelines"
+            echo ""
+            echo "To suppress known/acceptable findings, add them to \`.trivyignore\` with explicit justification."
+            echo "See \`docs/SECURITY.md\` for the full suppression policy."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Trivy scan reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: trivy-scan-reports
+          path: .trivy-reports/
+          retention-days: 30

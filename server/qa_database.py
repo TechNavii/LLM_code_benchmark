@@ -6,12 +6,14 @@ import datetime as dt
 import json
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
+from collections.abc import Iterator
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
 from sqlalchemy.orm import Mapped, Session, declarative_base, mapped_column, relationship, sessionmaker
 
 from server.config import get_settings
+from server.database_utils import count_errors_from_summary, extract_usage_tokens, parse_timestamp
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -26,13 +28,13 @@ class QARunRecord(Base):
     model_id: Mapped[str] = mapped_column(String, nullable=False)
     questions: Mapped[str] = mapped_column(Text, nullable=False)
     samples: Mapped[int] = mapped_column(Integer, nullable=False)
-    accuracy: Mapped[Optional[float]] = mapped_column(Float)
-    total_cost: Mapped[Optional[float]] = mapped_column(Float)
-    total_duration: Mapped[Optional[float]] = mapped_column(Float)
+    accuracy: Mapped[float | None] = mapped_column(Float)
+    total_cost: Mapped[float | None] = mapped_column(Float)
+    total_duration: Mapped[float | None] = mapped_column(Float)
     summary_path: Mapped[str] = mapped_column(Text, nullable=False)
     summary_json: Mapped[str] = mapped_column(Text, nullable=False)
 
-    attempts: Mapped[List["QAAttemptRecord"]] = relationship(
+    attempts: Mapped[list[QAAttemptRecord]] = relationship(
         "QAAttemptRecord",
         back_populates="run",
         cascade="all, delete-orphan",
@@ -48,15 +50,15 @@ class QAAttemptRecord(Base):
     sample_index: Mapped[int] = mapped_column(Integer, nullable=False)
     question_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
-    duration: Mapped[Optional[float]] = mapped_column(Float)
-    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    cost: Mapped[Optional[float]] = mapped_column(Float)
-    model_answer: Mapped[Optional[str]] = mapped_column(Text)
-    expected_answer: Mapped[Optional[str]] = mapped_column(Text)
-    normalized_answer: Mapped[Optional[str]] = mapped_column(Text)
-    normalized_expected: Mapped[Optional[str]] = mapped_column(Text)
-    error: Mapped[Optional[str]] = mapped_column(Text)
+    duration: Mapped[float | None] = mapped_column(Float)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost: Mapped[float | None] = mapped_column(Float)
+    model_answer: Mapped[str | None] = mapped_column(Text)
+    expected_answer: Mapped[str | None] = mapped_column(Text)
+    normalized_answer: Mapped[str | None] = mapped_column(Text)
+    normalized_expected: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
 
     run: Mapped[QARunRecord] = relationship("QARunRecord", back_populates="attempts")
 
@@ -78,18 +80,11 @@ def init_db() -> None:
 
 @contextmanager
 def get_session() -> Iterator[Session]:
-    session = SessionLocal()
-    try:
+    with SessionLocal.begin() as session:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
-def save_run(summary: Dict[str, Any]) -> str:
+def save_run(summary: dict[str, Any]) -> str:
     run_dir = Path(summary["run_dir"]).resolve()
     run_id = summary.get("run_id") or run_dir.name
 
@@ -101,11 +96,7 @@ def save_run(summary: Dict[str, Any]) -> str:
     accuracy = overall.get("accuracy")
     total_cost = summary.get("token_usage", {}).get("total_cost_usd")
     total_duration = summary.get("timing", {}).get("total_duration_seconds")
-    timestamp_raw = summary.get("timestamp_utc")
-    try:
-        timestamp = dt.datetime.fromisoformat(timestamp_raw) if timestamp_raw else dt.datetime.utcnow()
-    except ValueError:
-        timestamp = dt.datetime.utcnow()
+    timestamp = parse_timestamp(summary.get("timestamp_utc"))
 
     with get_session() as session:
         record = session.get(QARunRecord, run_id)
@@ -122,7 +113,7 @@ def save_run(summary: Dict[str, Any]) -> str:
         record.summary_json = json.dumps(summary)
         record.attempts.clear()
         for attempt in attempts:
-            usage = attempt.get("usage") or {}
+            prompt_tokens, completion_tokens = extract_usage_tokens(attempt.get("usage"))
             record.attempts.append(
                 QAAttemptRecord(
                     model=attempt.get("model"),
@@ -130,8 +121,8 @@ def save_run(summary: Dict[str, Any]) -> str:
                     question_number=attempt.get("question_number"),
                     status=attempt.get("status"),
                     duration=attempt.get("duration_seconds"),
-                    prompt_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
-                    completion_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                     cost=attempt.get("cost_usd"),
                     model_answer=attempt.get("model_answer"),
                     expected_answer=attempt.get("expected_answer"),
@@ -144,7 +135,7 @@ def save_run(summary: Dict[str, Any]) -> str:
     return run_id
 
 
-def list_runs(limit: int = 50) -> List[Dict[str, Optional[float]]]:
+def list_runs(limit: int = 50) -> list[dict[str, float | None]]:
     stmt = (
         select(
             QARunRecord.id,
@@ -153,26 +144,31 @@ def list_runs(limit: int = 50) -> List[Dict[str, Optional[float]]]:
             QARunRecord.accuracy,
             QARunRecord.total_cost,
             QARunRecord.total_duration,
+            QARunRecord.summary_json,
         )
         .order_by(QARunRecord.timestamp_utc.desc())
         .limit(limit)
     )
     with get_session() as session:
         rows = session.execute(stmt).all()
-    return [
-        {
-            "id": row.id,
-            "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
-            "model_id": row.model_id,
-            "accuracy": row.accuracy,
-            "total_cost": row.total_cost,
-            "total_duration": row.total_duration,
-        }
-        for row in rows
-    ]
+
+    results = []
+    for row in rows:
+        results.append(
+            {
+                "id": row.id,
+                "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
+                "model_id": row.model_id,
+                "accuracy": row.accuracy,
+                "total_cost": row.total_cost,
+                "total_duration": row.total_duration,
+                "error_count": count_errors_from_summary(row.summary_json),
+            }
+        )
+    return results
 
 
-def get_run(run_id: str) -> Dict[str, Any] | None:
+def get_run(run_id: str) -> dict[str, Any] | None:
     with get_session() as session:
         record = session.get(QARunRecord, run_id)
         if record is None:
@@ -180,18 +176,16 @@ def get_run(run_id: str) -> Dict[str, Any] | None:
         return json.loads(record.summary_json)
 
 
-def leaderboard(limit_runs: int = 200) -> List[Dict[str, Any]]:
+def leaderboard(limit_runs: int = 200) -> list[dict[str, Any]]:
     with get_session() as session:
-        records: List[QARunRecord] = (
-            session.execute(
-                select(QARunRecord).order_by(QARunRecord.timestamp_utc.desc()).limit(limit_runs)
-            )
+        records: list[QARunRecord] = (
+            session.execute(select(QARunRecord).order_by(QARunRecord.timestamp_utc.desc()).limit(limit_runs))
             .scalars()
             .all()
         )
 
     # Determine thinking level similar to code harness grouping
-    def _determine_level(attempts: List[Dict[str, Any]], default_level: Optional[str]) -> str:
+    def _determine_level(attempts: list[dict[str, Any]], default_level: str | None) -> str:
         for a in attempts:
             level = a.get("thinking_level_applied")
             if level:
@@ -205,8 +199,8 @@ def leaderboard(limit_runs: int = 200) -> List[Dict[str, Any]]:
             return default_level
         return "base"
 
-    groups: Dict[tuple[str, str], Dict[str, Any]] = {}
-    counts: Dict[tuple[str, str], int] = {}
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    counts: dict[tuple[str, str], int] = {}
 
     for record in records:
         try:
@@ -216,7 +210,7 @@ def leaderboard(limit_runs: int = 200) -> List[Dict[str, Any]]:
         attempts = summary.get("attempts") or []
         default_level = summary.get("thinking_level")
         # Group attempts by (model, determined level)
-        per_key: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+        per_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for a in attempts:
             model = a.get("model")
             if not model:
@@ -231,7 +225,9 @@ def leaderboard(limit_runs: int = 200) -> List[Dict[str, Any]]:
             total = len(group_attempts)
             accuracy = successes / total if total else None
             cost_values = [a.get("cost_usd") for a in group_attempts if a.get("cost_usd") is not None]
-            duration_values = [a.get("duration_seconds") for a in group_attempts if a.get("duration_seconds") is not None]
+            duration_values = [
+                a.get("duration_seconds") for a in group_attempts if a.get("duration_seconds") is not None
+            ]
 
             candidate = {
                 "model_id": model_id,
@@ -243,6 +239,7 @@ def leaderboard(limit_runs: int = 200) -> List[Dict[str, Any]]:
             }
             counts[key] = counts.get(key, 0) + 1
             incumbent = groups.get(key)
+
             # Prefer higher accuracy; tie-break on lower cost, then lower duration
             def _better(a, b):
                 if b is None:
@@ -271,7 +268,7 @@ def leaderboard(limit_runs: int = 200) -> List[Dict[str, Any]]:
                 groups[key] = candidate
 
     # Compile leaderboard rows
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for key, best in groups.items():
         model_id, level = key
         rows.append(

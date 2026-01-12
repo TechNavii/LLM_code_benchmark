@@ -1,0 +1,187 @@
+name: OSSF Scorecard
+
+on:
+  # Run on push to default branch only - NOT on PRs
+  # This is intentional: Scorecard should only run on trusted code
+  # Fork PRs could manipulate the score by changing workflow files
+  push:
+    branches: [main, master]
+  # Run on schedule (weekly on Tuesdays at 4:00 AM UTC)
+  schedule:
+    - cron: '0 4 * * 2'
+  # Allow manual trigger
+  workflow_dispatch:
+  # NOTE: Do NOT add pull_request trigger - Scorecard should only run on
+  # trusted code from the default branch to avoid fork PR manipulation
+
+# Concurrency: only one scorecard run per branch at a time
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: true
+
+# Required permissions for Scorecard
+# See https://github.com/ossf/scorecard-action#authentication-with-fine-grained-pat-optional
+# NOTE: id-token: write is required for publishing but is sensitive
+# This workflow only runs on push to main, never on fork PRs
+permissions:
+  security-events: write  # Required: upload SARIF results to Security tab
+  id-token: write         # Required: publish results to OpenSSF REST API
+  contents: read          # Required: checkout code
+  actions: read           # Required: detect workflow changes
+
+jobs:
+  scorecard:
+    name: OSSF Scorecard Analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+          # Full history needed for accurate scoring
+          fetch-depth: 0
+
+      - name: Run OSSF Scorecard
+        uses: ossf/scorecard-action@f49aabe0b5af0936a0987cfb85d86b75731b0186  # v2.4.1
+        with:
+          results_file: scorecard-results.sarif
+          results_format: sarif
+          # Publish results to OpenSSF REST API for public visibility
+          # For private repos, set this to 'false'
+          publish_results: true
+
+      # Upload SARIF results to GitHub Security tab
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@45c373516f557556c15d420e3f5e0aa3d64366bc  # v3
+        with:
+          sarif_file: scorecard-results.sarif
+
+      # Generate and display score summary
+      - name: Generate Scorecard Summary
+        if: always()
+        run: |
+          {
+            echo "## OSSF Scorecard Results"
+            echo ""
+            echo "The OSSF Scorecard analyzes this repository for supply chain security best practices."
+            echo ""
+            echo "View detailed results:"
+            echo "- [Security tab](/${{ github.repository }}/security/code-scanning)"
+            echo "- [OpenSSF Scorecard viewer](https://scorecard.dev/viewer/?uri=github.com/${{ github.repository }})"
+            echo ""
+            echo "### Checks Performed"
+            echo "- Binary-Artifacts: No checked-in binaries"
+            echo "- Branch-Protection: Branch protection rules"
+            echo "- CI-Tests: CI test coverage"
+            echo "- Code-Review: Code review requirements"
+            echo "- Contributors: Active contributors"
+            echo "- Dangerous-Workflow: No dangerous workflow patterns"
+            echo "- Dependency-Update-Tool: Automated dependency updates"
+            echo "- Fuzzing: Fuzz testing presence"
+            echo "- License: Open source license"
+            echo "- Maintained: Active maintenance"
+            echo "- Pinned-Dependencies: Pinned action versions"
+            echo "- Packaging: Published packages"
+            echo "- SAST: Static analysis tools"
+            echo "- Security-Policy: SECURITY.md presence"
+            echo "- Signed-Releases: Signed releases"
+            echo "- Token-Permissions: Minimal token permissions"
+            echo "- Vulnerabilities: Known vulnerabilities"
+            echo "- Webhooks: Webhook configurations"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Upload SARIF as artifact for historical tracking
+      - name: Upload Scorecard SARIF artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: scorecard-sarif-${{ github.sha }}
+          path: scorecard-results.sarif
+          retention-days: 90
+
+  # Track score deltas over time
+  track-score:
+    name: Track Score History
+    runs-on: ubuntu-latest
+    needs: scorecard
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Download SARIF artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: scorecard-sarif-${{ github.sha }}
+          path: .
+
+      - name: Parse and track scores
+        run: |
+          echo "## Scorecard Score Tracking" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          # Parse SARIF for scores
+          if [ -f scorecard-results.sarif ]; then
+            echo "Parsing scorecard results..." >> "$GITHUB_STEP_SUMMARY"
+
+            # Extract check results using jq (if available) or Python
+            python3 << 'EOF'
+          import json
+          import os
+
+          try:
+              with open('scorecard-results.sarif', 'r') as f:
+                  sarif = json.load(f)
+
+              # Extract scores from SARIF
+              runs = sarif.get('runs', [])
+              if runs:
+                  results = runs[0].get('results', [])
+                  tool = runs[0].get('tool', {}).get('driver', {})
+                  rules = {r['id']: r for r in tool.get('rules', [])}
+
+                  scores = {}
+                  for result in results:
+                      rule_id = result.get('ruleId', '')
+                      # Score is typically in the message or properties
+                      msg = result.get('message', {}).get('text', '')
+                      props = result.get('properties', {})
+                      score = props.get('score', 'N/A')
+                      scores[rule_id] = {'score': score, 'message': msg[:100]}
+
+                  # Print summary
+                  print("| Check | Score | Status |")
+                  print("|-------|-------|--------|")
+                  for check, data in sorted(scores.items()):
+                      score = data['score']
+                      if isinstance(score, (int, float)):
+                          if score >= 7:
+                              status = "Good"
+                          elif score >= 4:
+                              status = "Moderate"
+                          else:
+                              status = "Needs Improvement"
+                      else:
+                          status = "Unknown"
+                      print(f"| {check} | {score} | {status} |")
+
+                  # Save scores for future comparison
+                  with open('.scorecard-history.json', 'w') as f:
+                      json.dump({'sha': os.environ.get('GITHUB_SHA', 'unknown')[:8], 'scores': scores}, f, indent=2)
+          except Exception as e:
+              print(f"Error parsing SARIF: {e}")
+          EOF
+          else
+            echo "No SARIF results found." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload score history
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        if: always()
+        with:
+          name: scorecard-history-${{ github.sha }}
+          path: .scorecard-history.json
+          retention-days: 365
+          if-no-files-found: ignore

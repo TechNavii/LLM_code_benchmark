@@ -4,12 +4,14 @@ import datetime as dt
 import json
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any
+from collections.abc import Iterable, Iterator
 
 from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
 from sqlalchemy.orm import Mapped, Session, declarative_base, mapped_column, relationship, sessionmaker
 
 from server.config import get_settings
+from server.database_utils import count_errors_from_summary, extract_usage_tokens, parse_timestamp
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,13 +26,13 @@ class RunRecord(Base):
     model_id: Mapped[str] = mapped_column(String, nullable=False)
     tasks: Mapped[str] = mapped_column(Text, nullable=False)
     samples: Mapped[int] = mapped_column(Integer, nullable=False)
-    accuracy: Mapped[Optional[float]] = mapped_column(Float)
-    total_cost: Mapped[Optional[float]] = mapped_column(Float)
-    total_duration: Mapped[Optional[float]] = mapped_column(Float)
+    accuracy: Mapped[float | None] = mapped_column(Float)
+    total_cost: Mapped[float | None] = mapped_column(Float)
+    total_duration: Mapped[float | None] = mapped_column(Float)
     summary_path: Mapped[str] = mapped_column(Text, nullable=False)
     summary_json: Mapped[str] = mapped_column(Text, nullable=False)
 
-    attempts: Mapped[List["AttemptRecord"]] = relationship(
+    attempts: Mapped[list[AttemptRecord]] = relationship(
         "AttemptRecord",
         back_populates="run",
         cascade="all, delete-orphan",
@@ -44,11 +46,11 @@ class AttemptRecord(Base):
     run_id: Mapped[str] = mapped_column(String, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
     task_id: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
-    duration: Mapped[Optional[float]] = mapped_column(Float)
-    prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    completion_tokens: Mapped[Optional[int]] = mapped_column(Integer)
-    cost: Mapped[Optional[float]] = mapped_column(Float)
-    error: Mapped[Optional[str]] = mapped_column(Text)
+    duration: Mapped[float | None] = mapped_column(Float)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost: Mapped[float | None] = mapped_column(Float)
+    error: Mapped[str | None] = mapped_column(Text)
 
     run: Mapped[RunRecord] = relationship("RunRecord", back_populates="attempts")
 
@@ -71,26 +73,18 @@ def init_db() -> None:
 
 @contextmanager
 def get_session() -> Iterator[Session]:
-    session = SessionLocal()
-    try:
+    with SessionLocal.begin() as session:
         yield session
-        session.commit()
-    except Exception:
-        session.rollback()
-        raise
-    finally:
-        session.close()
 
 
-def save_run(summary: Dict) -> str:
+def save_run(summary: dict) -> str:
     run_dir = Path(summary["run_dir"]).resolve()
     run_id = run_dir.name
     attempts = summary.get("attempts", [])
     accuracy = summary.get("metrics", {}).get("overall", {}).get("macro_model_accuracy")
     total_cost = summary.get("token_usage", {}).get("total_cost_usd")
     total_duration = summary.get("timing", {}).get("total_duration_seconds")
-    timestamp_raw = summary.get("timestamp_utc")
-    timestamp = dt.datetime.fromisoformat(timestamp_raw) if timestamp_raw else dt.datetime.utcnow()
+    timestamp = parse_timestamp(summary.get("timestamp_utc"))
 
     with get_session() as session:
         record = session.get(RunRecord, run_id)
@@ -107,14 +101,14 @@ def save_run(summary: Dict) -> str:
         record.summary_json = json.dumps(summary)
         record.attempts.clear()
         for attempt in attempts:
-            usage = attempt.get("usage") or {}
+            prompt_tokens, completion_tokens = extract_usage_tokens(attempt.get("usage"))
             record.attempts.append(
                 AttemptRecord(
                     task_id=attempt.get("task_id"),
                     status=attempt.get("status"),
                     duration=attempt.get("duration_seconds"),
-                    prompt_tokens=usage.get("prompt_tokens") or usage.get("input_tokens"),
-                    completion_tokens=usage.get("completion_tokens") or usage.get("output_tokens"),
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
                     cost=attempt.get("cost_usd"),
                     error=attempt.get("error"),
                 )
@@ -123,7 +117,7 @@ def save_run(summary: Dict) -> str:
     return run_id
 
 
-def list_runs(limit: int = 50) -> List[Dict[str, Optional[float]]]:
+def list_runs(limit: int = 50) -> list[dict[str, float | None]]:
     stmt = (
         select(
             RunRecord.id,
@@ -132,26 +126,31 @@ def list_runs(limit: int = 50) -> List[Dict[str, Optional[float]]]:
             RunRecord.accuracy,
             RunRecord.total_cost,
             RunRecord.total_duration,
+            RunRecord.summary_json,
         )
         .order_by(RunRecord.timestamp_utc.desc())
         .limit(limit)
     )
     with get_session() as session:
         rows = session.execute(stmt).all()
-    return [
-        {
-            "id": row.id,
-            "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
-            "model_id": row.model_id,
-            "accuracy": row.accuracy,
-            "total_cost": row.total_cost,
-            "total_duration": row.total_duration,
-        }
-        for row in rows
-    ]
+
+    results = []
+    for row in rows:
+        results.append(
+            {
+                "id": row.id,
+                "timestamp_utc": row.timestamp_utc.isoformat() if row.timestamp_utc else None,
+                "model_id": row.model_id,
+                "accuracy": row.accuracy,
+                "total_cost": row.total_cost,
+                "total_duration": row.total_duration,
+                "error_count": count_errors_from_summary(row.summary_json),
+            }
+        )
+    return results
 
 
-def get_run(run_id: str) -> Dict | None:
+def get_run(run_id: str) -> dict | None:
     with get_session() as session:
         record = session.get(RunRecord, run_id)
         if record is None:
@@ -159,7 +158,7 @@ def get_run(run_id: str) -> Dict | None:
         return json.loads(record.summary_json)
 
 
-def _determine_model_level(attempts: List[Dict[str, Any]], default_level: Optional[str]) -> str:
+def _determine_model_level(attempts: list[dict[str, Any]], default_level: str | None) -> str:
     for attempt in attempts:
         applied = attempt.get("thinking_level_applied")
         if applied:
@@ -174,7 +173,7 @@ def _determine_model_level(attempts: List[Dict[str, Any]], default_level: Option
     return "base"
 
 
-def leaderboard() -> List[Dict[str, Optional[float]]]:
+def leaderboard() -> list[dict[str, float | None]]:
     stmt = select(
         RunRecord.id,
         RunRecord.summary_json,
@@ -183,7 +182,7 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
     with get_session() as session:
         rows = session.execute(stmt).all()
 
-    def _is_better(candidate: Dict[str, Any], incumbent: Optional[Dict[str, Any]]) -> bool:
+    def _is_better(candidate: dict[str, Any], incumbent: dict[str, Any] | None) -> bool:
         if incumbent is None:
             return True
         cand_acc = candidate.get("accuracy")
@@ -221,7 +220,7 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
                 return False
         return (candidate.get("timestamp") or dt.datetime.min) > (incumbent.get("timestamp") or dt.datetime.min)
 
-    groups: Dict[tuple[str, str], Dict[str, Any]] = {}
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
 
     for row in rows:
         try:
@@ -234,7 +233,7 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
             continue
         default_level = summary.get("thinking_level")
         # Group attempts per (model, thinking level)
-        per_model_level: Dict[tuple[str, str], List[Dict[str, Any]]] = {}
+        per_model_level: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for attempt in attempts:
             model_id = attempt.get("model")
             if not model_id:
@@ -244,7 +243,9 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
 
         for (model_id, level), model_attempts in per_model_level.items():
             cost_values = [a.get("cost_usd") for a in model_attempts if a.get("cost_usd") is not None]
-            duration_values = [a.get("duration_seconds") for a in model_attempts if a.get("duration_seconds") is not None]
+            duration_values = [
+                a.get("duration_seconds") for a in model_attempts if a.get("duration_seconds") is not None
+            ]
             # Compute accuracy for this (model, level) subset
             successes = sum(1 for a in model_attempts if (a.get("status") or "").lower() == "passed")
             accuracy = successes / len(model_attempts) if model_attempts else None
@@ -289,12 +290,10 @@ def leaderboard() -> List[Dict[str, Optional[float]]]:
     return leaderboard_rows
 
 
-def delete_runs_for_model(model_id: str, thinking_level: Optional[str] = None) -> int:
+def delete_runs_for_model(model_id: str, thinking_level: str | None = None) -> int:
     like_pattern = f"%{model_id}%"
     with get_session() as session:
-        candidates = session.scalars(
-            select(RunRecord).where(RunRecord.model_id.like(like_pattern))
-        ).all()
+        candidates = session.scalars(select(RunRecord).where(RunRecord.model_id.like(like_pattern))).all()
         removed = 0
         for record in candidates:
             models = [m.strip() for m in (record.model_id or "").split(",") if m.strip()]

@@ -2,20 +2,40 @@
 
 import asyncio
 import datetime as dt
+import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 import structlog
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from harness.config import get_settings as get_harness_settings
-from harness.run_harness import run_tasks, fetch_model_metadata
+from harness.exceptions import HarnessError
+from harness.run_harness import (
+    run_tasks,
+    fetch_model_metadata,
+    retry_api_error_attempts,
+    load_api_error_attempts,
+    load_failed_attempts,
+    retry_failed_attempts,
+    load_incomplete_attempts,
+    resume_incomplete_run,
+)
 from server import database
 from server.config import get_settings
 from server.monitoring import timed
+from server.path_security import PathTraversalError, safe_path_join, validate_run_id
 from server.progress import progress_manager
+from server.routes.auth import require_api_token
+from server.routes.background import run_in_thread_with_callbacks
 from server.validators import ValidatedRunRequest
 
 
@@ -35,35 +55,35 @@ class RunLaunchResponse(BaseModel):
 
 
 class RunDetailResponse(BaseModel):
-    summary: Dict[str, Any]
+    summary: dict[str, Any]
 
 
 class RunSummary(BaseModel):
     run_id: str
-    timestamp_utc: Optional[str]
-    model_id: Optional[str]
-    accuracy: Optional[float]
-    total_cost_usd: Optional[float]
-    total_duration_seconds: Optional[float]
+    timestamp_utc: str | None
+    model_id: str | None
+    accuracy: float | None
+    total_cost_usd: float | None
+    total_duration_seconds: float | None
 
 
 class RunListResponse(BaseModel):
-    runs: List[RunSummary]
+    runs: list[RunSummary]
 
 
 class RunRequestPayload(BaseModel):
-    models: List[str]
-    tasks: Optional[List[str]] = None
+    models: list[str]
+    tasks: list[str] | None = None
     samples: int = 1
     temperature: float = DEFAULT_TEMPERATURE
     max_tokens: int = DEFAULT_MAX_TOKENS
-    provider: Optional[str] = None
+    provider: str | None = None
     include_tests: bool = False
     install_deps: bool = False
     allow_incomplete_diffs: bool = DEFAULT_ALLOW_INCOMPLETE_DIFFS
     allow_diff_rewrite_fallback: bool = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
-    response_text: Optional[str] = None
-    thinking_level: Optional[str] = None
+    response_text: str | None = None
+    thinking_level: str | None = None
     include_thinking_variants: bool = False
     sweep_thinking_levels: bool = False
 
@@ -74,7 +94,7 @@ def index() -> RedirectResponse:
 
 
 @router.get("/health")
-def health() -> Dict[str, str]:
+def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
@@ -104,7 +124,7 @@ def get_run(run_id: str) -> RunDetailResponse:
 
 
 @router.get("/leaderboard", tags=["leaderboard"])
-def get_leaderboard() -> Dict[str, Any]:
+def get_leaderboard() -> dict[str, Any]:
     rows = database.leaderboard()
     return {
         "models": [
@@ -123,7 +143,7 @@ def get_leaderboard() -> Dict[str, Any]:
 
 @router.post("/runs", response_model=RunLaunchResponse, tags=["runs"])
 @timed
-async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
+async def create_run(request: RunRequestPayload, _: None = Depends(require_api_token)) -> RunLaunchResponse:
     allowlist = settings.model_allowlist or None
     try:
         validated = ValidatedRunRequest(**request.model_dump(), model_allowlist=allowlist)
@@ -140,7 +160,7 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
         {
             "models": validated.models,
             "tasks": tasks,
-            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
             "samples": validated.samples,
             "temperature": validated.temperature,
             "max_tokens": validated.max_tokens,
@@ -157,7 +177,7 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
 
     output_dir = Path(settings.runs_root)
 
-    def progress_proxy(model: str, task_id: str, sample_index: int, summary: Dict[str, Any]) -> None:
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
         payload = {
             "model": model,
             "task_id": task_id,
@@ -176,33 +196,36 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
         progress_manager.publish_attempt(run_id, payload)
 
     async def runner() -> None:
-        try:
-            summary = await asyncio.to_thread(
-                run_tasks,
-                tasks=tasks,
-                models=validated.models,
-                samples=validated.samples,
-                temperature=validated.temperature,
-                max_tokens=validated.max_tokens,
-                preferred_provider=validated.provider,
-                thinking_level=validated.thinking_level,
-                sweep_thinking_levels=validated.sweep_thinking_levels,
-                include_thinking_variants=validated.include_thinking_variants,
-                include_tests=validated.include_tests,
-                install_deps=validated.install_deps,
-                allow_incomplete_diffs=validated.allow_incomplete_diffs,
-                allow_diff_rewrite_fallback=validated.allow_diff_rewrite_fallback,
-                output_dir=output_dir,
-                response_text=validated.response_text,
-                progress_callback=progress_proxy,
-                run_id=run_id,
-            )
-        except Exception as exc:  # pragma: no cover - background task
+        def on_error(exc: Exception) -> None:
             logger.exception("run.failed", run_id=run_id, error=str(exc))
             progress_manager.fail(run_id, str(exc))
-        else:
+
+        def on_success(summary: dict[str, Any]) -> None:
             database.save_run(summary)
             progress_manager.complete(run_id, summary)
+
+        await run_in_thread_with_callbacks(
+            run_tasks,
+            tasks=tasks,
+            models=validated.models,
+            samples=validated.samples,
+            temperature=validated.temperature,
+            max_tokens=validated.max_tokens,
+            preferred_provider=validated.provider,
+            thinking_level=validated.thinking_level,
+            sweep_thinking_levels=validated.sweep_thinking_levels,
+            include_thinking_variants=validated.include_thinking_variants,
+            include_tests=validated.include_tests,
+            install_deps=validated.install_deps,
+            allow_incomplete_diffs=validated.allow_incomplete_diffs,
+            allow_diff_rewrite_fallback=validated.allow_diff_rewrite_fallback,
+            output_dir=output_dir,
+            response_text=validated.response_text,
+            progress_callback=progress_proxy,
+            run_id=run_id,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     task = asyncio.create_task(runner())
     _background_tasks.add(task)
@@ -211,7 +234,11 @@ async def create_run(request: RunRequestPayload) -> RunLaunchResponse:
 
 
 @router.delete("/leaderboard/{model_id:path}", tags=["leaderboard"])
-def delete_leaderboard_entry(model_id: str, thinking_level: Optional[str] = None) -> Dict[str, Any]:
+def delete_leaderboard_entry(
+    model_id: str,
+    thinking_level: str | None = None,
+    _: None = Depends(require_api_token),
+) -> dict[str, Any]:
     removed = database.delete_runs_for_model(model_id, thinking_level)
     status = "removed" if removed else "already_missing"
     return {
@@ -223,7 +250,7 @@ def delete_leaderboard_entry(model_id: str, thinking_level: Optional[str] = None
 
 
 @router.get("/models/capabilities", tags=["models"])
-def get_model_capabilities(model_id: str) -> Dict[str, Any]:
+def get_model_capabilities(model_id: str) -> dict[str, Any]:
     model_id = model_id.strip()
     if not model_id:
         raise HTTPException(status_code=400, detail="model_id must be provided")
@@ -231,12 +258,10 @@ def get_model_capabilities(model_id: str) -> Dict[str, Any]:
     info = metadata.get(model_id) or metadata.get(f"openrouter/{model_id}")
     if not info:
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found.")
-    supported_parameters = [
-        param for param in info.get("supported_parameters", []) if isinstance(param, str)
-    ]
+    supported_parameters = [param for param in info.get("supported_parameters", []) if isinstance(param, str)]
     supported_lower = {param.lower() for param in supported_parameters}
     supports_reasoning = "reasoning" in supported_lower
-    suggested_levels: List[str] = []
+    suggested_levels: list[str] = []
     if supports_reasoning:
         suggested_levels = ["low", "medium", "high"]
     supports_budget_tokens = False
@@ -254,6 +279,570 @@ def get_model_capabilities(model_id: str) -> Dict[str, Any]:
         "supports_budget_tokens": supports_budget_tokens,
         "supports_budget_seconds": supports_budget_seconds,
     }
+
+
+def _extract_lmstudio_context_length(entry: dict[str, Any]) -> int | None:
+    candidates = (
+        "max_context_length",
+        "context_length",
+        "context_window",
+        "context_size",
+        "n_ctx",
+    )
+    for key in candidates:
+        value = entry.get(key)
+        if value is None:
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return None
+
+
+def _lmstudio_native_base_url(base_url: str) -> str:
+    trimmed = (base_url or "").rstrip("/")
+    if trimmed.endswith("/v1"):
+        trimmed = trimmed[: -len("/v1")]
+    return trimmed
+
+
+@router.get("/models/lmstudio", tags=["models"])
+def list_lmstudio_models() -> dict[str, Any]:
+    base_url = (settings.lmstudio_base_url or "").rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=500, detail="LM Studio base URL is not configured")
+
+    openai_models_url = f"{base_url}/models"
+    native_base = _lmstudio_native_base_url(base_url)
+    native_models_url = f"{native_base}/api/v0/models"
+
+    payload: dict[str, Any] | None = None
+    last_error: str | None = None
+
+    # Prefer LM Studio's native endpoint when available (includes max_context_length).
+    for url in (native_models_url, openai_models_url):
+        request = Request(url, headers={"Accept": "application/json"})
+        try:
+            # nosec B310: URLs are localhost http:// only (from validated config)
+            with urlopen(request, timeout=3) as response:  # nosec B310
+                raw = response.read().decode("utf-8")
+        except (URLError, HTTPError) as exc:
+            last_error = f"Unable to reach LM Studio server at {url}: {exc}"
+            continue
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            last_error = f"LM Studio server returned a non-JSON response from {url}"
+            continue
+
+        if isinstance(parsed, dict):
+            payload = parsed
+            break
+
+    if payload is None:
+        raise HTTPException(status_code=503, detail=last_error or "Unable to load LM Studio models")
+
+    raw_models = payload.get("data")
+    if not isinstance(raw_models, list):
+        raw_models = payload.get("models")
+    if not isinstance(raw_models, list):
+        raw_models = []
+
+    models: list[dict[str, Any]] = []
+    for entry in raw_models:
+        if not isinstance(entry, dict):
+            continue
+        model_id = entry.get("id")
+        if not model_id or not isinstance(model_id, str):
+            continue
+        models.append(
+            {
+                "id": model_id,
+                "context_length": _extract_lmstudio_context_length(entry),
+            }
+        )
+
+    return {
+        "base_url": base_url,
+        "models": models,
+    }
+
+
+_LMSTUDIO_MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:+-]*\Z")
+
+
+def _resolve_lms_path() -> str | None:
+    resolved = shutil.which("lms")
+    if resolved:
+        return resolved
+    fallback = Path.home() / ".lmstudio" / "bin" / "lms"
+    if fallback.exists():
+        return str(fallback)
+    return None
+
+
+def _lmstudio_cli_instance_args(base_url: str) -> list[str]:
+    trimmed = (base_url or "").strip()
+    if not trimmed:
+        return []
+    if "://" not in trimmed:
+        trimmed = f"http://{trimmed}"
+    parsed = urlparse(trimmed)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 1234
+    return ["--host", host, "--port", str(port)]
+
+
+def _truncate_cli_output(value: str, *, limit: int = 2000) -> str:
+    cleaned = (value or "").strip()
+    if len(cleaned) > limit:
+        return f"{cleaned[:limit]}..."
+    return cleaned
+
+
+class LMStudioModelSwitchRequest(BaseModel):
+    model_id: str
+
+
+class LMStudioModelSwitchResponse(BaseModel):
+    model_id: str
+    message: str
+
+
+@router.post("/models/lmstudio/switch", response_model=LMStudioModelSwitchResponse, tags=["models"])
+def switch_lmstudio_model(
+    request: LMStudioModelSwitchRequest,
+    _: None = Depends(require_api_token),
+) -> LMStudioModelSwitchResponse:
+    model_id = (request.model_id or "").strip()
+    if not model_id:
+        raise HTTPException(status_code=422, detail="model_id is required")
+    if _LMSTUDIO_MODEL_ID_PATTERN.fullmatch(model_id) is None:
+        raise HTTPException(status_code=400, detail="Invalid model_id format")
+
+    base_url = (settings.lmstudio_base_url or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=500, detail="LM Studio base URL is not configured")
+
+    lms_path = _resolve_lms_path()
+    if not lms_path:
+        raise HTTPException(
+            status_code=501,
+            detail="LM Studio CLI 'lms' was not found. Install LM Studio or add 'lms' to PATH to enable model switching.",
+        )
+
+    instance_args = _lmstudio_cli_instance_args(base_url)
+
+    try:
+        unload = subprocess.run(
+            [lms_path, "unload", "--all", *instance_args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:  # pragma: no cover
+        raise HTTPException(status_code=504, detail="Timed out unloading LM Studio models") from exc
+
+    if unload.returncode != 0:
+        detail = _truncate_cli_output(unload.stderr or unload.stdout)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to unload LM Studio models: {detail or 'unknown error'}",
+        )
+
+    try:
+        load = subprocess.run(
+            [lms_path, "load", model_id, "--exact", "-y", *instance_args],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired as exc:  # pragma: no cover
+        raise HTTPException(status_code=504, detail=f"Timed out loading '{model_id}' in LM Studio") from exc
+
+    if load.returncode != 0:
+        detail = _truncate_cli_output(load.stderr or load.stdout)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to load '{model_id}' in LM Studio: {detail or 'unknown error'}",
+        )
+
+    return LMStudioModelSwitchResponse(model_id=model_id, message=f"Loaded '{model_id}' in LM Studio")
+
+
+class RetryApiErrorsResponse(BaseModel):
+    retry_run_id: str
+    original_run_id: str
+    api_errors_found: int
+    message: str
+
+
+class ApiErrorsInfoResponse(BaseModel):
+    run_id: str
+    api_error_count: int
+    api_errors: list[dict[str, Any]]
+
+
+class RetrySingleAttemptRequest(BaseModel):
+    task_id: str
+    model: str | None = None
+    sample_index: int | None = None
+
+
+@router.get("/runs/{run_id}/api-errors", response_model=ApiErrorsInfoResponse, tags=["runs"])
+def get_api_errors(run_id: str) -> ApiErrorsInfoResponse:
+    """Get information about api_error attempts in a run."""
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = database.get_run(validated_run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        api_errors = load_api_error_attempts(run_dir)
+    except (OSError, json.JSONDecodeError, HarnessError) as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
+
+    return ApiErrorsInfoResponse(
+        run_id=run_id,
+        api_error_count=len(api_errors),
+        api_errors=[
+            {
+                "task_id": e.get("task_id"),
+                "model": e.get("model"),
+                "sample_index": e.get("sample_index"),
+                "thinking_level": e.get("thinking_level_requested"),
+                "error": e.get("error", "")[:200],  # Truncate error message
+            }
+            for e in api_errors
+        ],
+    )
+
+
+@router.post("/runs/{run_id}/retry-api-errors", response_model=RetryApiErrorsResponse, tags=["runs"])
+async def retry_api_errors(run_id: str, _: None = Depends(require_api_token)) -> RetryApiErrorsResponse:
+    """Retry only the api_error attempts from a previous run."""
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = database.get_run(validated_run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        api_errors = load_api_error_attempts(run_dir)
+    except (OSError, json.JSONDecodeError, HarnessError) as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load api errors: {exc}")
+
+    if not api_errors:
+        return RetryApiErrorsResponse(
+            retry_run_id="",
+            original_run_id=run_id,
+            api_errors_found=0,
+            message="No api_error attempts found to retry",
+        )
+
+    # Generate new run ID for retry
+    retry_run_id = progress_manager.generate_run_id()
+    await progress_manager.start_run(
+        retry_run_id,
+        {
+            "original_run_id": run_id,
+            "retry_mode": True,
+            "api_errors_to_retry": len(api_errors),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
+        },
+    )
+
+    output_dir = Path(settings.runs_root)
+
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
+        payload = {
+            "model": model,
+            "task_id": task_id,
+            "sample_index": sample_index,
+            "status": summary.get("status"),
+            "duration_seconds": summary.get("duration_seconds"),
+            "error": summary.get("error"),
+        }
+        progress_manager.publish_attempt(retry_run_id, payload)
+
+    async def runner() -> None:
+        def on_error(exc: Exception) -> None:
+            logger.exception("retry.failed", run_id=retry_run_id, error=str(exc))
+            progress_manager.fail(retry_run_id, str(exc))
+
+        def on_success(result: dict[str, Any]) -> None:
+            database.save_run(result)
+            progress_manager.complete(retry_run_id, result)
+
+        await run_in_thread_with_callbacks(
+            retry_api_error_attempts,
+            original_run_dir=run_dir,
+            output_dir=output_dir,
+            progress_callback=progress_proxy,
+            run_id=retry_run_id,
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return RetryApiErrorsResponse(
+        retry_run_id=retry_run_id,
+        original_run_id=run_id,
+        api_errors_found=len(api_errors),
+        message=f"Retrying {len(api_errors)} api_error attempts",
+    )
+
+
+@router.post("/runs/{run_id}/retry-single", response_model=RetryApiErrorsResponse, tags=["runs"])
+async def retry_single_attempt(
+    run_id: str,
+    request: RetrySingleAttemptRequest,
+    _: None = Depends(require_api_token),
+) -> RetryApiErrorsResponse:
+    """Retry a single failed attempt from a previous run."""
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    summary = database.get_run(validated_run_id)
+    if summary is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        all_failed = load_failed_attempts(run_dir)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load failed attempts: {exc}")
+
+    # Filter to find the specific attempt
+    filtered = [
+        e
+        for e in all_failed
+        if e.get("task_id") == request.task_id
+        and (request.model is None or e.get("model") == request.model)
+        and (request.sample_index is None or e.get("sample_index") == request.sample_index)
+    ]
+
+    if not filtered:
+        raise HTTPException(status_code=404, detail="Specified attempt not found or not a failed attempt")
+
+    retry_run_id = progress_manager.generate_run_id()
+    await progress_manager.start_run(
+        retry_run_id,
+        {
+            "original_run_id": run_id,
+            "retry_mode": True,
+            "single_retry": True,
+            "task_id": request.task_id,
+            "api_errors_to_retry": len(filtered),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
+        },
+    )
+
+    output_dir = Path(settings.runs_root)
+
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
+        payload = {
+            "model": model,
+            "task_id": task_id,
+            "sample_index": sample_index,
+            "status": summary.get("status"),
+            "duration_seconds": summary.get("duration_seconds"),
+            "error": summary.get("error"),
+        }
+        progress_manager.publish_attempt(retry_run_id, payload)
+
+    async def runner() -> None:
+        def on_error(exc: Exception) -> None:
+            logger.exception("retry.single.failed", run_id=retry_run_id, error=str(exc))
+            progress_manager.fail(retry_run_id, str(exc))
+
+        def on_success(result: dict[str, Any]) -> None:
+            database.save_run(result)
+            progress_manager.complete(retry_run_id, result)
+
+        await run_in_thread_with_callbacks(
+            retry_failed_attempts,
+            original_run_dir=run_dir,
+            output_dir=output_dir,
+            progress_callback=progress_proxy,
+            filter_task_id=request.task_id,
+            filter_model=request.model,
+            filter_sample_index=request.sample_index,
+            run_id=retry_run_id,
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return RetryApiErrorsResponse(
+        retry_run_id=retry_run_id,
+        original_run_id=run_id,
+        api_errors_found=len(filtered),
+        message=f"Retrying {len(filtered)} failed attempt(s) for task {request.task_id}",
+    )
+
+
+class IncompleteAttemptsResponse(BaseModel):
+    run_id: str
+    incomplete_count: int
+    incomplete_attempts: list[dict[str, Any]]
+
+
+class ResumeIncompleteResponse(BaseModel):
+    run_id: str
+    incomplete_count: int
+    message: str
+
+
+@router.get("/runs/{run_id}/incomplete", response_model=IncompleteAttemptsResponse)
+async def get_incomplete_attempts(run_id: str) -> IncompleteAttemptsResponse:
+    """Get incomplete attempts for a run (started but didn't finish)."""
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        incomplete = load_incomplete_attempts(run_dir)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load incomplete attempts: {exc}")
+
+    return IncompleteAttemptsResponse(
+        run_id=run_id,
+        incomplete_count=len(incomplete),
+        incomplete_attempts=incomplete,
+    )
+
+
+@router.post("/runs/{run_id}/resume", response_model=ResumeIncompleteResponse)
+async def resume_run(run_id: str, _: None = Depends(require_api_token)) -> ResumeIncompleteResponse:
+    """Resume incomplete attempts for a run."""
+    try:
+        validated_run_id = validate_run_id(run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    try:
+        run_dir = safe_path_join(Path(settings.runs_root), validated_run_id)
+    except PathTraversalError:
+        raise HTTPException(status_code=400, detail="Invalid run ID format")
+
+    if not run_dir.exists():
+        raise HTTPException(status_code=404, detail="Run directory not found")
+
+    try:
+        incomplete = load_incomplete_attempts(run_dir)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to load incomplete attempts: {exc}")
+
+    if not incomplete:
+        raise HTTPException(status_code=400, detail="No incomplete attempts to resume")
+
+    # Start resume in progress manager
+    await progress_manager.start_run(
+        run_id,
+        {
+            "resume_mode": True,
+            "incomplete_to_resume": len(incomplete),
+            "timestamp": dt.datetime.now(dt.UTC).isoformat(),
+        },
+    )
+
+    def progress_proxy(model: str, task_id: str, sample_index: int, summary: dict[str, Any]) -> None:
+        progress_manager.publish_attempt(
+            run_id,
+            {
+                "task_id": task_id,
+                "model": model,
+                "sample_index": sample_index,
+                "status": summary.get("status"),
+                "duration_seconds": summary.get("duration_seconds"),
+                "error": summary.get("error"),
+            },
+        )
+
+    async def runner() -> None:
+        def on_error(exc: Exception) -> None:
+            logger.exception("resume.failed", run_id=run_id, error=str(exc))
+            progress_manager.fail(run_id, str(exc))
+
+        def on_success(result: dict[str, Any]) -> None:
+            database.save_run(result)
+            progress_manager.complete(run_id, result)
+
+        await run_in_thread_with_callbacks(
+            resume_incomplete_run,
+            run_dir=run_dir,
+            temperature=DEFAULT_TEMPERATURE,
+            max_tokens=DEFAULT_MAX_TOKENS,
+            include_tests=HARNESS_SETTINGS.include_tests_by_default,
+            install_deps=HARNESS_SETTINGS.install_deps_by_default,
+            allow_incomplete_diffs=DEFAULT_ALLOW_INCOMPLETE_DIFFS,
+            allow_diff_rewrite_fallback=DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK,
+            progress_callback=progress_proxy,
+            on_success=on_success,
+            on_error=on_error,
+        )
+
+    task = asyncio.create_task(runner())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return ResumeIncompleteResponse(
+        run_id=run_id,
+        incomplete_count=len(incomplete),
+        message=f"Resuming {len(incomplete)} incomplete attempt(s)",
+    )
 
 
 @router.websocket("/runs/{run_id}/stream")
@@ -277,7 +866,7 @@ async def run_stream(websocket: WebSocket, run_id: str) -> None:
         await progress_manager.unsubscribe(run_id, queue)
 
 
-def harness_tasks_all() -> List[str]:
+def harness_tasks_all() -> list[str]:
     from harness.run_harness import discover_tasks
 
     return discover_tasks()
@@ -297,3 +886,5 @@ RunLaunchResponse.model_rebuild()
 RunDetailResponse.model_rebuild()
 RunSummary.model_rebuild()
 RunListResponse.model_rebuild()
+IncompleteAttemptsResponse.model_rebuild()
+ResumeIncompleteResponse.model_rebuild()

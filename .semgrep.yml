@@ -1,0 +1,157 @@
+# Semgrep lightweight security rules for benchmark harness
+# Scoped to server/, harness/, and gui/ (excludes tasks/* workspaces)
+# Focuses on common Python/JS security footguns
+
+rules:
+  # Python SQL Injection
+  - id: python-sql-injection
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $CURSOR.execute(..., $SQL % ...)
+          - pattern: |
+              $CURSOR.execute(..., $SQL + ...)
+          - pattern: |
+              $CURSOR.execute(..., f"...{$VAR}...")
+    message: Potential SQL injection. Use parameterized queries instead.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-89"
+
+  # Python hardcoded secrets
+  - id: python-hardcoded-secret
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "..."
+          - pattern: $VAR = '...'
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)(password|secret|api_key|token|private_key)
+      - pattern-not: $VAR = ""
+      - pattern-not: $VAR = ''
+    message: Potential hardcoded secret. Use environment variables or secret management.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-798"
+
+  # Python eval usage
+  - id: python-eval-usage
+    pattern: eval(...)
+    message: Use of eval() is dangerous. Avoid eval or sanitize input strictly.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-95"
+
+  # Python exec usage
+  - id: python-exec-usage
+    pattern: exec(...)
+    message: Use of exec() is dangerous. Avoid exec or sanitize input strictly.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-95"
+
+  # Python pickle deserialization
+  - id: python-pickle-unsafe
+    patterns:
+      - pattern-either:
+          - pattern: pickle.loads(...)
+          - pattern: pickle.load(...)
+      - pattern-not-inside: |
+          # nosemgrep: python-pickle-unsafe
+          ...
+    message: Unsafe pickle deserialization. Use JSON or validate pickle source.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-502"
+
+  # Python shell injection via subprocess
+  - id: python-shell-injection
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+      - pattern-not: subprocess.$FUNC("...", shell=True, ...)
+    message: Potential shell injection. Avoid shell=True with user input.
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-78"
+
+  # Python weak hash algorithms
+  - id: python-weak-hash
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+    message: Weak hash algorithm (MD5/SHA1). Use SHA256 or stronger.
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-327"
+
+  # JavaScript eval usage
+  - id: javascript-eval-usage
+    pattern: eval(...)
+    message: Use of eval() is dangerous. Avoid eval or sanitize input strictly.
+    languages: [javascript]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-95"
+
+  # JavaScript innerHTML XSS
+  - id: javascript-innerhtml-xss
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $VAR
+          - pattern: $EL.innerHTML += $VAR
+      - pattern-not: $EL.innerHTML = "..."
+      - pattern-not: $EL.innerHTML += "..."
+    message: Potential XSS via innerHTML. Sanitize user input or use textContent.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-79"
+
+  # JavaScript document.write XSS
+  - id: javascript-document-write-xss
+    patterns:
+      - pattern-either:
+          - pattern: document.write($VAR)
+          - pattern: document.writeln($VAR)
+      - pattern-not: document.write("...")
+      - pattern-not: document.writeln("...")
+    message: Potential XSS via document.write. Sanitize user input or use safer DOM APIs.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-79"
+
+  # JavaScript location redirect open redirect
+  - id: javascript-open-redirect
+    patterns:
+      - pattern-either:
+          - pattern: window.location = $VAR
+          - pattern: window.location.href = $VAR
+          - pattern: location.href = $VAR
+      - pattern-not: window.location = "..."
+      - pattern-not: window.location.href = "..."
+      - pattern-not: location.href = "..."
+    message: Potential open redirect. Validate redirect target against allowlist.
+    languages: [javascript]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-601"

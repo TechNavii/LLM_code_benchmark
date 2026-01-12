@@ -3,24 +3,58 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Expert QA Benchmark</title>
-  <link rel="stylesheet" href="/ui/style.css" />
+  <title>QA Questions • Benchmark Harness</title>
+  <link rel="stylesheet" href="/ui/style.css?v=20260110_6" />
 </head>
 <body>
+  <a href="#main-content" class="skip-link">Skip to main content</a>
+
+  <nav class="nav-bar" role="navigation" aria-label="Main navigation">
+    <a href="/ui/index.html" class="nav-brand">Benchmark Harness</a>
+    <div class="nav-tabs">
+      <a href="/ui/index.html" class="nav-tab">Code Tasks</a>
+      <a href="/ui/qa/index.html" class="nav-tab active" aria-current="page">QA Questions</a>
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="nav-shortcuts">Press <kbd>?</kbd> for shortcuts</div>
+  </nav>
+
   <header>
     <h1>Expert QA Benchmark</h1>
     <p class="tagline">Evaluate models on 100 expert-level questions with instant verdicts.</p>
   </header>
 
-  <main class="dashboard-grid qa-grid">
+  <main class="dashboard-grid qa-grid" id="main-content" role="main">
     <section class="card launch-card">
       <h2>Launch Question Run</h2>
-      <form id="qa-run-form">
+      <form id="qa-run-form" onsubmit="return false">
         <label>
-          Model ID(s)
-          <input type="text" id="qa-model-input" placeholder="openrouter/google/gemini-pro" required />
+          Model source
+          <select id="qa-model-source-select" class="form-select">
+            <option value="openrouter" selected>OpenRouter</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
         </label>
-        <div id="qa-model-capabilities" class="helper-note"></div>
+
+        <div id="qa-openrouter-fields">
+          <label>
+            Model ID(s)
+            <input type="text" id="qa-model-input" placeholder="openrouter/google/gemini-pro" required />
+          </label>
+          <div id="qa-model-capabilities" class="helper-note"></div>
+          <label>
+            Provider (optional)
+            <input type="text" id="qa-provider-input" placeholder="Z.AI" />
+          </label>
+        </div>
+
+        <div id="qa-lmstudio-fields" hidden>
+          <label>
+            LM Studio model
+            <select id="qa-lmstudio-model-select" class="form-select"></select>
+          </label>
+          <div id="qa-lmstudio-model-note" class="helper-note"></div>
+        </div>
         <div class="advanced-flags">
           <label class="inline">
             <input type="checkbox" id="qa-sweep-thinking-levels" /> Sweep thinking levels (base + low/medium/high)
@@ -29,10 +63,6 @@
             <input type="checkbox" id="qa-include-thinking-variants" /> Include thinking variants automatically
           </label>
         </div>
-        <label>
-          Provider (optional)
-          <input type="text" id="qa-provider-input" placeholder="Z.AI" />
-        </label>
         <label>
           Samples
           <input type="number" id="qa-sample-input" min="1" value="1" />
@@ -56,9 +86,10 @@
       <div id="qa-run-status" class="status"></div>
     </section>
 
-    <section class="card accent-card leaderboard-card">
-      <h2>Question Leaderboard</h2>
+    <section class="card accent-card leaderboard-card" aria-labelledby="qa-leaderboard-heading">
+      <h2 id="qa-leaderboard-heading">Question Leaderboard</h2>
       <div id="qa-leaderboard-status" class="status"></div>
+      <div id="qa-leaderboard-filter-container"></div>
       <div class="table-wrapper">
         <table>
           <thead>
@@ -77,14 +108,30 @@
       </div>
     </section>
 
-    <section class="card accent-card results-card results-empty" id="qa-results-card" hidden>
-      <h2>Latest Question Run (<span id="qa-run-id">—</span>)</h2>
+    <section class="card accent-card results-card results-empty" id="qa-results-card" hidden aria-labelledby="qa-results-heading">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <h2 id="qa-results-heading">Latest Question Run (<span id="qa-run-id">—</span>)</h2>
+        <div class="export-buttons">
+          <button type="button" class="ghost" id="qa-export-csv-btn" aria-label="Export results to CSV">Export CSV</button>
+          <button type="button" class="ghost" id="qa-export-json-btn" aria-label="Export results to JSON">Export JSON</button>
+        </div>
+      </div>
       <div class="results-placeholder" id="qa-results-placeholder">
         <p>Start a question run to see live answers and grading.</p>
       </div>
+      <div id="qa-progress-container"></div>
       <div class="metrics" id="qa-aggregate-metrics"></div>
+      <div id="qa-api-error-section" class="api-error-section" hidden>
+        <div class="api-error-info">
+          <span class="api-error-count" id="qa-api-error-count"></span>
+          <button type="button" class="retry-btn" id="qa-retry-api-errors-btn">
+            Retry API Errors
+          </button>
+        </div>
+      </div>
+      <div id="qa-filter-container"></div>
       <div class="table-wrapper">
-        <table>
+        <table id="qa-results-table">
           <thead>
             <tr>
               <th>#</th>
@@ -98,6 +145,7 @@
               <th>Model Answer</th>
               <th>Expected</th>
               <th>Error</th>
+              <th class="actions-header">Actions</th>
             </tr>
           </thead>
           <tbody id="qa-results-body"></tbody>
@@ -105,10 +153,15 @@
       </div>
     </section>
 
-    <section class="card recent-card">
-      <h2>Recent Question Runs</h2>
+    <section class="card recent-card" aria-labelledby="qa-history-heading">
+      <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem;">
+        <h2 id="qa-history-heading">Recent Question Runs</h2>
+        <div class="export-buttons">
+          <button type="button" class="ghost" id="qa-export-history-csv" aria-label="Export history to CSV">Export CSV</button>
+        </div>
+      </div>
       <div class="table-wrapper">
-        <table>
+        <table id="qa-history-table">
           <thead>
             <tr>
               <th>Run ID</th>
@@ -117,14 +170,17 @@
               <th>Accuracy</th>
               <th>Total Cost (USD)</th>
               <th>Duration (s)</th>
+              <th>Errors</th>
             </tr>
           </thead>
           <tbody id="qa-history-body"></tbody>
         </table>
       </div>
+      <div id="qa-history-pagination"></div>
     </section>
   </main>
 
-  <script src="/ui/qa/main.js" type="module"></script>
+  <script src="/ui/model-source.js?v=20260110_6"></script>
+  <script src="/ui/qa/main.js?v=20260110_6" type="module"></script>
 </body>
 </html>

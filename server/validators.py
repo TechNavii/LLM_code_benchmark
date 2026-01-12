@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -21,26 +20,26 @@ TASK_PATTERN = re.compile(r"^[a-zA-Z0-9_]+$")
 
 
 class ValidatedRunRequest(BaseModel):
-    models: List[str] = Field(..., min_length=1)
-    tasks: Optional[List[str]] = Field(default=None)
+    models: list[str] = Field(..., min_length=1)
+    tasks: list[str] | None = Field(default=None)
     samples: int = Field(default=1, ge=1, le=10)
     temperature: float = Field(default=_DEFAULT_TEMPERATURE, ge=0.0, le=2.0)
     max_tokens: int = Field(default=_DEFAULT_MAX_TOKENS, ge=1)
-    provider: Optional[str] = Field(default=None, max_length=64)
+    provider: str | None = Field(default=None, max_length=64)
     include_tests: bool = False
     install_deps: bool = False
     allow_incomplete_diffs: bool = Field(default=_DEFAULT_ALLOW_INCOMPLETE_DIFFS)
     allow_diff_rewrite_fallback: bool = Field(default=_DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK)
-    response_text: Optional[str] = None
-    thinking_level: Optional[str] = Field(default=None, max_length=64)
+    response_text: str | None = None
+    thinking_level: str | None = Field(default=None, max_length=64)
     include_thinking_variants: bool = False
     sweep_thinking_levels: bool = False
 
-    model_allowlist: Optional[List[str]] = None
+    model_allowlist: list[str] | None = None
 
     @field_validator("models", mode="after")
     @classmethod
-    def validate_models(cls, models: List[str]) -> List[str]:
+    def validate_models(cls, models: list[str]) -> list[str]:
         for model in models:
             if not MODEL_PATTERN.match(model):
                 raise ValueError(f"Invalid model name format: {model}")
@@ -48,7 +47,7 @@ class ValidatedRunRequest(BaseModel):
 
     @field_validator("tasks", mode="after")
     @classmethod
-    def validate_tasks(cls, tasks: Optional[List[str]]) -> Optional[List[str]]:
+    def validate_tasks(cls, tasks: list[str] | None) -> list[str] | None:
         if tasks is None:
             return tasks
         for task in tasks:
@@ -58,7 +57,7 @@ class ValidatedRunRequest(BaseModel):
 
     @field_validator("provider", mode="after")
     @classmethod
-    def validate_provider(cls, provider: Optional[str]) -> Optional[str]:
+    def validate_provider(cls, provider: str | None) -> str | None:
         if provider is None:
             return None
         trimmed = provider.strip()
@@ -72,7 +71,7 @@ class ValidatedRunRequest(BaseModel):
 
     @field_validator("thinking_level", mode="after")
     @classmethod
-    def validate_thinking_level(cls, level: Optional[str]) -> Optional[str]:
+    def validate_thinking_level(cls, level: str | None) -> str | None:
         if level is None:
             return None
         trimmed = level.strip()
@@ -83,7 +82,7 @@ class ValidatedRunRequest(BaseModel):
         return trimmed
 
     @model_validator(mode="after")
-    def enforce_allowlist(self) -> "ValidatedRunRequest":
+    def enforce_allowlist(self) -> ValidatedRunRequest:
         if self.model_allowlist:
             disallowed = sorted(set(self.models) - set(self.model_allowlist))
             if disallowed:

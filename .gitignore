@@ -23,6 +23,15 @@ env/
 build/
 dist/
 *.egg-info/
+htmlcov/
+.coverage
+.coverage.*
+.coverage*
+coverage.xml
+junit.xml
+
+# Hypothesis
+.hypothesis/
 
 # Node / JavaScript
 node_modules/
@@ -45,6 +54,15 @@ target/
 runs/
 *.db
 *.sqlite
+docs/sbom/
+.benchmarks/
+.trivy-reports/
+.signatures/
+.fuzz-reports/
+
+# Local planning
+plans/
+progress.txt
 
 # IDE / editor
 .idea/
