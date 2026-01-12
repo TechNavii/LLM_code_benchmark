@@ -327,6 +327,109 @@ def test_lmstudio_endpoint_fails_when_base_url_empty(monkeypatch) -> None:
     assert "not configured" in response.json()["detail"]
 
 
+def test_switch_lmstudio_model_invokes_lms_cli(monkeypatch) -> None:
+    import sys
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    from server.api import create_app
+    from server.config import get_settings
+
+    get_settings.cache_clear()
+
+    router_module = sys.modules["server.routes.router"]
+
+    mock_settings = MagicMock()
+    mock_settings.lmstudio_base_url = "http://custom-lmstudio:7777/v1"
+    monkeypatch.setattr(router_module, "settings", mock_settings)
+
+    monkeypatch.setattr(router_module, "_resolve_lms_path", lambda: "/fake/lms")
+
+    calls: list[list[str]] = []
+
+    class FakeResult:
+        def __init__(self) -> None:
+            self.returncode = 0
+            self.stdout = ""
+            self.stderr = ""
+
+    def fake_run(args: list[str], *, capture_output: bool, text: bool, timeout: int) -> FakeResult:
+        assert capture_output is True
+        assert text is True
+        assert timeout > 0
+        calls.append(args)
+        return FakeResult()
+
+    monkeypatch.setattr(router_module.subprocess, "run", fake_run)
+
+    app = create_app()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/models/lmstudio/switch",
+        json={"model_id": "liquid/lfm2.5-1.2b"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["model_id"] == "liquid/lfm2.5-1.2b"
+
+    assert calls == [
+        [
+            "/fake/lms",
+            "unload",
+            "--all",
+            "--host",
+            "custom-lmstudio",
+            "--port",
+            "7777",
+        ],
+        [
+            "/fake/lms",
+            "load",
+            "liquid/lfm2.5-1.2b",
+            "--exact",
+            "-y",
+            "--host",
+            "custom-lmstudio",
+            "--port",
+            "7777",
+        ],
+    ]
+
+
+def test_switch_lmstudio_model_rejects_invalid_model_id(monkeypatch) -> None:
+    import sys
+    from unittest.mock import MagicMock
+
+    from fastapi.testclient import TestClient
+
+    from server.api import create_app
+    from server.config import get_settings
+
+    get_settings.cache_clear()
+
+    router_module = sys.modules["server.routes.router"]
+
+    mock_settings = MagicMock()
+    mock_settings.lmstudio_base_url = "http://custom-lmstudio:7777/v1"
+    monkeypatch.setattr(router_module, "settings", mock_settings)
+
+    monkeypatch.setattr(router_module, "_resolve_lms_path", lambda: "/fake/lms")
+
+    app = create_app()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/models/lmstudio/switch",
+        json={"model_id": "bad model"},
+    )
+
+    assert response.status_code == 400
+    assert "Invalid" in response.json()["detail"]
+
+
 # =============================================================================
 # Expert Questions LM Studio URL Configuration Tests
 # =============================================================================

@@ -3,9 +3,13 @@
 import asyncio
 import datetime as dt
 import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 import structlog
@@ -366,6 +370,108 @@ def list_lmstudio_models() -> dict[str, Any]:
         "base_url": base_url,
         "models": models,
     }
+
+
+_LMSTUDIO_MODEL_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/@:+-]*\Z")
+
+
+def _resolve_lms_path() -> str | None:
+    resolved = shutil.which("lms")
+    if resolved:
+        return resolved
+    fallback = Path.home() / ".lmstudio" / "bin" / "lms"
+    if fallback.exists():
+        return str(fallback)
+    return None
+
+
+def _lmstudio_cli_instance_args(base_url: str) -> list[str]:
+    trimmed = (base_url or "").strip()
+    if not trimmed:
+        return []
+    if "://" not in trimmed:
+        trimmed = f"http://{trimmed}"
+    parsed = urlparse(trimmed)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 1234
+    return ["--host", host, "--port", str(port)]
+
+
+def _truncate_cli_output(value: str, *, limit: int = 2000) -> str:
+    cleaned = (value or "").strip()
+    if len(cleaned) > limit:
+        return f"{cleaned[:limit]}..."
+    return cleaned
+
+
+class LMStudioModelSwitchRequest(BaseModel):
+    model_id: str
+
+
+class LMStudioModelSwitchResponse(BaseModel):
+    model_id: str
+    message: str
+
+
+@router.post("/models/lmstudio/switch", response_model=LMStudioModelSwitchResponse, tags=["models"])
+def switch_lmstudio_model(
+    request: LMStudioModelSwitchRequest,
+    _: None = Depends(require_api_token),
+) -> LMStudioModelSwitchResponse:
+    model_id = (request.model_id or "").strip()
+    if not model_id:
+        raise HTTPException(status_code=422, detail="model_id is required")
+    if _LMSTUDIO_MODEL_ID_PATTERN.fullmatch(model_id) is None:
+        raise HTTPException(status_code=400, detail="Invalid model_id format")
+
+    base_url = (settings.lmstudio_base_url or "").strip()
+    if not base_url:
+        raise HTTPException(status_code=500, detail="LM Studio base URL is not configured")
+
+    lms_path = _resolve_lms_path()
+    if not lms_path:
+        raise HTTPException(
+            status_code=501,
+            detail="LM Studio CLI 'lms' was not found. Install LM Studio or add 'lms' to PATH to enable model switching.",
+        )
+
+    instance_args = _lmstudio_cli_instance_args(base_url)
+
+    try:
+        unload = subprocess.run(
+            [lms_path, "unload", "--all", *instance_args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:  # pragma: no cover
+        raise HTTPException(status_code=504, detail="Timed out unloading LM Studio models") from exc
+
+    if unload.returncode != 0:
+        detail = _truncate_cli_output(unload.stderr or unload.stdout)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to unload LM Studio models: {detail or 'unknown error'}",
+        )
+
+    try:
+        load = subprocess.run(
+            [lms_path, "load", model_id, "--exact", "-y", *instance_args],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired as exc:  # pragma: no cover
+        raise HTTPException(status_code=504, detail=f"Timed out loading '{model_id}' in LM Studio") from exc
+
+    if load.returncode != 0:
+        detail = _truncate_cli_output(load.stderr or load.stdout)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Unable to load '{model_id}' in LM Studio: {detail or 'unknown error'}",
+        )
+
+    return LMStudioModelSwitchResponse(model_id=model_id, message=f"Loaded '{model_id}' in LM Studio")
 
 
 class RetryApiErrorsResponse(BaseModel):

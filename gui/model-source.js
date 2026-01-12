@@ -19,6 +19,42 @@
     let openrouterProviderBackup = providerInput?.value || '';
     let openrouterMaxTokensBackup = maxTokensInput?.value || '';
     let inFlight = null;
+    let activeLmStudioModel = '';
+
+    async function switchLmStudioModel(modelId) {
+      if (!modelId) return;
+
+      lmstudioModelSelect.disabled = true;
+      setLmStudioNote(`Loading '${modelId}' in LM Studio…`);
+
+      try {
+        const response = await fetch('/models/lmstudio/switch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model_id: modelId })
+        });
+
+        if (!response.ok) {
+          let detail = '';
+          try {
+            const payload = await response.json();
+            detail = payload?.detail || '';
+          } catch {
+            // ignore
+          }
+          throw new Error(detail || response.statusText || 'Unable to switch LM Studio model');
+        }
+
+        activeLmStudioModel = modelId;
+      } catch (error) {
+        setLmStudioNote(error?.message || 'Unable to switch LM Studio model.');
+        return;
+      } finally {
+        lmstudioModelSelect.disabled = false;
+      }
+
+      applyLmStudioModelSelection();
+    }
 
     function getSource() {
       return sourceSelect.value === 'lmstudio' ? 'lmstudio' : 'openrouter';
@@ -104,6 +140,7 @@
 
           lmstudioModelSelect.disabled = false;
           applyLmStudioModelSelection();
+          activeLmStudioModel = lmstudioModelSelect.value;
         })
         .catch((error) => {
           lmstudioModelSelect.innerHTML = '';
@@ -118,6 +155,20 @@
         });
 
       return inFlight;
+    }
+
+    async function handleLmStudioModelChange() {
+      const selected = lmstudioModelSelect.value;
+      applyLmStudioModelSelection();
+
+      if (getSource() !== 'lmstudio') return;
+      if (!selected) {
+        activeLmStudioModel = '';
+        return;
+      }
+
+      if (selected === activeLmStudioModel) return;
+      await switchLmStudioModel(selected);
     }
 
     function applyModelSourceUI() {
@@ -166,7 +217,7 @@
 
     sourceSelect.addEventListener('change', applyModelSourceUI);
     sourceSelect.addEventListener('input', applyModelSourceUI);
-    lmstudioModelSelect.addEventListener('change', applyLmStudioModelSelection);
+    lmstudioModelSelect.addEventListener('change', handleLmStudioModelChange);
     applyModelSourceUI();
   }
 
