@@ -68,6 +68,37 @@
         "title": "IncompleteAttemptsResponse",
         "type": "object"
       },
+      "LMStudioModelSwitchRequest": {
+        "properties": {
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id"
+        ],
+        "title": "LMStudioModelSwitchRequest",
+        "type": "object"
+      },
+      "LMStudioModelSwitchResponse": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "model_id": {
+            "title": "Model Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model_id",
+          "message"
+        ],
+        "title": "LMStudioModelSwitchResponse",
+        "type": "object"
+      },
       "QAApiErrorsInfoResponse": {
         "properties": {
           "api_error_count": {
@@ -856,6 +887,47 @@
           }
         },
         "summary": "List Lmstudio Models",
+        "tags": [
+          "models"
+        ]
+      }
+    },
+    "/models/lmstudio/switch": {
+      "post": {
+        "operationId": "switch_lmstudio_model_models_lmstudio_switch_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LMStudioModelSwitchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LMStudioModelSwitchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Switch Lmstudio Model",
         "tags": [
           "models"
         ]

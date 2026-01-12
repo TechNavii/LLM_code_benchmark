@@ -79,6 +79,16 @@ DEFAULT_TEMPERATURE=0.0
 
 Environment variables present in the shell always take precedence over `.env` values.
 
+### Optional: LM Studio (local models)
+
+To run local models via [LM Studio](https://lmstudio.ai/), start the LM Studio server (OpenAI-compatible API) and set:
+
+```bash
+LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
+```
+
+Model IDs use the `lmstudio/` prefix (example: `lmstudio/liquid/lfm2.5-1.2b`). In the dashboard, selecting a different LM Studio model will unload all currently loaded models and load the newly selected one (requires the LM Studio CLI `lms` on `PATH`). After runs complete, the harness will also attempt to unload LM Studio models to free memory.
+
 ---
 ## Launching the Benchmark Dashboard
 

@@ -19,9 +19,12 @@ By default the API listens on `http://127.0.0.1:8000`. The web UI is served at `
 
 ## Launching runs from the UI
 1. Open the dashboard at `/ui/`.
-2. Enter one or more model IDs (comma separated) and optionally task IDs.
-3. Submit the form – the backend executes the harness and returns the summary once complete.
-4. Review per-task status, token usage, and cost in the results table.
+2. Choose a model source:
+   - **OpenRouter**: enter one or more model IDs.
+   - **LM Studio**: select a model from the dropdown (switching models will unload the previous model and load the new one).
+3. Optionally enter task IDs.
+4. Submit the form – the backend executes the harness and returns the summary once complete.
+5. Review per-task status, token usage, and cost in the results table.
 
 ## REST Endpoints
 - `POST /runs`: launch a run (synchronous for now) with JSON body `{ models: [...], tasks?: [...], samples?: int, ... }`.
