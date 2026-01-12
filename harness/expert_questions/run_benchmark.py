@@ -374,24 +374,14 @@ def _call_lmstudio(
     if model not in _LMSTUDIO_VALIDATED_MODELS:
         models_snapshot = _lmstudio_get_models()
         if models_snapshot is not None:
-            requested_state = None
-            loaded_models: list[str] = []
-            for entry in models_snapshot:
-                model_id = entry.get("id")
-                state = entry.get("state")
-                if state == "loaded" and isinstance(model_id, str):
-                    loaded_models.append(model_id)
-                if model_id == model:
-                    requested_state = state
-
-            if requested_state != "loaded":
-                if not loaded_models:
-                    raise ProviderError(f"LM Studio has no loaded model. Load '{model}' in LM Studio and retry.")
+            available = {
+                model_id for entry in models_snapshot if isinstance((model_id := entry.get("id")), str) and model_id
+            }
+            if model not in available:
                 raise ProviderError(
-                    f"LM Studio currently has '{loaded_models[0]}' loaded, but this run requested '{model}'. "
-                    "Load the requested model in LM Studio and retry."
+                    f"LM Studio model '{model}' was not found on the configured server. "
+                    "Ensure the model is downloaded/available in LM Studio and the base URL is correct."
                 )
-
             _LMSTUDIO_VALIDATED_MODELS.add(model)
 
     base_url = SETTINGS.lmstudio_base_url.rstrip("/")

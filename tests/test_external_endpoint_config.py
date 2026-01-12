@@ -369,6 +369,54 @@ def test_expert_questions_lmstudio_call_uses_configured_base_url(monkeypatch) ->
     assert result[0] == "test answer"
 
 
+def test_expert_questions_lmstudio_allows_not_loaded_state(monkeypatch) -> None:
+    """LM Studio models should be callable even when the native API reports them as not-loaded."""
+    from harness.expert_questions import run_benchmark
+
+    assert run_benchmark.requests is not None
+
+    run_benchmark._LMSTUDIO_VALIDATED_MODELS.clear()
+
+    monkeypatch.setattr(run_benchmark.SETTINGS, "lmstudio_base_url", "http://custom-expert:8888/v1")
+    monkeypatch.setattr(
+        run_benchmark,
+        "_lmstudio_get_models",
+        lambda: [{"id": "liquid/lfm2.5-1.2b", "state": "not-loaded"}],
+    )
+
+    seen: dict[str, Any] = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+        headers: dict[str, str] = {}
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "model": "liquid/lfm2.5-1.2b",
+                "choices": [{"message": {"content": "test answer"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+            }
+
+    def fake_post(url: str, *, headers: dict[str, str], json: dict[str, Any], timeout: int) -> FakeResponse:
+        seen["url"] = url
+        seen["json"] = json
+        return FakeResponse()
+
+    monkeypatch.setattr(run_benchmark.requests, "post", fake_post)
+
+    content, _, _ = run_benchmark._call_completion(
+        "test",
+        model="lmstudio/liquid/lfm2.5-1.2b",
+        temperature=0.5,
+        max_tokens=100,
+    )
+
+    assert "custom-expert:8888" in seen["url"]
+    assert seen["json"]["model"] == "liquid/lfm2.5-1.2b"
+    assert content == "test answer"
+
+
 def test_expert_questions_openrouter_call_uses_configured_base_url(monkeypatch) -> None:
     """Expert questions OpenRouter calls should use configured base URL."""
     from harness.expert_questions import run_benchmark
