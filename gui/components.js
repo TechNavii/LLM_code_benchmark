@@ -17,32 +17,32 @@ export function showToast(message, type = 'info', duration = 4000) {
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
   toast.setAttribute('role', 'status');
-  
+
   const icon = document.createElement('span');
   icon.className = 'toast-icon';
   icon.textContent = type === 'success' ? '✓' : type === 'error' ? '✕' : type === 'warning' ? '⚠' : 'ℹ';
-  
+
   const text = document.createElement('span');
   text.className = 'toast-message';
   text.textContent = message;
-  
+
   const closeBtn = document.createElement('button');
   closeBtn.className = 'toast-close';
   closeBtn.textContent = '×';
   closeBtn.setAttribute('aria-label', 'Close notification');
   closeBtn.onclick = () => dismissToast(toast);
-  
+
   toast.appendChild(icon);
   toast.appendChild(text);
   toast.appendChild(closeBtn);
   toastContainer.appendChild(toast);
-  
+
   requestAnimationFrame(() => toast.classList.add('toast-visible'));
-  
+
   if (duration > 0) {
     setTimeout(() => dismissToast(toast), duration);
   }
-  
+
   return toast;
 }
 
@@ -104,22 +104,22 @@ export function createProgressBar(container) {
   wrapper.setAttribute('aria-valuemin', '0');
   wrapper.setAttribute('aria-valuemax', '100');
   wrapper.setAttribute('aria-valuenow', '0');
-  
+
   const bar = document.createElement('div');
   bar.className = 'progress-bar';
-  
+
   const fill = document.createElement('div');
   fill.className = 'progress-fill';
-  
+
   const text = document.createElement('span');
   text.className = 'progress-text';
   text.textContent = '0%';
-  
+
   bar.appendChild(fill);
   wrapper.appendChild(bar);
   wrapper.appendChild(text);
   container.appendChild(wrapper);
-  
+
   return {
     element: wrapper,
     update(current, total, label = null) {
@@ -146,34 +146,34 @@ export function makeSortable(table, options = {}) {
   const headers = table.querySelectorAll('thead th');
   const tbody = table.querySelector('tbody');
   let currentSort = { column: null, direction: 'asc' };
-  
+
   headers.forEach((header, index) => {
     if (header.classList.contains('no-sort') || header.classList.contains('actions-header')) return;
-    
+
     header.classList.add('sortable');
     header.setAttribute('role', 'columnheader');
     header.setAttribute('aria-sort', 'none');
     header.tabIndex = 0;
-    
+
     const sortIcon = document.createElement('span');
     sortIcon.className = 'sort-icon';
     sortIcon.innerHTML = '⇅';
     header.appendChild(sortIcon);
-    
+
     const handleSort = () => {
       const direction = currentSort.column === index && currentSort.direction === 'asc' ? 'desc' : 'asc';
       sortTable(tbody, index, direction, options.comparators?.[index]);
-      
+
       headers.forEach(h => {
         h.setAttribute('aria-sort', 'none');
         h.querySelector('.sort-icon')?.classList.remove('asc', 'desc');
       });
-      
+
       header.setAttribute('aria-sort', direction === 'asc' ? 'ascending' : 'descending');
       sortIcon.classList.add(direction);
       currentSort = { column: index, direction };
     };
-    
+
     header.addEventListener('click', handleSort);
     header.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
@@ -186,18 +186,18 @@ export function makeSortable(table, options = {}) {
 
 function sortTable(tbody, columnIndex, direction, comparator) {
   const rows = Array.from(tbody.querySelectorAll('tr'));
-  
+
   rows.sort((a, b) => {
     const aCell = a.cells[columnIndex];
     const bCell = b.cells[columnIndex];
     // Use data-sort-value if available, otherwise use text content
-    const aVal = aCell?.dataset?.sortValue ?? aCell?.textContent?.trim() || '';
-    const bVal = bCell?.dataset?.sortValue ?? bCell?.textContent?.trim() || '';
-    
+    const aVal = (aCell?.dataset?.sortValue ?? aCell?.textContent?.trim()) || '';
+    const bVal = (bCell?.dataset?.sortValue ?? bCell?.textContent?.trim()) || '';
+
     if (comparator) {
       return comparator(aVal, bVal, direction);
     }
-    
+
     // Check if values look like ISO timestamps (YYYY-MM-DD or starts with run_)
     const isTimestamp = /^\d{4}-\d{2}-\d{2}|^run_\d{8}T/.test(aVal) && /^\d{4}-\d{2}-\d{2}|^run_\d{8}T/.test(bVal);
     if (isTimestamp) {
@@ -205,20 +205,20 @@ function sortTable(tbody, columnIndex, direction, comparator) {
       const result = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
       return direction === 'asc' ? result : -result;
     }
-    
+
     // Try numeric comparison
     const aNum = parseFloat(aVal.replace(/[$,%]/g, ''));
     const bNum = parseFloat(bVal.replace(/[$,%]/g, ''));
-    
+
     if (!isNaN(aNum) && !isNaN(bNum)) {
       return direction === 'asc' ? aNum - bNum : bNum - aNum;
     }
-    
+
     // Fall back to string comparison
     const result = aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' });
     return direction === 'asc' ? result : -result;
   });
-  
+
   rows.forEach(row => tbody.appendChild(row));
 }
 
@@ -229,11 +229,11 @@ function sortTable(tbody, columnIndex, direction, comparator) {
 export function createFilterBar(container, options = {}) {
   const wrapper = document.createElement('div');
   wrapper.className = 'filter-bar';
-  
+
   // Search input
   const searchGroup = document.createElement('div');
   searchGroup.className = 'filter-group';
-  
+
   const searchInput = document.createElement('input');
   searchInput.type = 'text';
   searchInput.placeholder = options.searchPlaceholder || 'Search...';
@@ -241,13 +241,13 @@ export function createFilterBar(container, options = {}) {
   searchInput.setAttribute('aria-label', 'Search');
   searchGroup.appendChild(searchInput);
   wrapper.appendChild(searchGroup);
-  
+
   // Status filter (optional)
   let statusSelect = null;
   if (options.showStatusFilter !== false) {
     const statusGroup = document.createElement('div');
     statusGroup.className = 'filter-group';
-    
+
     statusSelect = document.createElement('select');
     statusSelect.className = 'filter-select';
     statusSelect.setAttribute('aria-label', 'Filter by status');
@@ -261,13 +261,13 @@ export function createFilterBar(container, options = {}) {
     statusGroup.appendChild(statusSelect);
     wrapper.appendChild(statusGroup);
   }
-  
+
   // Language filter (for code tasks)
   let languageSelect = null;
   if (options.showLanguageFilter) {
     const langGroup = document.createElement('div');
     langGroup.className = 'filter-group';
-    
+
     languageSelect = document.createElement('select');
     languageSelect.className = 'filter-select';
     languageSelect.setAttribute('aria-label', 'Filter by language');
@@ -283,7 +283,7 @@ export function createFilterBar(container, options = {}) {
     langGroup.appendChild(languageSelect);
     wrapper.appendChild(langGroup);
   }
-  
+
   // Clear button
   const clearBtn = document.createElement('button');
   clearBtn.type = 'button';
@@ -291,9 +291,9 @@ export function createFilterBar(container, options = {}) {
   clearBtn.textContent = 'Clear Filters';
   clearBtn.setAttribute('aria-label', 'Clear all filters');
   wrapper.appendChild(clearBtn);
-  
+
   container.insertBefore(wrapper, container.firstChild);
-  
+
   return {
     element: wrapper,
     searchInput,
@@ -338,41 +338,41 @@ export function createPagination(container, options = {}) {
   wrapper.className = 'pagination';
   wrapper.setAttribute('role', 'navigation');
   wrapper.setAttribute('aria-label', 'Pagination');
-  
+
   const info = document.createElement('span');
   info.className = 'pagination-info';
-  
+
   const controls = document.createElement('div');
   controls.className = 'pagination-controls';
-  
+
   const prevBtn = document.createElement('button');
   prevBtn.type = 'button';
   prevBtn.className = 'ghost pagination-btn';
   prevBtn.textContent = '← Previous';
   prevBtn.setAttribute('aria-label', 'Previous page');
-  
+
   const pageInfo = document.createElement('span');
   pageInfo.className = 'pagination-page';
-  
+
   const nextBtn = document.createElement('button');
   nextBtn.type = 'button';
   nextBtn.className = 'ghost pagination-btn';
   nextBtn.textContent = 'Next →';
   nextBtn.setAttribute('aria-label', 'Next page');
-  
+
   controls.appendChild(prevBtn);
   controls.appendChild(pageInfo);
   controls.appendChild(nextBtn);
-  
+
   wrapper.appendChild(info);
   wrapper.appendChild(controls);
   container.appendChild(wrapper);
-  
+
   let currentPage = 1;
   let totalPages = 1;
   let totalItems = 0;
   const pageSize = options.pageSize || 20;
-  
+
   return {
     element: wrapper,
     pageSize,
@@ -380,10 +380,10 @@ export function createPagination(container, options = {}) {
       totalItems = total;
       totalPages = Math.ceil(total / pageSize) || 1;
       currentPage = Math.min(Math.max(1, page), totalPages);
-      
+
       info.textContent = `Showing ${Math.min((currentPage - 1) * pageSize + 1, total)}-${Math.min(currentPage * pageSize, total)} of ${total}`;
       pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
-      
+
       prevBtn.disabled = currentPage <= 1;
       nextBtn.disabled = currentPage >= totalPages;
     },
@@ -418,7 +418,7 @@ export function createCopyButton(text, label = 'Copy') {
   btn.className = 'ghost copy-btn';
   btn.innerHTML = `<span class="copy-icon">📋</span> ${label}`;
   btn.setAttribute('aria-label', `Copy ${label}`);
-  
+
   btn.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -433,7 +433,7 @@ export function createCopyButton(text, label = 'Copy') {
       showToast('Failed to copy', 'error');
     }
   });
-  
+
   return btn;
 }
 
@@ -446,7 +446,7 @@ export function exportToCSV(data, filename) {
     showToast('No data to export', 'warning');
     return;
   }
-  
+
   const headers = Object.keys(data[0]);
   const csvContent = [
     headers.join(','),
@@ -459,7 +459,7 @@ export function exportToCSV(data, filename) {
         : str;
     }).join(','))
   ].join('\n');
-  
+
   downloadFile(csvContent, filename, 'text/csv');
   showToast(`Exported ${data.length} rows to ${filename}`, 'success');
 }
@@ -469,7 +469,7 @@ export function exportToJSON(data, filename) {
     showToast('No data to export', 'warning');
     return;
   }
-  
+
   const jsonContent = JSON.stringify(data, null, 2);
   downloadFile(jsonContent, filename, 'application/json');
   showToast(`Exported ${data.length} items to ${filename}`, 'success');
@@ -491,7 +491,7 @@ function downloadFile(content, filename, mimeType) {
 // Loading Skeleton Component
 // ============================================================================
 
-export function createSkeleton(rows = 5, cols = 6) {
+function createSkeleton(rows = 5, cols = 6) {
   const fragment = document.createDocumentFragment();
   for (let i = 0; i < rows; i++) {
     const row = document.createElement('tr');
@@ -523,22 +523,22 @@ export function registerShortcut(key, callback, description) {
   shortcuts.set(key.toLowerCase(), { callback, description });
 }
 
-export function showShortcutsHelp() {
+function showShortcutsHelp() {
   const modal = document.createElement('div');
   modal.className = 'shortcuts-modal';
   modal.setAttribute('role', 'dialog');
   modal.setAttribute('aria-label', 'Keyboard shortcuts');
-  
+
   const content = document.createElement('div');
   content.className = 'shortcuts-content';
-  
+
   const title = document.createElement('h3');
   title.textContent = 'Keyboard Shortcuts';
   content.appendChild(title);
-  
+
   const list = document.createElement('dl');
   list.className = 'shortcuts-list';
-  
+
   shortcuts.forEach((value, key) => {
     const dt = document.createElement('dt');
     dt.innerHTML = `<kbd>${key}</kbd>`;
@@ -547,20 +547,20 @@ export function showShortcutsHelp() {
     list.appendChild(dt);
     list.appendChild(dd);
   });
-  
+
   content.appendChild(list);
-  
+
   const closeBtn = document.createElement('button');
   closeBtn.className = 'ghost';
   closeBtn.textContent = 'Close (Esc)';
   closeBtn.onclick = () => modal.remove();
   content.appendChild(closeBtn);
-  
+
   modal.appendChild(content);
   modal.addEventListener('click', (e) => {
     if (e.target === modal) modal.remove();
   });
-  
+
   document.body.appendChild(modal);
   closeBtn.focus();
 }
@@ -568,14 +568,14 @@ export function showShortcutsHelp() {
 document.addEventListener('keydown', (e) => {
   // Don't trigger shortcuts when typing in inputs
   if (e.target.matches('input, textarea, select')) return;
-  
+
   const key = e.key.toLowerCase();
   if (key === '?' && e.shiftKey) {
     e.preventDefault();
     showShortcutsHelp();
     return;
   }
-  
+
   const shortcut = shortcuts.get(key);
   if (shortcut) {
     e.preventDefault();
@@ -632,16 +632,6 @@ export const LANGUAGE_LABELS = {
   html: 'HTML',
   rust: 'RS',
   default: '??',
-};
-
-export const LANGUAGE_COLORS = {
-  javascript: '#fcd34d',
-  python: '#fde68a',
-  go: '#a7f3d0',
-  cpp: '#bfdbfe',
-  html: '#fca5a5',
-  rust: '#fbbf24',
-  default: '#cbd5e1',
 };
 
 export function renderTaskName(taskId, taskLanguageMap = {}) {

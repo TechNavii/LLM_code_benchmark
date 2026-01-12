@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class HarnessSettings(BaseSettings):
-    openrouter_api_key: str = Field(validation_alias="OPENROUTER_API_KEY")
+    openrouter_api_key: str | None = Field(default=None, validation_alias="OPENROUTER_API_KEY")
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     default_model: str = "openrouter/google/gemini-pro"
     default_temperature: float = 0.5
     default_max_tokens: int = 200000

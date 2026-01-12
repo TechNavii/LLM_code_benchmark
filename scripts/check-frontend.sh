@@ -15,7 +15,11 @@ VIOLATIONS=0
 
 # Check 1: Detect trailing whitespace in JS/CSS files (warning only for brownfield)
 echo "  Checking for trailing whitespace..."
-TRAILING_WS_COUNT=$(grep -r '[[:space:]]$' gui/ --include="*.js" --include="*.css" --exclude-dir=node_modules 2>/dev/null | wc -l | tr -d ' ')
+TRAILING_WS_COUNT=$(
+    { grep -r '[[:space:]]$' gui/ --include="*.js" --include="*.css" --exclude-dir=node_modules 2>/dev/null || true; } \
+        | wc -l \
+        | tr -d ' '
+)
 if [ "$TRAILING_WS_COUNT" -gt 0 ]; then
     echo "⚠️  Found ${TRAILING_WS_COUNT} lines with trailing whitespace (warning only)"
 fi

@@ -19,7 +19,12 @@ import {
   renderTaskName,
   getTaskLanguage,
   LANGUAGE_LABELS
-} from './components.js';
+} from './components.js?v=20260110_6';
+
+const DEBUG = new URLSearchParams(window.location.search).has('debug');
+const debugLog = (...args) => {
+  if (DEBUG) console.log(...args);
+};
 
 // ============================================================================
 // DOM Elements
@@ -42,7 +47,9 @@ const maxTokensInput = runForm?.querySelector('#max-tokens-input');
 const responseTextInput = runForm?.querySelector('#response-text');
 const allowIncompleteDiffsInput = runForm?.querySelector('#allow-incomplete-diffs');
 const allowDiffRewriteInput = runForm?.querySelector('#allow-diff-rewrite');
+const modelInput = runForm?.querySelector('#model-input');
 const providerInput = runForm?.querySelector('#provider-input');
+const modelSourceSelect = runForm?.querySelector('#model-source-select');
 const thinkingLevelInput = runForm?.querySelector('#thinking-level-input');
 const includeThinkingVariantsInput = runForm?.querySelector('#include-thinking-variants');
 const sweepThinkingLevelsInput = runForm?.querySelector('#sweep-thinking-levels');
@@ -77,6 +84,10 @@ let allLeaderboardData = [];
 // ============================================================================
 
 runForm?.addEventListener('submit', startRun);
+runButton?.addEventListener('click', (event) => {
+  if (runButton?.type === 'submit') return;
+  startRun(event);
+});
 refreshLeaderboard();
 refreshHistory();
 resetResultsLayout();
@@ -127,19 +138,19 @@ function setupHistorySorting() {
     console.warn('History table not found for sorting setup');
     return;
   }
-  
+
   const headers = historyTable.querySelectorAll('thead th');
   if (!headers.length) {
     console.warn('No headers found in history table');
     return;
   }
-  
+
   headers.forEach((header, index) => {
     if (header.classList.contains('no-sort') || header.classList.contains('actions-header')) return;
-    
+
     header.classList.add('sortable');
     header.style.cursor = 'pointer';
-    
+
     // Only add sort icon if not already present
     if (!header.querySelector('.sort-icon')) {
       const sortIcon = document.createElement('span');
@@ -147,7 +158,7 @@ function setupHistorySorting() {
       sortIcon.textContent = ' ⇅';
       header.appendChild(sortIcon);
     }
-    
+
     header.addEventListener('click', () => {
       // Toggle direction if same column, otherwise default to desc for new column
       if (historySortColumn === index) {
@@ -156,7 +167,7 @@ function setupHistorySorting() {
         historySortColumn = index;
         historySortDirection = 'desc';
       }
-      
+
       // Update header styles - mark active column
       headers.forEach(h => {
         const icon = h.querySelector('.sort-icon');
@@ -170,10 +181,10 @@ function setupHistorySorting() {
         activeIcon.classList.add(historySortDirection);
         activeIcon.textContent = historySortDirection === 'asc' ? ' ↑' : ' ↓';
       }
-      
+
       // Sort the data
       sortHistoryData(index, historySortDirection);
-      
+
       // Re-render from page 1
       if (historyPagination) {
         historyPagination.update(historyData.length, 1);
@@ -181,45 +192,45 @@ function setupHistorySorting() {
       renderHistoryPage(1, 0);
     });
   });
-  
-  console.log('History table sorting initialized with', headers.length, 'columns');
+
+  debugLog('History table sorting initialized with', headers.length, 'columns');
 }
 
 function sortHistoryData(columnIndex, direction) {
   // Map column index to data field name
   const sortKeys = ['run_id', 'timestamp_utc', 'model_id', 'accuracy', 'total_cost_usd', 'total_duration_seconds', 'error_count'];
   const key = sortKeys[columnIndex];
-  
+
   if (!key) {
     console.warn('No sort key for column index:', columnIndex);
     return;
   }
-  
+
   if (!historyData || !historyData.length) {
     console.warn('No history data to sort');
     return;
   }
-  
-  console.log('Sorting history by', key, direction);
-  
+
+  debugLog('Sorting history by', key, direction);
+
   historyData.sort((a, b) => {
     let aVal = a[key];
     let bVal = b[key];
-    
+
     // Handle null/undefined - put them at the end
     if (aVal == null && bVal == null) return 0;
     if (aVal == null) return 1;
     if (bVal == null) return -1;
-    
+
     // Numeric comparison for numbers
     if (typeof aVal === 'number' && typeof bVal === 'number') {
       return direction === 'asc' ? aVal - bVal : bVal - aVal;
     }
-    
+
     // String comparison (works for ISO timestamps too)
     aVal = String(aVal);
     bVal = String(bVal);
-    
+
     if (direction === 'asc') {
       return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
     } else {
@@ -275,10 +286,14 @@ exportHistoryCsvBtn?.addEventListener('click', () => {
 
 // Model capability check debounce
 let capabilityTimer = null;
-const modelInput = runForm?.querySelector('#model-input');
 modelInput?.addEventListener('input', () => {
   if (capabilityTimer) clearTimeout(capabilityTimer);
   capabilityTimer = setTimeout(checkModelCapabilities, 600);
+});
+
+modelSourceSelect?.addEventListener('change', () => {
+  if (capabilityTimer) clearTimeout(capabilityTimer);
+  capabilityTimer = setTimeout(checkModelCapabilities, 0);
 });
 
 // ============================================================================
@@ -311,21 +326,21 @@ function applyResultsFilter(filters) {
     const taskId = row.dataset.task || '';
     const status = row.dataset.status || '';
     const language = getTaskLanguage(taskId, TASK_LANGUAGE);
-    
+
     let visible = true;
-    
+
     if (filters.search && !taskId.toLowerCase().includes(filters.search)) {
       visible = false;
     }
-    
+
     if (filters.status && status !== filters.status) {
       visible = false;
     }
-    
+
     if (filters.language && language !== filters.language) {
       visible = false;
     }
-    
+
     row.hidden = !visible;
   });
 }
@@ -338,13 +353,13 @@ function applyLeaderboardFilter(filters) {
   const rows = leaderboardBody?.querySelectorAll('tr') || [];
   rows.forEach(row => {
     const modelId = row.dataset.model || row.cells[0]?.textContent || '';
-    
+
     let visible = true;
-    
+
     if (filters.search && !modelId.toLowerCase().includes(filters.search)) {
       visible = false;
     }
-    
+
     row.hidden = !visible;
   });
 }
@@ -456,7 +471,7 @@ function abortCurrentSocket() {
 // ============================================================================
 
 async function startRun(event) {
-  event.preventDefault();
+  event?.preventDefault?.();
   const models = getInputArray('#model-input');
   if (models.length === 0) {
     renderStatus('Provide at least one model ID', 'error');
@@ -471,7 +486,7 @@ async function startRun(event) {
     include_tests: runForm.querySelector('#include-tests').checked,
     install_deps: runForm.querySelector('#install-deps').checked,
   };
-  
+
   if (temperatureInput) {
     const value = Number(temperatureInput.value);
     if (!Number.isNaN(value)) payload.temperature = value;
@@ -480,21 +495,21 @@ async function startRun(event) {
     const value = parseInt(maxTokensInput.value, 10);
     if (!Number.isNaN(value) && value > 0) payload.max_tokens = value;
   }
-  
+
   const providerValue = providerInput?.value.trim();
   if (providerValue) payload.provider = providerValue;
-  
+
   const thinkingValue = thinkingLevelInput?.value.trim();
   if (thinkingValue) payload.thinking_level = thinkingValue;
-  
+
   if (includeThinkingVariantsInput) payload.include_thinking_variants = includeThinkingVariantsInput.checked;
   if (sweepThinkingLevelsInput) payload.sweep_thinking_levels = !!sweepThinkingLevelsInput.checked;
-  
+
   if (responseTextInput) {
     const responseText = responseTextInput.value.trim();
     if (responseText) payload.response_text = responseText;
   }
-  
+
   if (allowIncompleteDiffsInput) payload.allow_incomplete_diffs = allowIncompleteDiffsInput.checked;
   if (allowDiffRewriteInput) payload.allow_diff_rewrite_fallback = allowDiffRewriteInput.checked;
   if (tasks.length) payload.tasks = tasks;
@@ -549,7 +564,7 @@ function listenToRun(runId) {
       console.error('Failed to parse WebSocket message', e);
       return;
     }
-    
+
     switch (data.type) {
       case 'init':
         setupRunView(data.metadata, runId);
@@ -613,10 +628,10 @@ function setupRunView(metadata, runId) {
   currentRun.tasks = tasks;
   currentRun.totalTasks = tasks.length * (metadata.samples || 1);
   currentRun.completedTasks = 0;
-  
+
   runIdSpan.textContent = runId;
   aggregateMetrics.innerHTML = '';
-  
+
   const metrics = [
     `Models: ${models.join(', ') || '—'}`,
     `Provider: ${provider || 'auto'}`,
@@ -634,7 +649,7 @@ function setupRunView(metadata, runId) {
   resultsBody.innerHTML = '';
   currentRun.rows.clear();
   allResultsData = [];
-  
+
   // Show and reset progress bar
   progressBar?.show();
   progressBar?.reset();
@@ -646,10 +661,10 @@ function updateAttemptRow(event) {
   const levelKey = event.thinking_level_applied || event.thinking_level_requested || 'base';
   const rowKey = `${taskId}::${levelKey}`;
   const language = getTaskLanguage(taskId, TASK_LANGUAGE);
-  
+
   // Store for export
   allResultsData.push(event);
-  
+
   let row = currentRun.rows.get(rowKey);
   if (!row) {
     row = document.createElement('tr');
@@ -659,7 +674,7 @@ function updateAttemptRow(event) {
     row.dataset.levelOrder = String(levelOrder(levelKey));
     row.dataset.status = status?.toLowerCase() || '';
     row.dataset.language = language;
-    
+
     const levelLabel = formatThinkingLevel(levelKey);
     row.innerHTML = `
       <td>${renderTaskName(taskId, TASK_LANGUAGE)}</td>
@@ -671,7 +686,7 @@ function updateAttemptRow(event) {
       <td>-</td>
       <td></td>
     `;
-    
+
     // Insert in order: task asc, then level order
     const children = Array.from(resultsBody.children);
     let inserted = false;
@@ -690,7 +705,7 @@ function updateAttemptRow(event) {
     if (!inserted) resultsBody.appendChild(row);
     currentRun.rows.set(rowKey, row);
   }
-  
+
   const cells = row.children;
   row.dataset.status = status?.toLowerCase() || '';
   applyStatus(cells[2], status);
@@ -732,7 +747,7 @@ function renderRun(summary) {
 
   resultsBody.innerHTML = '';
   allResultsData = summary.attempts || [];
-  
+
   const attempts = Array.isArray(summary.attempts) ? summary.attempts.slice() : [];
   attempts.sort((a, b) => {
     const ta = a.task_id || '';
@@ -743,7 +758,7 @@ function renderRun(summary) {
     const lb = levelOrder(b.thinking_level_applied || b.thinking_level_requested || 'base');
     return la - lb;
   });
-  
+
   attempts.forEach((attempt, index) => {
     const usage = attempt.usage || {};
     const prompt = usage.prompt_tokens ?? usage.input_tokens;
@@ -752,14 +767,14 @@ function renderRun(summary) {
     const duration = attempt.duration_seconds != null ? Number(attempt.duration_seconds).toFixed(2) : '-';
     const levelLabel = formatThinkingLevel(attempt.thinking_level_applied || attempt.thinking_level_requested || 'base');
     const language = getTaskLanguage(attempt.task_id, TASK_LANGUAGE);
-    
+
     const row = document.createElement('tr');
     row.classList.add('fade-in');
     row.style.animationDelay = `${index * 30}ms`;
     row.dataset.task = attempt.task_id;
     row.dataset.status = attempt.status?.toLowerCase() || '';
     row.dataset.language = language;
-    
+
     row.innerHTML = `
       <td>${renderTaskName(attempt.task_id, TASK_LANGUAGE)}</td>
       <td>${levelLabel}</td>
@@ -773,7 +788,7 @@ function renderRun(summary) {
     applyStatus(row.querySelector('.status-cell'), attempt.status);
     resultsBody.appendChild(row);
   });
-  
+
   // Show filter bar
   resultsFilter?.element && (resultsFilter.element.hidden = false);
 }
@@ -793,12 +808,12 @@ function renderStatus(message, level) {
 async function refreshLeaderboard() {
   if (!leaderboardBody) return;
   showTableSkeleton(leaderboardBody, 5, 7);
-  
+
   try {
     const response = await fetch('/leaderboard');
     if (!response.ok) throw new Error(response.statusText);
     const data = await response.json();
-    
+
     leaderboardBody.innerHTML = '';
     allLeaderboardData = data.models || [];
     data.models.forEach((model) => {
@@ -810,7 +825,7 @@ async function refreshLeaderboard() {
       const bestDuration = model.duration_at_best != null ? Number(model.duration_at_best).toFixed(2) : '-';
       const rawLevel = model.thinking_level || 'base';
       const levelLabel = formatThinkingLevel(rawLevel);
-      
+
       row.innerHTML = `
         <td class="breakable">${model.model_id}</td>
         <td>${accuracyText}</td>
@@ -834,7 +849,7 @@ async function refreshLeaderboard() {
 leaderboardBody?.addEventListener('click', async (event) => {
   const target = event.target;
   if (!(target instanceof HTMLButtonElement)) return;
-  
+
   if (target.dataset.action === 'copy-model') {
     const modelId = target.dataset.model;
     if (!modelId) return;
@@ -875,6 +890,10 @@ leaderboardBody?.addEventListener('click', async (event) => {
 // ============================================================================
 
 async function checkModelCapabilities() {
+  if (modelSourceSelect?.value === 'lmstudio') {
+    if (modelCapabilitiesNote) modelCapabilitiesNote.textContent = '';
+    return;
+  }
   const models = getInputArray('#model-input');
   if (!models.length) {
     if (modelCapabilitiesNote) modelCapabilitiesNote.textContent = '';
@@ -882,7 +901,7 @@ async function checkModelCapabilities() {
   }
   const uniqueModels = [...new Set(models)].slice(0, 5);
   modelCapabilitiesNote.textContent = 'Checking model capabilities…';
-  
+
   try {
     const results = await Promise.all(uniqueModels.map(async (model) => {
       try {
@@ -925,13 +944,13 @@ async function checkModelCapabilities() {
 async function refreshHistory() {
   if (!historyBody) return;
   showTableSkeleton(historyBody, 5, 8);
-  
+
   try {
     const response = await fetch('/runs?limit=200');
     if (!response.ok) throw new Error(response.statusText);
     const data = await response.json();
     allHistoryData = data.runs || [];
-    
+
     historyPagination?.update(allHistoryData.length, 1);
     renderHistoryPage(1, 0);
   } catch (error) {
@@ -943,15 +962,15 @@ async function refreshHistory() {
 function renderHistoryPage(page, offset) {
   if (!historyBody) return;
   historyBody.innerHTML = '';
-  
+
   const pageSize = historyPagination?.pageSize || 20;
   const pageData = allHistoryData.slice(offset, offset + pageSize);
-  
+
   if (!pageData.length) {
     historyBody.innerHTML = '<tr><td colspan="7" class="empty-state">No runs yet</td></tr>';
     return;
   }
-  
+
   pageData.forEach((run, index) => {
     const row = document.createElement('tr');
     row.classList.add('fade-in');
@@ -961,10 +980,10 @@ function renderHistoryPage(page, offset) {
     const runHref = buildRunDetailHref(run.run_id);
     const errorCount = run.error_count ?? 0;
     const errorClass = errorCount > 0 ? 'status-fail' : '';
-    
+
     const timestampDisplay = run.timestamp_utc ? formatTimestamp(run.timestamp_utc) : '-';
     const timestampSort = run.timestamp_utc || '';
-    
+
     row.innerHTML = `
       <td class="breakable"><a href="${runHref}" target="_blank" rel="noopener noreferrer" title="Open run ${run.run_id}">${displayRunId}</a></td>
       <td data-sort-value="${timestampSort}">${timestampDisplay}</td>
@@ -977,7 +996,7 @@ function renderHistoryPage(page, offset) {
     `;
     historyBody.appendChild(row);
   });
-  
+
   // Check each run for incomplete attempts and update actions cell
   checkRunsForIncomplete(pageData);
 }
@@ -987,14 +1006,14 @@ async function checkRunsForIncomplete(runs) {
   const checks = runs.map(async (run) => {
     const cell = document.querySelector(`.actions-cell[data-run-id="${run.run_id}"]`);
     if (!cell) return;
-    
+
     try {
       const response = await fetch(`/runs/${run.run_id}/incomplete`);
       if (!response.ok) {
         cell.textContent = '-';
         return;
       }
-      
+
       const data = await response.json();
       if (data.incomplete_count > 0) {
         cell.innerHTML = `<button class="resume-btn" onclick="resumeRun('${run.run_id}', ${data.incomplete_count})" title="Resume ${data.incomplete_count} incomplete attempt(s)">Resume (${data.incomplete_count})</button>`;
@@ -1005,7 +1024,7 @@ async function checkRunsForIncomplete(runs) {
       cell.textContent = '-';
     }
   });
-  
+
   await Promise.all(checks);
 }
 
@@ -1013,33 +1032,33 @@ async function resumeRun(runId, incompleteCount) {
   if (!confirm(`Resume ${incompleteCount} incomplete attempt(s) for run ${runId}?`)) {
     return;
   }
-  
+
   // Find the button and disable it
   const btn = document.querySelector(`.actions-cell[data-run-id="${runId}"] .resume-btn`);
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Resuming...';
   }
-  
+
   try {
     const response = await fetch(`/runs/${runId}/resume`, { method: 'POST' });
     if (!response.ok) {
       const err = await response.json();
       throw new Error(err.detail || 'Failed to resume');
     }
-    
+
     // Open the run detail page
     const runHref = buildRunDetailHref(runId);
     window.open(runHref, '_blank');
-    
+
     // Update button to show in-progress
     if (btn) {
       btn.textContent = 'In Progress...';
     }
-    
+
     // Connect to WebSocket for progress
     connectToResumeStream(runId);
-    
+
   } catch (err) {
     console.error('Resume error:', err);
     alert(`Failed to resume: ${err.message}`);
@@ -1053,7 +1072,7 @@ async function resumeRun(runId, incompleteCount) {
 function connectToResumeStream(runId) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const ws = new WebSocket(`${protocol}//${window.location.host}/runs/${runId}/stream`);
-  
+
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     if (data.type === 'complete' || data.type === 'error') {
@@ -1062,7 +1081,7 @@ function connectToResumeStream(runId) {
       refreshHistory();
     }
   };
-  
+
   ws.onerror = () => {
     ws.close();
     refreshHistory();

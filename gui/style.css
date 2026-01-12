@@ -265,7 +265,8 @@ label.inline {
 
 input,
 button,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -290,13 +291,23 @@ textarea {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
+.form-select {
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
 input::placeholder {
   color: rgba(148, 163, 184, 0.45);
 }
 
 input[type="text"]:focus,
 input[type="number"]:focus,
-textarea:focus {
+textarea:focus,
+.form-select:focus {
   outline: none;
   border-color: rgba(96, 165, 250, 0.6);
   box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.25);
@@ -737,11 +748,6 @@ tbody tr:hover {
 .resume-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.actions-cell {
-  text-align: center;
-  min-width: 100px;
 }
 
 .loading-dots {
@@ -1186,11 +1192,11 @@ tbody tr:hover {
   .filter-bar {
     flex-direction: column;
   }
-  
+
   .filter-search {
     width: 100%;
   }
-  
+
   .filter-clear {
     margin-left: 0;
     width: 100%;
@@ -1485,64 +1491,64 @@ textarea:focus-visible {
   header {
     padding: 1rem 1.5rem;
   }
-  
+
   header h1 {
     font-size: 1.3rem;
   }
-  
+
   .nav-bar {
     flex-wrap: wrap;
     padding: 0.5rem 1rem;
   }
-  
+
   .nav-tabs {
     width: 100%;
     margin-left: 0;
     margin-top: 0.5rem;
   }
-  
+
   .nav-tab {
     flex: 1;
     text-align: center;
     padding: 0.5rem;
     font-size: 0.9rem;
   }
-  
+
   .nav-shortcuts {
     display: none;
   }
-  
+
   .card {
     padding: 1.2rem;
     border-radius: 16px;
   }
-  
+
   .metrics {
     flex-direction: column;
   }
-  
+
   .metrics span {
     width: 100%;
   }
-  
+
   .table-wrapper {
     margin: 0 -1.2rem;
     border-radius: 0;
     border-left: none;
     border-right: none;
   }
-  
+
   .toast {
     left: 1rem;
     right: 1rem;
     max-width: none;
   }
-  
+
   .pagination {
     flex-direction: column;
     gap: 0.75rem;
   }
-  
+
   .pagination-controls {
     width: 100%;
     justify-content: space-between;
@@ -1573,7 +1579,7 @@ textarea:focus-visible {
       "leaderboard"
       "recent";
   }
-  
+
   .qa-grid.show-results {
     grid-template-columns: 1fr;
     grid-template-areas:
@@ -1625,6 +1631,8 @@ button.secondary:hover {
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
+  text-align: center;
+  min-width: 100px;
 }
 
 /* ============================================================================

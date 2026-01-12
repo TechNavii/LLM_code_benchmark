@@ -47,6 +47,7 @@ from harness.exceptions import (
     EmptyResponseError,
     ProviderError,
 )
+from harness.http_utils import parse_retry_after
 from harness.secure_execution import secure_run
 
 
@@ -346,12 +347,25 @@ def fetch_model_metadata(models: list[str]) -> dict[str, dict[str, Any]]:
     if requests is None:
         return {}
 
+    if not models:
+        return {}
+
+    if all(_is_lmstudio_model(model) for model in models):
+        return {}
+
+    api_key = SETTINGS.openrouter_api_key
+    if not api_key:
+        logger.warning("OPENROUTER_API_KEY is not set; skipping model metadata fetch")
+        return {}
+
     requested = {_normalize_model_id(model) for model in models}
     try:
+        base_url = SETTINGS.openrouter_base_url.rstrip("/")
+        models_url = f"{base_url}/models"
         response = requests.get(
-            "https://openrouter.ai/api/v1/models",
+            models_url,
             headers={
-                "Authorization": f"Bearer {SETTINGS.openrouter_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "HTTP-Referer": "benchmark-harness",
             },
             timeout=60,
@@ -544,7 +558,7 @@ def build_prompt(task_id: str, metadata: dict, include_tests: bool = False) -> s
          def add(a, b):
 -            return a - b
 +            return a + b
- 
+
          def subtract(a, b):
              return a - b
         ```
@@ -579,26 +593,6 @@ def build_prompt(task_id: str, metadata: dict, include_tests: bool = False) -> s
 MAX_COMPLETION_RETRIES = SETTINGS.completion_max_retries
 RETRY_BACKOFF_SECONDS = SETTINGS.completion_retry_backoff_seconds
 MAX_BACKOFF_SECONDS = SETTINGS.completion_max_backoff_seconds
-
-
-def _parse_retry_after(response: requests.Response) -> float | None:
-    """Parse Retry-After header from response, returning seconds to wait."""
-    retry_after = response.headers.get("Retry-After")
-    if not retry_after:
-        return None
-    try:
-        return float(retry_after)
-    except ValueError:
-        pass
-    # Try parsing as HTTP-date (RFC 7231)
-    try:
-        from email.utils import parsedate_to_datetime
-
-        retry_dt = parsedate_to_datetime(retry_after)
-        delay = (retry_dt - dt.datetime.now(dt.UTC)).total_seconds()
-        return max(0.0, delay)
-    except (ValueError, TypeError):
-        return None
 
 
 def _classify_error(
@@ -641,8 +635,11 @@ def call_openrouter(
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
 
     api_key = SETTINGS.openrouter_api_key
+    if not api_key:
+        raise HarnessError("OPENROUTER_API_KEY must be set to run OpenRouter models")
 
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    base_url = SETTINGS.openrouter_base_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "HTTP-Referer": "benchmark-harness",
@@ -700,7 +697,7 @@ def call_openrouter(
             should_retry = True
         else:
             status = response.status_code
-            retry_after = _parse_retry_after(response)
+            retry_after = parse_retry_after(response.headers)
 
             if status >= 500:
                 error_message = response.text.strip()

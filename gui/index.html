@@ -4,11 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Code Tasks • Benchmark Harness</title>
-  <link rel="stylesheet" href="/ui/style.css" />
+  <link rel="stylesheet" href="/ui/style.css?v=20260110_6" />
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
-  
+
   <nav class="nav-bar" role="navigation" aria-label="Main navigation">
     <a href="/ui/index.html" class="nav-brand">Benchmark Harness</a>
     <div class="nav-tabs">
@@ -27,16 +27,34 @@
   <main class="dashboard-grid" id="main-content" role="main">
     <section class="card launch-card">
       <h2>Launch Run</h2>
-      <form id="run-form">
+      <form id="run-form" onsubmit="return false">
         <label>
-          Model ID(s)
-          <input type="text" id="model-input" placeholder="google/gemini-2.5-flash-lite" required />
+          Model source
+          <select id="model-source-select" class="form-select">
+            <option value="openrouter" selected>OpenRouter</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
         </label>
-        <div id="model-capabilities" class="helper-note"></div>
-        <label>
-          Provider (optional)
-          <input type="text" id="provider-input" placeholder="Z.AI" />
-        </label>
+
+        <div id="openrouter-fields">
+          <label>
+            Model ID(s)
+            <input type="text" id="model-input" placeholder="google/gemini-2.5-flash-lite" required />
+          </label>
+          <div id="model-capabilities" class="helper-note"></div>
+          <label>
+            Provider (optional)
+            <input type="text" id="provider-input" placeholder="Z.AI" />
+          </label>
+        </div>
+
+        <div id="lmstudio-fields" hidden>
+          <label>
+            LM Studio model
+            <select id="lmstudio-model-select" class="form-select"></select>
+          </label>
+          <div id="lmstudio-model-note" class="helper-note"></div>
+        </div>
         <label>
           Tasks (optional, comma separated)
           <input type="text" id="task-input" placeholder="python_tool_weather_cli,go_feature_wordcount" />
@@ -177,6 +195,7 @@
     </section>
   </main>
 
-  <script src="/ui/main.js?v=20251223" type="module"></script>
+  <script src="/ui/model-source.js?v=20260110_6"></script>
+  <script src="/ui/main.js?v=20260110_6" type="module"></script>
 </body>
 </html>

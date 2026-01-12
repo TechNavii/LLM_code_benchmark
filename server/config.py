@@ -37,10 +37,7 @@ class HarnessSettings(BaseSettings):
 class Settings(BaseSettings):
     """Top-level configuration values for the server and harness."""
 
-    openrouter_api_key: str = Field(validation_alias="OPENROUTER_API_KEY")
     api_token: str | None = Field(default=None, validation_alias="BENCHMARK_API_TOKEN")
-    default_model: str = "openrouter/google/gemini-pro"
-    default_temperature: float = 0.5
     lmstudio_base_url: str = "http://127.0.0.1:1234/v1"
 
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
@@ -53,13 +50,6 @@ class Settings(BaseSettings):
     model_allowlist: list[str] = Field(default_factory=list)
 
     cors_origins: list[str] | None = None
-
-    @field_validator("openrouter_api_key")
-    @classmethod
-    def validate_api_key(cls, api_key: str) -> str:
-        if not api_key or len(api_key) < 10:
-            raise ValueError("OPENROUTER_API_KEY must be provided and appear valid")
-        return api_key
 
     @field_validator("api_token")
     @classmethod
@@ -82,6 +72,7 @@ class Settings(BaseSettings):
         "env_file": ROOT / ".env",
         "env_nested_delimiter": "__",
         "case_sensitive": False,
+        "extra": "ignore",
         "protected_namespaces": ("settings_",),
     }
 

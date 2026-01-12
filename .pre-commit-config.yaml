@@ -66,7 +66,7 @@ repos:
 # CI is the source of truth - these hooks are optional for developer convenience
 # but should match the CI checks
 default_language_version:
-  python: python3.11
+  python: python3
 
 # Don't fail on first error, run all hooks
 fail_fast: false

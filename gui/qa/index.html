@@ -4,11 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>QA Questions • Benchmark Harness</title>
-  <link rel="stylesheet" href="/ui/style.css" />
+  <link rel="stylesheet" href="/ui/style.css?v=20260110_6" />
 </head>
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
-  
+
   <nav class="nav-bar" role="navigation" aria-label="Main navigation">
     <a href="/ui/index.html" class="nav-brand">Benchmark Harness</a>
     <div class="nav-tabs">
@@ -27,12 +27,34 @@
   <main class="dashboard-grid qa-grid" id="main-content" role="main">
     <section class="card launch-card">
       <h2>Launch Question Run</h2>
-      <form id="qa-run-form">
+      <form id="qa-run-form" onsubmit="return false">
         <label>
-          Model ID(s)
-          <input type="text" id="qa-model-input" placeholder="openrouter/google/gemini-pro" required />
+          Model source
+          <select id="qa-model-source-select" class="form-select">
+            <option value="openrouter" selected>OpenRouter</option>
+            <option value="lmstudio">LM Studio</option>
+          </select>
         </label>
-        <div id="qa-model-capabilities" class="helper-note"></div>
+
+        <div id="qa-openrouter-fields">
+          <label>
+            Model ID(s)
+            <input type="text" id="qa-model-input" placeholder="openrouter/google/gemini-pro" required />
+          </label>
+          <div id="qa-model-capabilities" class="helper-note"></div>
+          <label>
+            Provider (optional)
+            <input type="text" id="qa-provider-input" placeholder="Z.AI" />
+          </label>
+        </div>
+
+        <div id="qa-lmstudio-fields" hidden>
+          <label>
+            LM Studio model
+            <select id="qa-lmstudio-model-select" class="form-select"></select>
+          </label>
+          <div id="qa-lmstudio-model-note" class="helper-note"></div>
+        </div>
         <div class="advanced-flags">
           <label class="inline">
             <input type="checkbox" id="qa-sweep-thinking-levels" /> Sweep thinking levels (base + low/medium/high)
@@ -41,10 +63,6 @@
             <input type="checkbox" id="qa-include-thinking-variants" /> Include thinking variants automatically
           </label>
         </div>
-        <label>
-          Provider (optional)
-          <input type="text" id="qa-provider-input" placeholder="Z.AI" />
-        </label>
         <label>
           Samples
           <input type="number" id="qa-sample-input" min="1" value="1" />
@@ -162,6 +180,7 @@
     </section>
   </main>
 
-  <script src="/ui/qa/main.js?v=20251223" type="module"></script>
+  <script src="/ui/model-source.js?v=20260110_6"></script>
+  <script src="/ui/qa/main.js?v=20260110_6" type="module"></script>
 </body>
 </html>

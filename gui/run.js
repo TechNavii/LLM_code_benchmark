@@ -13,7 +13,7 @@ import {
   renderTaskName,
   getTaskLanguage,
   LANGUAGE_LABELS
-} from './components.js';
+} from './components.js?v=20260110_6';
 
 // ============================================================================
 // DOM Elements
@@ -21,6 +21,10 @@ import {
 
 const params = new URLSearchParams(window.location.search);
 const runId = params.get('run_id');
+const DEBUG = params.has('debug');
+const debugLog = (...args) => {
+  if (DEBUG) console.log(...args);
+};
 
 const runTitle = document.querySelector('#run-title');
 const runSubtitle = document.querySelector('#run-subtitle');
@@ -124,21 +128,21 @@ function applyAttemptsFilter(filters) {
     const taskId = row.dataset.task || '';
     const status = row.dataset.status || '';
     const language = getTaskLanguage(taskId, TASK_LANGUAGE);
-    
+
     let visible = true;
-    
+
     if (filters.search && !taskId.toLowerCase().includes(filters.search)) {
       visible = false;
     }
-    
+
     if (filters.status && status !== filters.status) {
       visible = false;
     }
-    
+
     if (filters.language && language !== filters.language) {
       visible = false;
     }
-    
+
     row.hidden = !visible;
   });
 }
@@ -255,7 +259,7 @@ async function loadRunDetails() {
     renderAttempts(summary);
     setRunMessage('Run ready', 'success');
     showToast('Run details loaded', 'success', 2000);
-    
+
     // Load API error info
     await loadApiErrorInfo();
   } catch (error) {
@@ -269,7 +273,7 @@ async function loadApiErrorInfo() {
   try {
     const response = await fetch(`${buildRunApiPath(runId)}/api-errors`);
     if (!response.ok) return;
-    
+
     const data = await response.json();
     if (data.api_error_count > 0) {
       apiErrorSection.hidden = false;
@@ -284,32 +288,32 @@ async function loadApiErrorInfo() {
 
 async function retryApiErrors() {
   if (!runId) return;
-  
+
   retryApiErrorsBtn.disabled = true;
   retryApiErrorsBtn.textContent = 'Retrying...';
-  
+
   try {
     const response = await fetch(`${buildRunApiPath(runId)}/retry-api-errors`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    
+
     if (!response.ok) {
       const errorData = await response.json();
       throw new Error(errorData.detail || 'Failed to start retry');
     }
-    
+
     const data = await response.json();
-    
+
     if (data.api_errors_found === 0) {
       showToast('No API errors to retry', 'info');
       retryApiErrorsBtn.textContent = 'No API Errors';
       return;
     }
-    
+
     showToast(`Retrying ${data.api_errors_found} API errors...`, 'success');
     retryApiErrorsBtn.textContent = 'Retrying...';
-    
+
     // Wait for retry to complete via WebSocket, with fallback polling
     const retryRunId = data.retry_run_id;
     await waitForRunCompletion(retryRunId, retryApiErrorsBtn, 'Retry API Errors');
@@ -326,10 +330,10 @@ async function waitForRunCompletion(retryRunId, btn, btnText) {
   return new Promise((resolve) => {
     let completed = false;
     let wsConnected = false;
-    
+
     const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProtocol}//${location.host}/runs/${retryRunId}/stream`);
-    
+
     const navigateToRun = () => {
       if (completed) return;
       completed = true;
@@ -338,7 +342,7 @@ async function waitForRunCompletion(retryRunId, btn, btnText) {
       window.location.href = `/ui/run.html?run_id=${encodeURIComponent(retryRunId)}`;
       resolve();
     };
-    
+
     const handleError = (msg) => {
       if (completed) return;
       completed = true;
@@ -350,11 +354,11 @@ async function waitForRunCompletion(retryRunId, btn, btnText) {
       }
       resolve();
     };
-    
+
     ws.onopen = () => {
       wsConnected = true;
     };
-    
+
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -367,12 +371,12 @@ async function waitForRunCompletion(retryRunId, btn, btnText) {
         console.error('WebSocket message parse error:', e);
       }
     };
-    
+
     ws.onerror = (e) => {
       console.error('WebSocket error:', e);
       // Don't fail immediately, let onclose handle it
     };
-    
+
     ws.onclose = (e) => {
       if (completed) return;
       // If closed without completing, start polling as fallback
@@ -380,15 +384,15 @@ async function waitForRunCompletion(retryRunId, btn, btnText) {
         handleError('Run not found - retry may have failed to start');
       } else if (!wsConnected) {
         // WebSocket never connected, use polling
-        console.log('WebSocket failed to connect, using polling fallback');
+    debugLog('WebSocket failed to connect, using polling fallback');
         pollForRun(retryRunId, navigateToRun, handleError);
       } else {
         // WebSocket closed unexpectedly, use polling
-        console.log('WebSocket closed unexpectedly, using polling fallback');
+    debugLog('WebSocket closed unexpectedly, using polling fallback');
         pollForRun(retryRunId, navigateToRun, handleError);
       }
     };
-    
+
     // Timeout fallback after 5 minutes
     setTimeout(() => {
       if (!completed) {
@@ -402,7 +406,7 @@ async function waitForRunCompletion(retryRunId, btn, btnText) {
 async function pollForRun(runId, onSuccess, onError) {
   const maxAttempts = 60;
   const interval = 2000;
-  
+
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const response = await fetch(`/runs/${runId}`);
@@ -423,13 +427,13 @@ retryApiErrorsBtn?.addEventListener('click', retryApiErrors);
 
 async function retrySingleAttempt(taskId, model, sampleIndex) {
   if (!runId || !taskId) return;
-  
+
   const btn = document.querySelector(`tr[data-task="${taskId}"][data-model="${model}"][data-sample-index="${sampleIndex}"] .retry-single-btn`);
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'Retrying...';
   }
-  
+
   try {
     const response = await fetch(`${buildRunApiPath(runId)}/retry-single`, {
       method: 'POST',
@@ -440,14 +444,14 @@ async function retrySingleAttempt(taskId, model, sampleIndex) {
         sample_index: sampleIndex ?? null,
       }),
     });
-    
+
     if (!response.ok) {
       const errorData = await response.json();
       throw new Error(errorData.detail || 'Failed to start retry');
     }
-    
+
     const data = await response.json();
-    
+
     if (data.api_errors_found === 0) {
       showToast('No matching API error to retry', 'info');
       if (btn) {
@@ -455,9 +459,9 @@ async function retrySingleAttempt(taskId, model, sampleIndex) {
       }
       return;
     }
-    
+
     showToast(`Retrying ${taskId}...`, 'success');
-    
+
     // Wait for retry to complete via WebSocket, with fallback polling
     const retryRunId = data.retry_run_id;
     await waitForRunCompletion(retryRunId, btn, 'Retry');
@@ -522,14 +526,14 @@ function renderRunSummary(summary) {
 function renderAttempts(summary) {
   attempts = summary.attempts || [];
   attemptBody.innerHTML = '';
-  
+
   if (!attempts.length) {
     attemptEmpty.hidden = false;
     return;
   }
-  
+
   attemptEmpty.hidden = true;
-  
+
   attempts.forEach((attempt, index) => {
     const row = document.createElement('tr');
     row.style.animationDelay = `${index * 30}ms`;
@@ -538,16 +542,16 @@ function renderAttempts(summary) {
     row.dataset.status = attempt.status?.toLowerCase() || '';
     row.dataset.model = attempt.model || '';
     row.dataset.sampleIndex = attempt.sample_index ?? 0;
-    
+
     const { label, className, chip } = mapStatus(attempt.status);
     const language = getTaskLanguage(attempt.task_id, TASK_LANGUAGE);
     const statusLower = attempt.status?.toLowerCase() || '';
     const canRetry = ['error', 'fail', 'failed', 'api_error', 'exception'].includes(statusLower);
-    
+
     const errorText = attempt.error || '';
     const errorTruncated = errorText.length > 80 ? errorText.substring(0, 80) + '...' : errorText;
     const errorDisplay = errorText ? `<span class="error-text" title="${escapeAttr(errorText)}">${escapeHtml(errorTruncated)}</span>` : '-';
-    
+
     row.innerHTML = `
       <td>${renderTaskName(attempt.task_id, TASK_LANGUAGE)}</td>
       <td class="status-cell ${className}"><span class="status-chip ${chip}">${label}</span></td>
@@ -558,7 +562,7 @@ function renderAttempts(summary) {
       <td>${formatCost(attempt.cost_usd)}</td>
       <td class="actions-cell">${canRetry ? '<button class="ghost retry-single-btn" title="Retry this attempt">Retry</button>' : ''}</td>
     `;
-    
+
     // Add click handler for retry button
     const retryBtn = row.querySelector('.retry-single-btn');
     if (retryBtn) {
@@ -567,7 +571,7 @@ function renderAttempts(summary) {
         retrySingleAttempt(attempt.task_id, attempt.model, attempt.sample_index);
       });
     }
-    
+
     row.addEventListener('click', () => {
       if (selectedRow) {
         selectedRow.classList.remove('selected');
@@ -576,10 +580,10 @@ function renderAttempts(summary) {
       selectedRow = row;
       showAttemptDetail(attempt);
     });
-    
+
     attemptBody.appendChild(row);
   });
-  
+
   // Lock onto the first attempt by default
   if (attempts.length) {
     attemptBody.firstElementChild?.classList.add('selected');
@@ -595,7 +599,7 @@ async function showAttemptDetail(attempt) {
 
   const badge = createStatusBadge(attempt.status);
   detailDescription.appendChild(badge);
-  
+
   if (attempt.error) {
     const errorBox = document.createElement('div');
     errorBox.className = 'empty-state';
@@ -641,7 +645,7 @@ async function showAttemptDetail(attempt) {
   });
 
   const logs = (await Promise.all(logPromises)).filter(Boolean);
-  
+
   if (!logs.length) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -653,7 +657,7 @@ async function showAttemptDetail(attempt) {
   logs.forEach(({ file, label, url, text, highlight }) => {
     const details = document.createElement('details');
     details.className = 'log-entry';
-    
+
     const summary = document.createElement('summary');
     summary.textContent = label;
     details.appendChild(summary);
@@ -662,11 +666,11 @@ async function showAttemptDetail(attempt) {
     actions.className = 'log-actions';
     actions.style.display = 'flex';
     actions.style.gap = '0.5rem';
-    
+
     // Copy button
     const copyBtn = createCopyButton(text, 'Copy');
     actions.appendChild(copyBtn);
-    
+
     // Open raw link
     const link = document.createElement('a');
     link.href = url;
@@ -674,19 +678,19 @@ async function showAttemptDetail(attempt) {
     link.rel = 'noopener noreferrer';
     link.textContent = 'Open raw';
     actions.appendChild(link);
-    
+
     details.appendChild(actions);
 
     const pre = document.createElement('pre');
     pre.className = 'log-output';
-    
+
     if (highlight && file.endsWith('.diff')) {
       pre.classList.add('highlighted', 'line-numbers');
       pre.innerHTML = addLineNumbers(highlightDiff(text));
     } else {
       pre.textContent = text;
     }
-    
+
     details.appendChild(pre);
     detailLogs.appendChild(details);
   });

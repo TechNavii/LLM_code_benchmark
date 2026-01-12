@@ -14,7 +14,12 @@ import {
   formatCost,
   formatPercent,
   formatTimestamp
-} from '../components.js';
+} from '../components.js?v=20260110_6';
+
+const DEBUG = new URLSearchParams(window.location.search).has('debug');
+const debugLog = (...args) => {
+  if (DEBUG) console.log(...args);
+};
 
 // ============================================================================
 // DOM Elements
@@ -47,6 +52,7 @@ const maxTokensInput = document.querySelector('#qa-max-tokens-input');
 const sampleInput = document.querySelector('#qa-sample-input');
 const modelInput = document.querySelector('#qa-model-input');
 const providerInput = document.querySelector('#qa-provider-input');
+const modelSourceSelect = document.querySelector('#qa-model-source-select');
 const sweepThinkingLevelsInput = document.querySelector('#qa-sweep-thinking-levels');
 const includeThinkingVariantsInput = document.querySelector('#qa-include-thinking-variants');
 const modelCapabilitiesNote = document.querySelector('#qa-model-capabilities');
@@ -77,6 +83,10 @@ let allLeaderboardData = [];
 // ============================================================================
 
 runForm?.addEventListener('submit', startRun);
+runButton?.addEventListener('click', (event) => {
+  if (runButton?.type === 'submit') return;
+  startRun(event);
+});
 backButton?.addEventListener('click', () => {
   window.location.href = '/ui/index.html';
 });
@@ -131,19 +141,19 @@ function setupHistorySorting() {
     console.warn('History table not found for sorting setup');
     return;
   }
-  
+
   const headers = historyTable.querySelectorAll('thead th');
   if (!headers.length) {
     console.warn('No headers found in history table');
     return;
   }
-  
+
   headers.forEach((header, index) => {
     if (header.classList.contains('no-sort') || header.classList.contains('actions-header')) return;
-    
+
     header.classList.add('sortable');
     header.style.cursor = 'pointer';
-    
+
     // Only add sort icon if not already present
     if (!header.querySelector('.sort-icon')) {
       const sortIcon = document.createElement('span');
@@ -151,7 +161,7 @@ function setupHistorySorting() {
       sortIcon.textContent = ' ⇅';
       header.appendChild(sortIcon);
     }
-    
+
     header.addEventListener('click', () => {
       // Toggle direction if same column, otherwise default to desc for new column
       if (historySortColumn === index) {
@@ -160,7 +170,7 @@ function setupHistorySorting() {
         historySortColumn = index;
         historySortDirection = 'desc';
       }
-      
+
       // Update header styles - mark active column
       headers.forEach(h => {
         const icon = h.querySelector('.sort-icon');
@@ -174,10 +184,10 @@ function setupHistorySorting() {
         activeIcon.classList.add(historySortDirection);
         activeIcon.textContent = historySortDirection === 'asc' ? ' ↑' : ' ↓';
       }
-      
+
       // Sort the data
       sortHistoryData(index, historySortDirection);
-      
+
       // Re-render from page 1
       if (historyPagination) {
         historyPagination.update(historyData.length, 1);
@@ -185,45 +195,45 @@ function setupHistorySorting() {
       renderHistoryPage(1, 0);
     });
   });
-  
-  console.log('History table sorting initialized with', headers.length, 'columns');
+
+  debugLog('History table sorting initialized with', headers.length, 'columns');
 }
 
 function sortHistoryData(columnIndex, direction) {
   // Map column index to data field name
   const sortKeys = ['run_id', 'timestamp_utc', 'model_id', 'accuracy', 'total_cost_usd', 'total_duration_seconds', 'error_count'];
   const key = sortKeys[columnIndex];
-  
+
   if (!key) {
     console.warn('No sort key for column index:', columnIndex);
     return;
   }
-  
+
   if (!historyData || !historyData.length) {
     console.warn('No history data to sort');
     return;
   }
-  
-  console.log('Sorting history by', key, direction);
-  
+
+  debugLog('Sorting history by', key, direction);
+
   historyData.sort((a, b) => {
     let aVal = a[key];
     let bVal = b[key];
-    
+
     // Handle null/undefined - put them at the end
     if (aVal == null && bVal == null) return 0;
     if (aVal == null) return 1;
     if (bVal == null) return -1;
-    
+
     // Numeric comparison for numbers
     if (typeof aVal === 'number' && typeof bVal === 'number') {
       return direction === 'asc' ? aVal - bVal : bVal - aVal;
     }
-    
+
     // String comparison (works for ISO timestamps too)
     aVal = String(aVal);
     bVal = String(bVal);
-    
+
     if (direction === 'asc') {
       return aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
     } else {
@@ -284,6 +294,11 @@ modelInput?.addEventListener('input', () => {
   capabilityTimer = setTimeout(checkModelCapabilities, 600);
 });
 
+modelSourceSelect?.addEventListener('change', () => {
+  if (capabilityTimer) clearTimeout(capabilityTimer);
+  capabilityTimer = setTimeout(checkModelCapabilities, 0);
+});
+
 // Retry API errors button
 qaRetryApiErrorsBtn?.addEventListener('click', retryQaApiErrors);
 
@@ -316,17 +331,17 @@ function applyResultsFilter(filters) {
   rows.forEach(row => {
     const questionNum = row.dataset.question || '';
     const status = row.dataset.status || '';
-    
+
     let visible = true;
-    
+
     if (filters.search && !questionNum.includes(filters.search)) {
       visible = false;
     }
-    
+
     if (filters.status && status !== filters.status) {
       visible = false;
     }
-    
+
     row.hidden = !visible;
   });
 }
@@ -339,13 +354,13 @@ function applyLeaderboardFilter(filters) {
   const rows = leaderboardBody?.querySelectorAll('tr') || [];
   rows.forEach(row => {
     const modelId = row.dataset.model || row.cells[0]?.textContent || '';
-    
+
     let visible = true;
-    
+
     if (filters.search && !modelId.toLowerCase().includes(filters.search)) {
       visible = false;
     }
-    
+
     row.hidden = !visible;
   });
 }
@@ -447,7 +462,7 @@ function _qaLevelOrder(level) {
 // ============================================================================
 
 async function startRun(event) {
-  event.preventDefault();
+  event?.preventDefault?.();
   const models = getInputArray('#qa-model-input');
   if (!models.length) {
     renderStatus('Provide at least one model ID', 'error');
@@ -465,7 +480,7 @@ async function startRun(event) {
     temperature: Number.isFinite(temperatureValue) ? temperatureValue : 0.5,
     max_tokens: Number.isFinite(maxTokensValue) && maxTokensValue > 0 ? maxTokensValue : 200000,
   };
-  
+
   const providerValue = providerInput?.value.trim();
   if (providerValue) payload.provider = providerValue;
   if (sweepThinkingLevelsInput?.checked) payload.sweep_thinking_levels = true;
@@ -519,7 +534,7 @@ function listenToRun(runId) {
       console.error('Failed to parse WebSocket message', e);
       return;
     }
-    
+
     switch (data.type) {
       case 'init':
         setupRunView(data.metadata, runId);
@@ -583,10 +598,10 @@ function setupRunView(metadata, runId) {
   const provider = metadata?.provider || 'auto';
   const questionCount = metadata?.question_count ?? 100;
   const samples = metadata?.samples ?? 1;
-  
+
   currentRun.totalQuestions = questionCount * samples * models.length;
   currentRun.completedQuestions = 0;
-  
+
   aggregateMetrics.innerHTML = '';
   const info = [
     `Models: ${models.join(', ') || '—'}`,
@@ -606,7 +621,7 @@ function setupRunView(metadata, runId) {
   resultsBody.innerHTML = '';
   currentRun.rows.clear();
   allResultsData = [];
-  
+
   // Show and reset progress bar
   progressBar?.show();
   progressBar?.reset();
@@ -616,10 +631,10 @@ function setupRunView(metadata, runId) {
 function updateAttemptRow(event) {
   const levelKey = (event.thinking_level_applied || event.thinking_level_requested || 'base');
   const key = `${event.model || 'unknown'}::${event.question_number}::${event.sample_index ?? 0}::${levelKey}`;
-  
+
   // Store for export
   allResultsData.push(event);
-  
+
   let row = currentRun.rows.get(key);
   if (!row) {
     row = document.createElement('tr');
@@ -628,7 +643,7 @@ function updateAttemptRow(event) {
     row.dataset.status = event.status?.toLowerCase() || '';
     row.dataset.model = event.model || '';
     row.dataset.sampleIndex = event.sample_index ?? 0;
-    
+
     const levelLabel = levelKey && levelKey !== 'base' ? levelKey : '—';
     const cellData = [
       { text: event.question_number ?? '—' },
@@ -650,7 +665,7 @@ function updateAttemptRow(event) {
       if (cell.className) td.className = cell.className;
       row.appendChild(td);
     });
-    
+
     row.dataset.levelOrder = String(_qaLevelOrder(levelKey));
 
     // Insert preserving question asc and level order
@@ -681,7 +696,7 @@ function updateAttemptRow(event) {
   cells[5].textContent = event.prompt_tokens ?? '-';
   cells[6].textContent = event.completion_tokens ?? '-';
   cells[7].textContent = event.cost_usd != null ? `$${Number(event.cost_usd).toFixed(6)}` : '-';
-  
+
   const modelAns = (event.model_answer != null && String(event.model_answer).trim())
     ? String(event.model_answer).trim()
     : (event.normalized_answer != null ? String(event.normalized_answer).trim() : '');
@@ -690,7 +705,7 @@ function updateAttemptRow(event) {
     : (event.normalized_expected != null ? String(event.normalized_expected).trim() : '');
   cells[8].textContent = modelAns;
   cells[9].textContent = expectedAns;
-  
+
   const judgeInfo = event.judge_decision
     ? `Judge: ${event.judge_decision}${event.judge_rationale ? ` – ${event.judge_rationale}` : ''}`
     : '';
@@ -702,7 +717,7 @@ function updateAttemptRow(event) {
   if (combinedError) {
     cells[10].title = combinedError;
   }
-  
+
   // Update Actions column with retry button for any failed status
   const statusLower = event.status?.toLowerCase() || '';
   const canRetry = ['error', 'fail', 'failed', 'api_error', 'exception'].includes(statusLower);
@@ -757,7 +772,7 @@ function renderRun(summary) {
   const attempts = Array.isArray(summary.attempts) ? summary.attempts.slice() : [];
   // Clear before re-rendering - updateAttemptRow will repopulate
   allResultsData = [];
-  
+
   attempts.sort((a, b) => {
     const aq = (a.question_number || 0);
     const bq = (b.question_number || 0);
@@ -804,7 +819,7 @@ function renderRun(summary) {
       thinking_level_requested: attempt.thinking_level_requested,
     });
   });
-  
+
   // Show filter bar
   resultsFilter?.element && (resultsFilter.element.hidden = false);
 }
@@ -814,6 +829,10 @@ function renderRun(summary) {
 // ============================================================================
 
 async function checkModelCapabilities() {
+  if (modelSourceSelect?.value === 'lmstudio') {
+    if (modelCapabilitiesNote) modelCapabilitiesNote.textContent = '';
+    return;
+  }
   const raw = modelInput?.value || '';
   const models = raw.split(',').map((s) => s.trim()).filter(Boolean);
   if (!models.length) {
@@ -822,7 +841,7 @@ async function checkModelCapabilities() {
   }
   const unique = [...new Set(models)].slice(0, 5);
   modelCapabilitiesNote.textContent = 'Checking model capabilities…';
-  
+
   try {
     const lines = await Promise.all(unique.map(async (m) => {
       try {
@@ -860,23 +879,23 @@ async function refreshLeaderboard() {
   if (!leaderboardBody) return;
   showTableSkeleton(leaderboardBody, 5, 7);
   renderLeaderboardStatus('Loading…', 'info');
-  
+
   try {
     const response = await fetch('/qa/leaderboard');
     if (!response.ok) throw new Error(response.statusText);
     const data = await response.json();
     const rows = Array.isArray(data.models) ? data.models : [];
-    
+
     if (!rows.length) {
       renderLeaderboardStatus('No question runs yet.', 'info');
       leaderboardBody.innerHTML = '';
       return;
     }
-    
+
     renderLeaderboardStatus('', 'info');
     leaderboardBody.innerHTML = '';
     allLeaderboardData = rows;
-    
+
     rows.forEach((row) => {
       const tr = document.createElement('tr');
       tr.dataset.model = row.model_id;
@@ -927,7 +946,7 @@ leaderboardBody?.addEventListener('click', async (event) => {
   const confirmed = window.confirm(`Delete stored question runs for "${modelId}"?`);
   if (!confirmed) return;
   target.disabled = true;
-  
+
   try {
     const response = await fetch(`/qa/leaderboard/${encodeURIComponent(modelId)}`, { method: 'DELETE' });
     if (!response.ok) {
@@ -950,13 +969,13 @@ leaderboardBody?.addEventListener('click', async (event) => {
 async function refreshHistory() {
   if (!historyBody) return;
   showTableSkeleton(historyBody, 5, 6);
-  
+
   try {
     const response = await fetch('/qa/runs?limit=200');
     if (!response.ok) throw new Error(response.statusText);
     const data = await response.json();
     allHistoryData = Array.isArray(data.runs) ? data.runs : [];
-    
+
     historyPagination?.update(allHistoryData.length, 1);
     renderHistoryPage(1, 0);
   } catch (error) {
@@ -967,21 +986,21 @@ async function refreshHistory() {
 function renderHistoryPage(page, offset) {
   if (!historyBody) return;
   historyBody.innerHTML = '';
-  
+
   const pageSize = historyPagination?.pageSize || 20;
   const pageData = allHistoryData.slice(offset, offset + pageSize);
-  
+
   if (!pageData.length) {
     historyBody.innerHTML = '<tr><td colspan="7" class="empty-state">No question runs yet.</td></tr>';
     return;
   }
-  
+
   pageData.forEach((row) => {
     const tr = document.createElement('tr');
     tr.classList.add('clickable-row');
     tr.dataset.runId = row.run_id;
     const errorCount = row.error_count ?? 0;
-    
+
     // First cell is a link
     const runIdTd = document.createElement('td');
     runIdTd.className = 'breakable';
@@ -995,13 +1014,13 @@ function renderHistoryPage(page, offset) {
     });
     runIdTd.appendChild(runIdLink);
     tr.appendChild(runIdTd);
-    
+
     // Timestamp cell with sort value
     const timestampTd = document.createElement('td');
     timestampTd.textContent = formatTimestamp(row.timestamp_utc);
     timestampTd.dataset.sortValue = row.timestamp_utc || '';
     tr.appendChild(timestampTd);
-    
+
     // Rest of the cells
     const cells = [
       { text: row.model_id || '—', className: '' },
@@ -1016,31 +1035,31 @@ function renderHistoryPage(page, offset) {
       if (cell.className) td.className = cell.className;
       tr.appendChild(td);
     });
-    
+
     // Make row clickable to load run details
     tr.addEventListener('click', (e) => {
       if (e.target.tagName !== 'A') {
         loadQaRunDetails(row.run_id);
       }
     });
-    
+
     historyBody.appendChild(tr);
   });
 }
 
 async function loadQaRunDetails(runId) {
   showResultsPlaceholder('Loading run details…', runId);
-  
+
   try {
     const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}`);
     if (!response.ok) {
       showToast(`Failed to load run: ${response.statusText}`, 'error');
       return;
     }
-    
+
     const data = await response.json();
     const summary = data.summary;
-    
+
     // Reset state and render the run
     currentRun = {
       runId,
@@ -1049,13 +1068,13 @@ async function loadQaRunDetails(runId) {
       totalQuestions: 0,
       completedQuestions: 0,
     };
-    
+
     renderRun(summary);
     showToast('Run details loaded', 'success', 2000);
-    
+
     // Check for API errors
     loadQaApiErrorInfo(runId);
-    
+
   } catch (error) {
     console.error('Failed to load QA run details:', error);
     showToast(`Failed to load run: ${error.message}`, 'error');
@@ -1068,14 +1087,14 @@ async function loadQaRunDetails(runId) {
 
 async function loadQaApiErrorInfo(runId) {
   if (!runId || !qaApiErrorSection) return;
-  
+
   try {
     const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}/api-errors`);
     if (!response.ok) {
       qaApiErrorSection.hidden = true;
       return;
     }
-    
+
     const data = await response.json();
     if (data.api_error_count > 0) {
       qaApiErrorSection.hidden = false;
@@ -1096,42 +1115,42 @@ async function retryQaApiErrors() {
     showToast('No run selected for retry', 'error');
     return;
   }
-  
+
   qaRetryApiErrorsBtn.disabled = true;
   qaRetryApiErrorsBtn.textContent = 'Retrying...';
-  
+
   try {
     const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}/retry-api-errors`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    
+
     if (!response.ok) {
       const errorData = await response.json();
       throw new Error(errorData.detail || 'Failed to start retry');
     }
-    
+
     const data = await response.json();
-    
+
     if (data.api_errors_found === 0) {
       showToast('No API errors to retry', 'info');
       qaRetryApiErrorsBtn.textContent = 'No API Errors';
       return;
     }
-    
+
     showToast(`Retrying ${data.api_errors_found} API errors...`, 'success');
-    
+
     // Store original run ID and listen to retry progress
     const originalRunId = data.original_run_id || runId;
     const retryRunId = data.retry_run_id;
-    
+
     qaApiErrorSection.hidden = true;
     showResultsPlaceholder('Retrying failed API calls…', retryRunId);
-    
+
     // Create a WebSocket to track retry progress
     const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProtocol}//${location.host}/qa/runs/${retryRunId}/stream`);
-    
+
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type === 'complete') {
@@ -1146,13 +1165,13 @@ async function retryQaApiErrors() {
         qaRetryApiErrorsBtn.textContent = 'Retry API Errors';
       }
     };
-    
+
     ws.onerror = () => {
       showToast('Connection error during retry', 'error');
       qaRetryApiErrorsBtn.disabled = false;
       qaRetryApiErrorsBtn.textContent = 'Retry API Errors';
     };
-    
+
   } catch (error) {
     console.error('QA Retry failed:', error);
     showToast(`Retry failed: ${error.message}`, 'error');
@@ -1167,23 +1186,23 @@ async function retryQaSingleAttempt(questionNumber, model, sampleIndex) {
     showToast('No run or question selected for retry', 'error');
     return;
   }
-  
+
   // Find and disable the button
   const rows = resultsBody?.querySelectorAll('tr') || [];
   let targetBtn = null;
   rows.forEach(row => {
-    if (row.dataset.question === String(questionNumber) && 
+    if (row.dataset.question === String(questionNumber) &&
         row.dataset.model === model &&
         row.dataset.sampleIndex == sampleIndex) {
       targetBtn = row.querySelector('.retry-single-btn');
     }
   });
-  
+
   if (targetBtn) {
     targetBtn.disabled = true;
     targetBtn.textContent = 'Retrying...';
   }
-  
+
   try {
     const response = await fetch(`/qa/runs/${encodeURIComponent(runId)}/retry-single`, {
       method: 'POST',
@@ -1194,14 +1213,14 @@ async function retryQaSingleAttempt(questionNumber, model, sampleIndex) {
         sample_index: sampleIndex ?? null,
       }),
     });
-    
+
     if (!response.ok) {
       const errorData = await response.json();
       throw new Error(errorData.detail || 'Failed to start retry');
     }
-    
+
     const data = await response.json();
-    
+
     if (data.api_errors_found === 0) {
       showToast('No matching API error to retry', 'info');
       if (targetBtn) {
@@ -1209,20 +1228,20 @@ async function retryQaSingleAttempt(questionNumber, model, sampleIndex) {
       }
       return;
     }
-    
+
     showToast(`Retrying question ${questionNumber}...`, 'success');
-    
+
     // Store the original run ID to reload after retry completes
     const originalRunId = data.original_run_id || runId;
-    
+
     // Listen to the retry progress, then reload original run when complete
     const retryRunId = data.retry_run_id;
     showResultsPlaceholder(`Retrying question ${questionNumber}…`, retryRunId);
-    
+
     // Create a WebSocket to track retry progress
     const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProtocol}//${location.host}/qa/runs/${retryRunId}/stream`);
-    
+
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       if (msg.type === 'complete') {
@@ -1239,7 +1258,7 @@ async function retryQaSingleAttempt(questionNumber, model, sampleIndex) {
         }
       }
     };
-    
+
     ws.onerror = () => {
       showToast('Connection error during retry', 'error');
       if (targetBtn) {
@@ -1247,7 +1266,7 @@ async function retryQaSingleAttempt(questionNumber, model, sampleIndex) {
         targetBtn.textContent = 'Retry';
       }
     };
-    
+
   } catch (error) {
     console.error('QA single retry failed:', error);
     showToast(`Retry failed: ${error.message}`, 'error');

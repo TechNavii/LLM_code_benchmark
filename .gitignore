@@ -26,8 +26,12 @@ dist/
 htmlcov/
 .coverage
 .coverage.*
+.coverage*
 coverage.xml
 junit.xml
+
+# Hypothesis
+.hypothesis/
 
 # Node / JavaScript
 node_modules/
@@ -54,6 +58,7 @@ docs/sbom/
 .benchmarks/
 .trivy-reports/
 .signatures/
+.fuzz-reports/
 
 # IDE / editor
 .idea/

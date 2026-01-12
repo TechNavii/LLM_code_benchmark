@@ -49,6 +49,7 @@ from harness.exceptions import (
     EmptyResponseError,
     ProviderError,
 )
+from harness.http_utils import parse_retry_after
 from harness.run_harness import (
     expand_models_with_thinking_variants,
     fetch_model_pricing,
@@ -98,26 +99,6 @@ def _compose_reasoning_payload(level: str) -> dict[str, Any]:
     return {"effort": value}
 
 
-def _parse_retry_after(response: requests.Response) -> float | None:
-    """Parse Retry-After header from response, returning seconds to wait."""
-    retry_after = response.headers.get("Retry-After")
-    if not retry_after:
-        return None
-    try:
-        return float(retry_after)
-    except ValueError:
-        pass
-    # Try parsing as HTTP-date (RFC 7231)
-    try:
-        from email.utils import parsedate_to_datetime
-
-        retry_dt = parsedate_to_datetime(retry_after)
-        delay = (retry_dt - dt.datetime.now(dt.UTC)).total_seconds()
-        return max(0.0, delay)
-    except (ValueError, TypeError):
-        return None
-
-
 def _call_openrouter(
     prompt: str,
     *,
@@ -131,7 +112,11 @@ def _call_openrouter(
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
 
     api_key = SETTINGS.openrouter_api_key
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    if not api_key:
+        raise HarnessError("OPENROUTER_API_KEY must be set to run OpenRouter models")
+
+    base_url = SETTINGS.openrouter_base_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "HTTP-Referer": "benchmark-harness-expert-qa",
@@ -181,7 +166,7 @@ def _call_openrouter(
             should_retry = True
         else:
             status = response.status_code
-            retry_after = _parse_retry_after(response)
+            retry_after = parse_retry_after(response.headers)
 
             if status >= 500:
                 err_text = response.text.strip()
@@ -510,7 +495,11 @@ def _judge_answer(
         return False, None, "requests library unavailable", None, None, None
 
     api_key = SETTINGS.openrouter_api_key
-    url = "https://openrouter.ai/api/v1/chat/completions"
+    if not api_key:
+        return False, None, "OPENROUTER_API_KEY must be set to run the judge model", None, None, None
+
+    base_url = SETTINGS.openrouter_base_url.rstrip("/")
+    url = f"{base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "HTTP-Referer": "benchmark-harness-expert-qa",
@@ -569,7 +558,7 @@ def _judge_answer(
             latency = time.perf_counter() - start
             total_latency += latency
             status = response.status_code
-            retry_after = _parse_retry_after(response)
+            retry_after = parse_retry_after(response.headers)
 
             if status >= 500 or status == 429:
                 # Transient error - retry
