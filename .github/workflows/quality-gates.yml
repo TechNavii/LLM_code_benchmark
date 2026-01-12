@@ -141,6 +141,11 @@ jobs:
       - name: Check dependency hashes integrity
         run: ./scripts/check-hashes.sh
 
+      # Run hardcoded values scan early for fast feedback on secrets/paths
+      # This runs before full lint to fail fast on security issues
+      - name: Check for hardcoded secrets and paths
+        run: ./scripts/check-hardcoded-values.sh
+
       - name: Run lint checks
         run: ./scripts/lint.sh
 

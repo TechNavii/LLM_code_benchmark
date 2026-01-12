@@ -1059,7 +1059,7 @@
         "Allow controlled suppressions with explicit justification and periodic review",
         "Keep the gate scoped to tracked repo files and exclude caches/artifacts"
       ],
-      "passes": false
+      "passes": true
     },
     {
       "id": "quality-024-repo-artifact-hygiene",
