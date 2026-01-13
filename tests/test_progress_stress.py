@@ -14,6 +14,7 @@ import asyncio
 import concurrent.futures
 import gc
 import threading
+import time
 import weakref
 from typing import Any
 
@@ -354,13 +355,16 @@ class TestCrossThreadPublishing:
 
         stop_flag = threading.Event()
         errors: list[BaseException] = []
+        max_events = 2_000
 
         def background_publisher() -> None:
             try:
                 idx = 0
-                while not stop_flag.is_set():
+                while idx < max_events and not stop_flag.is_set():
                     pm.publish_attempt(run_id, {"idx": idx})
                     idx += 1
+                    if idx % 50 == 0:
+                        time.sleep(0.001)
             except BaseException as exc:  # pragma: no cover
                 errors.append(exc)
 

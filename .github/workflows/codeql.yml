@@ -64,7 +64,6 @@ jobs:
               - server
               - harness
               - gui
-              - conftest.py
             paths-ignore:
               - runs
               - .venv

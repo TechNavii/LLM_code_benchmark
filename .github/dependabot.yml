@@ -104,6 +104,11 @@ updates:
           - "minor"
           - "patch"
 
+    # Semgrep updates can intermittently fail inside Dependabot's updater container.
+    # Keep it pinned and update manually when needed.
+    ignore:
+      - dependency-name: "semgrep"
+
 # Note: tasks/* workspace dependencies are NOT managed by Dependabot
 # They are task-specific and intentionally not part of the repository's
 # core dependency management. Each task manages its own dependencies.

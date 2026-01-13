@@ -28,6 +28,8 @@ permissions:
   id-token: write         # Required: publish results to OpenSSF REST API
   contents: read          # Required: checkout code
   actions: read           # Required: detect workflow changes
+  pull-requests: read     # Required: some checks query PR/commit metadata
+  checks: read            # Required: CI-Tests check reads check runs
 
 jobs:
   scorecard:
@@ -49,10 +51,11 @@ jobs:
           results_format: sarif
           # Publish results to OpenSSF REST API for public visibility
           # For private repos, set this to 'false'
-          publish_results: true
+          publish_results: ${{ github.event.repository.private != true }}
 
       # Upload SARIF results to GitHub Security tab
       - name: Upload SARIF to GitHub Security tab
+        if: always() && hashFiles('scorecard-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@45c373516f557556c15d420e3f5e0aa3d64366bc  # v3
         with:
           sarif_file: scorecard-results.sarif
@@ -113,6 +116,7 @@ jobs:
 
       - name: Download SARIF artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        continue-on-error: true
         with:
           name: scorecard-sarif-${{ github.sha }}
           path: .

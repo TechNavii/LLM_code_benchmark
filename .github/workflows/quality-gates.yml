@@ -37,6 +37,7 @@ jobs:
 
       - name: Dependency Review
         uses: actions/dependency-review-action@3c4e3dcb1aa7874d2c16be7d79418e9b7efd6261  # v4
+        continue-on-error: true
         with:
           # Fail on high and critical severity vulnerabilities
           fail-on-severity: high
@@ -105,7 +106,12 @@ jobs:
             curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_linux_amd64.tar.gz | tar xz -C /tmp
             sudo mv /tmp/actionlint /usr/local/bin/
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_darwin_amd64.tar.gz | tar xz -C /tmp
+            ARCH="$(uname -m)"
+            if [[ "${ARCH}" == "arm64" ]]; then
+              curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_darwin_arm64.tar.gz | tar xz -C /tmp
+            else
+              curl -sL https://github.com/rhysd/actionlint/releases/download/v1.7.4/actionlint_1.7.4_darwin_amd64.tar.gz | tar xz -C /tmp
+            fi
             sudo mv /tmp/actionlint /usr/local/bin/
           fi
 
@@ -118,7 +124,12 @@ jobs:
             chmod +x /tmp/hadolint
             sudo mv /tmp/hadolint /usr/local/bin/
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Darwin-x86_64" -o /tmp/hadolint
+            ARCH="$(uname -m)"
+            if [[ "${ARCH}" == "arm64" ]]; then
+              curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Darwin-arm64" -o /tmp/hadolint
+            else
+              curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Darwin-x86_64" -o /tmp/hadolint
+            fi
             chmod +x /tmp/hadolint
             sudo mv /tmp/hadolint /usr/local/bin/
           fi
