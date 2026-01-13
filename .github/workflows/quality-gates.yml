@@ -116,20 +116,12 @@ jobs:
           fi
 
       - name: Install hadolint
+        if: runner.os == 'Linux'
         run: |
           # Install hadolint for Dockerfile linting (OS-specific binaries)
           HADOLINT_VERSION="2.12.0"
           if [[ "${{ runner.os }}" == "Linux" ]]; then
-            curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" -o /tmp/hadolint
-            chmod +x /tmp/hadolint
-            sudo mv /tmp/hadolint /usr/local/bin/
-          elif [[ "${{ runner.os }}" == "macOS" ]]; then
-            ARCH="$(uname -m)"
-            if [[ "${ARCH}" == "arm64" ]]; then
-              curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Darwin-arm64" -o /tmp/hadolint
-            else
-              curl -sL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Darwin-x86_64" -o /tmp/hadolint
-            fi
+            curl -fsSL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" -o /tmp/hadolint
             chmod +x /tmp/hadolint
             sudo mv /tmp/hadolint /usr/local/bin/
           fi
@@ -138,6 +130,7 @@ jobs:
         run: ./scripts/actionlint.sh
 
       - name: Run hadolint on Dockerfiles
+        if: runner.os == 'Linux'
         run: ./scripts/hadolint.sh
 
       - name: Check GitHub Actions are pinned to SHAs
