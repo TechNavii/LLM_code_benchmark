@@ -46,27 +46,45 @@ cp requirements-dev.txt "${TEMP_DIR}/dev-requirements.txt"
 "${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file="${TEMP_DIR}/harness-requirements.txt" harness/requirements.in
 "${VENV_DIR}/bin/pip-compile" ${COMPILE_FLAGS} --output-file="${TEMP_DIR}/dev-requirements.txt" requirements-dev.in
 
-strip_pip_compile_header() {
-    awk 'BEGIN{started=0} started{print; next} /^[[:space:]]*$/{next} /^#/{next} {started=1; print}' "$1"
+normalize_lockfile() {
+    awk '
+        BEGIN { started = 0 }
+        {
+            line = $0
+
+            # Skip header / leading comments
+            if (!started) {
+                if (line ~ /^[[:space:]]*$/) next
+                if (line ~ /^[[:space:]]*#/) next
+                started = 1
+            }
+
+            # Ignore all comment and empty lines (pip-compile annotations are non-semantic)
+            if (line ~ /^[[:space:]]*$/) next
+            if (line ~ /^[[:space:]]*#/) next
+
+            print line
+        }
+    ' "$1"
 }
 
 CHANGES=0
 
-if ! diff <(strip_pip_compile_header server/requirements.txt) <(strip_pip_compile_header "${TEMP_DIR}/server-requirements.txt") >/dev/null 2>&1; then
+if ! diff <(normalize_lockfile server/requirements.txt) <(normalize_lockfile "${TEMP_DIR}/server-requirements.txt") >/dev/null 2>&1; then
     echo "❌ server/requirements.txt is out of date"
-    diff -u <(strip_pip_compile_header server/requirements.txt) <(strip_pip_compile_header "${TEMP_DIR}/server-requirements.txt") | head -n 80 || true
+    diff -u <(normalize_lockfile server/requirements.txt) <(normalize_lockfile "${TEMP_DIR}/server-requirements.txt") | head -n 80 || true
     CHANGES=1
 fi
 
-if ! diff <(strip_pip_compile_header harness/requirements.txt) <(strip_pip_compile_header "${TEMP_DIR}/harness-requirements.txt") >/dev/null 2>&1; then
+if ! diff <(normalize_lockfile harness/requirements.txt) <(normalize_lockfile "${TEMP_DIR}/harness-requirements.txt") >/dev/null 2>&1; then
     echo "❌ harness/requirements.txt is out of date"
-    diff -u <(strip_pip_compile_header harness/requirements.txt) <(strip_pip_compile_header "${TEMP_DIR}/harness-requirements.txt") | head -n 80 || true
+    diff -u <(normalize_lockfile harness/requirements.txt) <(normalize_lockfile "${TEMP_DIR}/harness-requirements.txt") | head -n 80 || true
     CHANGES=1
 fi
 
-if ! diff <(strip_pip_compile_header requirements-dev.txt) <(strip_pip_compile_header "${TEMP_DIR}/dev-requirements.txt") >/dev/null 2>&1; then
+if ! diff <(normalize_lockfile requirements-dev.txt) <(normalize_lockfile "${TEMP_DIR}/dev-requirements.txt") >/dev/null 2>&1; then
     echo "❌ requirements-dev.txt is out of date"
-    diff -u <(strip_pip_compile_header requirements-dev.txt) <(strip_pip_compile_header "${TEMP_DIR}/dev-requirements.txt") | head -n 80 || true
+    diff -u <(normalize_lockfile requirements-dev.txt) <(normalize_lockfile "${TEMP_DIR}/dev-requirements.txt") | head -n 80 || true
     CHANGES=1
 fi
 
