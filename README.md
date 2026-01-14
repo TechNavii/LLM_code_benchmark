@@ -82,6 +82,27 @@ Environment variables present in the shell always take precedence over `.env` va
 ---
 ## Launching the Benchmark Dashboard
 
+### Quickstart scripts
+
+Use the helper scripts to create/activate `.venv`, install the pinned dependencies (with hash verification), start `uvicorn`, and open the UI in your browser:
+
+```bash
+./scripts/devserver.sh
+```
+
+This serves the main dashboard at `http://127.0.0.1:8000/ui/index.html`.
+
+For the QA dashboard (loads `OPENROUTER_API_KEY` from your shell or `.env` and supports custom host/port):
+
+```bash
+./scripts/devserver_qa.sh
+```
+
+Optional environment variables:
+
+- `DEVSERVER_NO_REFRESH=1` (don’t auto-open the browser)
+- `DEVSERVER_HOST` / `DEVSERVER_PORT` (QA script only; defaults to `127.0.0.1:8000`, and auto-selects `8001-8100` if `8000` is busy)
+
 1. **Start the FastAPI server**
    ```bash
    uvicorn server.api:app --reload
