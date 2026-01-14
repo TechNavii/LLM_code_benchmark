@@ -8,3 +8,12 @@ if str(ROOT) not in sys.path:
 
 # Ensure tests never depend on a developer's real OpenRouter key from .env.
 os.environ.setdefault("OPENROUTER_API_KEY", "test-openrouter-api-key-1234567890")
+
+try:
+    import jsonschema
+    from jsonschema.exceptions import _RefResolutionError
+
+    if "RefResolutionError" not in jsonschema.__dict__:
+        jsonschema.RefResolutionError = _RefResolutionError  # type: ignore[attr-defined]
+except Exception:
+    pass
