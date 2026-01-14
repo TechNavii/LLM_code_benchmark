@@ -55,11 +55,11 @@ echo ""
 # This uses the lock files which pin all transitive dependencies
 echo "Generating combined SBOM (JSON format)..."
 "${VENV_DIR}/bin/cyclonedx-py" environment \
-    --output-format JSON \
+    --of JSON \
     --output-reproducible \
     --mc-type application \
-    --spec-version 1.5 \
-    --output-file "${SBOM_DIR}/sbom.json" \
+    --sv 1.5 \
+    -o "${SBOM_DIR}/sbom.json" \
     "${VENV_DIR}"
 
 echo "Generated: ${SBOM_DIR}/sbom.json"
@@ -67,11 +67,11 @@ echo "Generated: ${SBOM_DIR}/sbom.json"
 # Also generate XML format for compatibility
 echo "Generating combined SBOM (XML format)..."
 "${VENV_DIR}/bin/cyclonedx-py" environment \
-    --output-format XML \
+    --of XML \
     --output-reproducible \
     --mc-type application \
-    --spec-version 1.5 \
-    --output-file "${SBOM_DIR}/sbom.xml" \
+    --sv 1.5 \
+    -o "${SBOM_DIR}/sbom.xml" \
     "${VENV_DIR}"
 
 echo "Generated: ${SBOM_DIR}/sbom.xml"
