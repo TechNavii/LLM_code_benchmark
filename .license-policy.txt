@@ -15,4 +15,7 @@
 # some-gpl-dev-tool  # Only used in dev, not distributed
 # legacy-package     # Reviewed on 2024-01-01, compatible with our use case
 
-# No exceptions currently required - all dependencies use approved licenses
+# Development/test dependencies with GPL licenses (not distributed)
+# These are transitive dependencies brought in by testing frameworks
+rfc3987       # Dev-only: GPL-licensed transitive dep; used only in test environment
+text-unidecode  # Dev-only: GPL/Artistic dual-licensed transitive dep; used only in test environment
