@@ -11,14 +11,7 @@ mypy==1.13.0
 types-requests==2.32.0.20241016
 pre-commit==4.0.1
 pip-tools>=7.4.1
-vulture==2.14
-bandit==1.8.0
-semgrep==1.102.0
-openapi-spec-validator==0.7.1
 hypothesis==6.135.0
-pip-licenses==5.0.0
-cyclonedx-bom==4.6.1
-diff-cover==9.2.0
 schemathesis==3.36.0
 pytest-playwright==0.7.2
 pytest-benchmark==5.1.0

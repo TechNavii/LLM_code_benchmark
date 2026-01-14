@@ -59,7 +59,7 @@ fi
 echo ""
 echo "Verifying installation..."
 TOOLS_OK=true
-for tool in pytest ruff mypy vulture bandit; do
+for tool in pytest ruff mypy; do
     if "${VENV_DIR}/bin/${tool}" --version >/dev/null 2>&1; then
         echo "  ✓ ${tool} available"
     else

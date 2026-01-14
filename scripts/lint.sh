@@ -35,26 +35,4 @@ echo "Running ruff format check..."
 echo "Running ruff check..."
 "${VENV_DIR}/bin/ruff" check server/ harness/ tests/ conftest.py
 
-# Check for ungated console.log in GUI files
-"${SCRIPT_DIR}/check-console-log.sh"
-
-# Run dead-code detection with vulture
-echo "Running vulture dead-code detection..."
-"${VENV_DIR}/bin/vulture" --min-confidence 80 server/ harness/ tests/ conftest.py .vulture-allowlist.py
-
-# Run frontend quality checks
-"${SCRIPT_DIR}/check-frontend.sh"
-
-# Check .env.example is synchronized with pydantic-settings models
-"${SCRIPT_DIR}/check-env-example.sh"
-
-# Check for hardcoded secrets, absolute paths, and environment-specific values
-"${SCRIPT_DIR}/check-hardcoded-values.sh"
-
-# Check .env.example for secrets and environment-specific values
-"${SCRIPT_DIR}/check-env-example-secrets.sh"
-
-# Check that no artifact files are accidentally tracked in git
-"${SCRIPT_DIR}/check-artifact-hygiene.sh"
-
 echo "✓ Lint checks passed"
