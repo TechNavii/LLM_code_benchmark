@@ -4,4 +4,4 @@ sqlalchemy==2.0.32
 greenlet==3.3.0
 alembic==1.13.2
 pydantic-settings==2.4.0
-structlog==24.4.0
+structlog==25.5.0
