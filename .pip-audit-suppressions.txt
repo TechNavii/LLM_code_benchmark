@@ -25,3 +25,8 @@ CVE-2024-47874
 # Transitive dependency via fastapi. Will update when fastapi bumps starlette requirement.
 # See: https://nvd.nist.gov/vuln/detail/CVE-2025-54121
 CVE-2025-54121
+
+# CVE-2025-62727: starlette vulnerability (fix in 0.49.1)
+# Transitive dependency via fastapi==0.115.6. Waiting for fastapi to bump starlette requirement.
+# See: https://nvd.nist.gov/vuln/detail/CVE-2025-62727
+CVE-2025-62727
