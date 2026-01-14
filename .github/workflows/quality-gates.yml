@@ -137,6 +137,7 @@ jobs:
         run: ./scripts/check-pinned-actions.sh
 
       - name: Run ShellCheck on scripts
+        if: runner.os == 'Linux'
         run: ./scripts/shellcheck.sh
 
       - name: Check dependency lock files
