@@ -609,6 +609,18 @@ tbody tr:hover {
   min-width: 700px;
 }
 
+#qa-results-table {
+  table-layout: fixed;
+}
+
+#qa-results-table th:nth-child(9),
+#qa-results-table td:nth-child(9) {
+  width: 150px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .table-wrapper td, .table-wrapper th {
   background: transparent;
   color: var(--text);
@@ -675,6 +687,15 @@ tbody tr:hover {
   color: var(--danger);
   font-size: 0.85rem;
   cursor: help;
+}
+
+.truncated-cell {
+  max-width: 150px;
+  width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
 }
 
 .error-text {

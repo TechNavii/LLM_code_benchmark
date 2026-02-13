@@ -703,7 +703,28 @@ function updateAttemptRow(event) {
   const expectedAns = (event.expected_answer != null && String(event.expected_answer).trim())
     ? String(event.expected_answer).trim()
     : (event.normalized_expected != null ? String(event.normalized_expected).trim() : '');
-  cells[8].textContent = modelAns;
+  // Truncate long model answers for display, show full text on hover/click
+  const maxLen = 60;
+  const displayModelAns = modelAns.length > maxLen ? modelAns.substring(0, maxLen) + '...' : modelAns;
+  // Clear any existing content and create a wrapper span for truncation
+  cells[8].innerHTML = '';
+  const answerSpan = document.createElement('span');
+  answerSpan.textContent = displayModelAns;
+  answerSpan.style.cssText = 'display:block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  if (modelAns.length > maxLen) {
+    answerSpan.style.cursor = 'pointer';
+    answerSpan.title = 'Click to copy full answer';
+    answerSpan.onclick = (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(modelAns).then(() => {
+        answerSpan.textContent = 'Copied!';
+        setTimeout(() => { answerSpan.textContent = displayModelAns; }, 1000);
+      }).catch(() => {
+        prompt('Full answer:', modelAns);
+      });
+    };
+  }
+  cells[8].appendChild(answerSpan);
   cells[9].textContent = expectedAns;
 
   const judgeInfo = event.judge_decision

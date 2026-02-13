@@ -39,7 +39,7 @@ class HarnessSettings(BaseSettings):
     qa_completion_max_retries: int = 10
     qa_retry_backoff_seconds: float = 10.0
     # API call timeout (per request, not total retries)
-    api_call_timeout_seconds: int = 300  # 5 minutes per API call
+    api_call_timeout_seconds: int = 900  # 15 minutes per API call (local LLMs can be slow)
 
     model_config = {
         "env_file": ROOT / ".env",

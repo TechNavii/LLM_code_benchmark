@@ -9,10 +9,7 @@ from workflow import compute_schedule
 
 
 def build_tasks(defs):
-    return [
-        {"id": task_id, "duration": duration, "deps": deps}
-        for task_id, duration, deps in defs
-    ]
+    return [{"id": task_id, "duration": duration, "deps": deps} for task_id, duration, deps in defs]
 
 
 def test_basic_timing_and_makespan():

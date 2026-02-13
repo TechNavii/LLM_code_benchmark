@@ -95,6 +95,9 @@ UVICORN_ARGS=(
   server.api:app
   --host "${DEVSERVER_HOST}"
   --port "${DEVSERVER_PORT}"
+  --reload
+  --reload-dir "${ROOT_DIR}/gui"
+  --reload-dir "${ROOT_DIR}/server"
 )
 
 CACHE_BUSTER="$(date +%s)"

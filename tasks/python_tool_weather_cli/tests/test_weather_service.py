@@ -1,6 +1,3 @@
-import json
-import os
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -8,7 +5,7 @@ import pytest
 import weather_service
 
 TOOL_PATH = Path(__file__).resolve().parents[1] / "workspace" / "tools" / "weather_tool.py"
-TOKEN_FILE = TOOL_PATH.with_name('.last_call')
+TOKEN_FILE = TOOL_PATH.with_name(".last_call")
 
 
 @pytest.fixture(autouse=True)
@@ -51,7 +48,7 @@ def test_tool_failure_propagates(monkeypatch):
 def test_json_parsing_failure(monkeypatch):
     """If tool prints invalid JSON, the service should raise an error."""
 
-    wrapper = TOOL_PATH.with_name('weather_tool_invalid.py')
+    wrapper = TOOL_PATH.with_name("weather_tool_invalid.py")
     wrapper.write_text(
         "#!/usr/bin/env python3\nprint('not json')\n",
         encoding="utf-8",

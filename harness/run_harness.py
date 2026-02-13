@@ -59,15 +59,28 @@ RUN_ARTIFACTS = SETTINGS.runs_root
 DEFAULT_MODEL = SETTINGS.default_model
 DEFAULT_MAX_TOKENS = SETTINGS.default_max_tokens
 SUPPORTED_EXTENSIONS = {
+    ".c",
+    ".cc",
+    ".cpp",
+    ".css",
+    ".cxx",
+    ".h",
+    ".hh",
+    ".hpp",
+    ".hxx",
+    ".html",
+    ".inl",
     ".py",
     ".js",
+    ".json",
     ".ts",
     ".tsx",
     ".go",
-    ".rs",
     ".md",
+    ".rs",
     ".txt",
-    ".json",
+    ".toml",
+    ".sh",
     ".yaml",
     ".yml",
 }
@@ -1083,9 +1096,7 @@ def install_requirements(workspace_path: Path) -> None:
     )
     if process.returncode != 0:
         raise HarnessError(
-            "Failed to install requirements:\n"
-            f"STDOUT:\n{process.stdout.decode()}\n"
-            f"STDERR:\n{process.stderr.decode()}"
+            f"Failed to install requirements:\nSTDOUT:\n{process.stdout.decode()}\nSTDERR:\n{process.stderr.decode()}"
         )
 
 
@@ -1575,7 +1586,7 @@ def apply_patch(
                     "Applied diff rewrite fallback to:\n" + "\n".join(sorted(rewritten_files)),
                 )
                 return
-        raise HarnessError("Patch failed dry-run validation:\n" f"STDOUT:\n{stdout_text}\n" f"STDERR:\n{stderr_text}")
+        raise HarnessError(f"Patch failed dry-run validation:\nSTDOUT:\n{stdout_text}\nSTDERR:\n{stderr_text}")
 
     apply_process = _run_patch_command(patch_args, patch_bytes, workspace_path)
     if apply_process.returncode != 0:

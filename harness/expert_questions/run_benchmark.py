@@ -64,11 +64,17 @@ JUDGE_MODEL = SETTINGS.expert_qa_judge_model
 JUDGE_MAX_TOKENS = 256
 # The expert QA dataset expects single-token answers; cap completions defensively.
 QA_ANSWER_MAX_TOKENS = 64
+# Allow reasoning-capable models to complete their output before the final answer.
+QA_REASONING_MAX_TOKENS = 512
+# OpenRouter reasoning-capable models can emit substantial reasoning before producing the final answer.
+QA_OPENROUTER_MAX_TOKENS = 4096
+# Local LM Studio models can be more verbose; allow extra headroom.
+QA_LMSTUDIO_MAX_TOKENS = 4096
 QA_ANSWER_STOP_SEQUENCES = ["\n"]
 QA_ANSWER_SYSTEM_PROMPT = (
     "You are taking a strict benchmark. Reply with the final answer only. "
     "Do not include any explanation. Do not include any prefix like 'Answer:'. "
-    "Your entire response must be just the answer with no spaces or newlines."
+    "Your entire response must be just the answer."
 )
 # Retry strategy for QA completions (configurable via settings)
 MAX_QA_COMPLETION_RETRIES = SETTINGS.qa_completion_max_retries
@@ -100,6 +106,37 @@ def _compose_reasoning_payload(level: str) -> dict[str, Any]:
     return {"effort": value}
 
 
+def _summarize_openrouter_response(data: Any) -> str:
+    if not isinstance(data, dict):
+        return f"type={type(data).__name__}"
+
+    summary: dict[str, Any] = {"keys": sorted(data.keys())}
+    if "error" in data:
+        summary["error"] = data.get("error")
+
+    choices = data.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0] if isinstance(choices[0], dict) else {"type": type(choices[0]).__name__}
+        summary["choices_count"] = len(choices)
+        summary["finish_reason"] = first.get("finish_reason") if isinstance(first, dict) else None
+        message = (first or {}).get("message") if isinstance(first, dict) else None
+        if isinstance(message, dict):
+            content = message.get("content")
+            summary["message_keys"] = sorted(message.keys())
+            summary["content_type"] = type(content).__name__
+            if isinstance(content, str):
+                summary["content_len"] = len(content)
+            elif isinstance(content, list):
+                summary["content_items"] = len(content)
+        else:
+            summary["message_type"] = type(message).__name__
+
+    payload = json.dumps(summary, ensure_ascii=False)
+    if len(payload) > 2000:
+        payload = payload[:2000] + "…"
+    return payload
+
+
 def _call_openrouter(
     prompt: str,
     *,
@@ -108,6 +145,7 @@ def _call_openrouter(
     max_tokens: int,
     preferred_provider: str | None = None,
     reasoning_payload: dict[str, Any] | None = None,
+    model_supports_reasoning: bool = False,
 ) -> tuple[str, dict[str, Any], float]:
     if requests is None:
         raise HarnessError("The 'requests' library is required to call OpenRouter.")
@@ -128,7 +166,8 @@ def _call_openrouter(
     def wrap_content(text: str) -> list[dict[str, str]]:
         return [{"type": "text", "text": text}]
 
-    capped_max_tokens = min(max_tokens, QA_ANSWER_MAX_TOKENS)
+    cap = QA_REASONING_MAX_TOKENS if (reasoning_payload or model_supports_reasoning) else QA_ANSWER_MAX_TOKENS
+    capped_max_tokens = min(max_tokens, cap)
     payload = {
         "model": model,
         "messages": [
@@ -140,13 +179,12 @@ def _call_openrouter(
         ],
         "temperature": temperature,
         "max_tokens": capped_max_tokens,
-        "stop": QA_ANSWER_STOP_SEQUENCES,
     }
     if preferred_provider:
         payload["provider"] = {
             "order": [preferred_provider],
         }
-    if reasoning_payload is not None:
+    if reasoning_payload:
         payload["reasoning"] = reasoning_payload
 
     last_error: HarnessError | None = None
@@ -251,7 +289,22 @@ def _call_openrouter(
                     else:
                         first = choices[0] if choices else {}
                         choice_error = (first or {}).get("error")
-                        content = (first or {}).get("message", {}).get("content", "")
+                        message_obj = (first or {}).get("message") or {}
+                        content: str | list[Any] | None
+                        if isinstance(message_obj, dict):
+                            content = message_obj.get("content", "")
+                        else:
+                            content = ""
+
+                        if isinstance(content, list):
+                            parts: list[str] = [
+                                item["text"]
+                                for item in content
+                                if isinstance(item, dict)
+                                and item.get("type") == "text"
+                                and isinstance(item.get("text"), str)
+                            ]
+                            content = "".join(parts)
 
                         if isinstance(choice_error, dict):
                             code = choice_error.get("code")
@@ -296,8 +349,27 @@ def _call_openrouter(
                             if cleaned:
                                 latency = time.perf_counter() - start
                                 return cleaned, data, latency
-                            last_error = EmptyResponseError("QA returned empty content")
+                            response_summary = _summarize_openrouter_response(data)
+                            last_error = EmptyResponseError(
+                                f"QA returned empty content. OpenRouter summary: {response_summary}"
+                            )
                             should_retry = True
+
+                            finish_reason = (first or {}).get("finish_reason")
+                            reasoning = None
+                            if isinstance(message_obj, dict):
+                                reasoning = message_obj.get("reasoning")
+                            current_max_tokens = payload.get("max_tokens")
+                            if (
+                                finish_reason == "length"
+                                and isinstance(reasoning, str)
+                                and reasoning.strip()
+                                and isinstance(current_max_tokens, int)
+                            ):
+                                max_allowed = min(max_tokens, QA_OPENROUTER_MAX_TOKENS)
+                                current = current_max_tokens
+                                if current < max_allowed:
+                                    payload["max_tokens"] = min(max_allowed, max(current * 2, QA_REASONING_MAX_TOKENS))
 
         if attempt < MAX_QA_COMPLETION_RETRIES - 1 and should_retry:
             # Use Retry-After header if available, otherwise use exponential backoff
@@ -392,7 +464,7 @@ def _call_lmstudio(
         "Accept": "application/json",
     }
 
-    capped_max_tokens = min(max_tokens, QA_ANSWER_MAX_TOKENS)
+    capped_max_tokens = min(max_tokens, QA_LMSTUDIO_MAX_TOKENS)
     payload = {
         "model": model,
         "messages": [
@@ -404,7 +476,6 @@ def _call_lmstudio(
         ],
         "temperature": temperature,
         "max_tokens": capped_max_tokens,
-        "stop": QA_ANSWER_STOP_SEQUENCES,
     }
 
     start = time.perf_counter()
@@ -453,6 +524,7 @@ def _call_completion(
     max_tokens: int,
     preferred_provider: str | None = None,
     reasoning_payload: dict[str, Any] | None = None,
+    model_supports_reasoning: bool = False,
 ) -> tuple[str, dict[str, Any], float]:
     if _is_lmstudio_model(model):
         return _call_lmstudio(
@@ -469,6 +541,7 @@ def _call_completion(
         max_tokens=max_tokens,
         preferred_provider=preferred_provider,
         reasoning_payload=reasoning_payload,
+        model_supports_reasoning=model_supports_reasoning,
     )
 
 
@@ -502,15 +575,18 @@ def _judge_answer(
         return [{"type": "text", "text": text}]
 
     system_prompt = (
-        "You are an impartial judge. Compare an expected answer with a model's answer. "
-        "Return JSON with keys 'decision' (PASS or FAIL) and 'reason'. PASS only when the "
-        "two answers mean the same thing, accounting for formatting or synonymous wording."
+        "You are an impartial judge evaluating benchmark answers. Compare an expected answer with a model's answer. "
+        "Return JSON with keys 'decision' (PASS or FAIL) and 'reason'. "
+        "PASS when the model's answer contains the correct core answer, even if it includes additional context. "
+        "For example: 'Son' and 'His son' are equivalent. 'Bob' and 'Bob is the truth-teller' are equivalent. "
+        "'3' and 'You have 3 apples' are equivalent. Focus on whether the essential answer is correct."
     )
     user_prompt = (
         f"Question: {question_text}\n"
         f"Expected answer: {expected}\n"
         f"Model answer: {observed}\n"
-        "Reply with PASS if the answers convey the same meaning (allowing for formatting, capitalization, or equivalent synonyms). Otherwise reply FAIL."
+        "Reply with PASS if the model's answer contains the correct answer (ignoring extra words, articles like 'the/a/his', "
+        "formatting differences, or additional explanation). Reply FAIL only if the core answer is wrong or missing."
     )
 
     payload = {
@@ -679,8 +755,20 @@ def _extract_single_line_answer(raw: str) -> str:
     lines = [ln.strip() for ln in (text.strip().splitlines() if text else [])]
     non_empty = [ln for ln in lines if ln]
 
+    marker_patterns = (
+        r"(?i)final\s+output\s+generation\s*[:\-–—]?\s*",
+        r"(?i)final\s+output\s*[:\-–—]?\s*",
+        r"(?i)final\s+answer\s*[:\-–—]?\s*",
+        r"(?i)answer\s*[:\-–—]?\s*",
+        r"(?i)result\s*[:\-–—]?\s*",
+    )
+
     def _cleanup(line: str) -> str:
         cleaned = (line or "").strip()
+        cleaned = re.sub(r"(?is)</?think>", "", cleaned)
+        cleaned = re.sub(r"(?is)</?reasoning>", "", cleaned)
+        cleaned = re.sub(r"(?is)</?deliberate>", "", cleaned)
+        cleaned = re.sub(r"(?is)</?chain>", "", cleaned)
         cleaned = re.sub(r"^\s*(?:[-*]\s+|\d+[.)]\s+)", "", cleaned)
         cleaned = re.sub(
             r"(?i)^(?:final\s+answer|final|answer)\s*[:\-–—]\s*",
@@ -688,20 +776,73 @@ def _extract_single_line_answer(raw: str) -> str:
             cleaned,
         )
         cleaned = re.sub(r"(?i)^(?:the\s+)?(?:final\s+)?answer\s+is\s+", "", cleaned)
+        cleaned = re.sub(r"(?i)^(?:final\s+output\s+generation|final\s+output|output)\s*[:\-–—]\s*", "", cleaned)
+        for pattern in marker_patterns:
+            cleaned = re.sub(pattern, "", cleaned)
+        cleaned = re.sub(r"\*{1,3}", "", cleaned)
+        cleaned = re.sub(r"_{1,3}", "", cleaned)
         cleaned = cleaned.strip().strip("`*_\"'")
         cleaned = cleaned.strip(" .,:;!?")
         cleaned = cleaned.strip("`*_\"'")
+        if cleaned:
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        if cleaned and len(cleaned) % 2 == 0:
+            half = len(cleaned) // 2
+            if cleaned[:half] == cleaned[half:]:
+                cleaned = cleaned[:half]
+        if cleaned and " " not in cleaned:
+            lowered = cleaned.lower()
+            for prefix in ("the", "a", "an", "his", "her", "their", "its", "my", "your", "our"):
+                if lowered.startswith(prefix) and len(cleaned) > len(prefix) + 1:
+                    cleaned = cleaned[len(prefix) :]
+                    break
         return cleaned
 
-    if non_empty:
-        return _cleanup(non_empty[-1])
+    meta_patterns = re.compile(
+        r"\b(?:"
+        r"analyz(?:e|ed|ing)?|analysis|"
+        r"constraints?|tasks?|goals?|questions?|"
+        r"evaluat(?:e|ed|ing|ion|ions)?|possibilit(?:y|ies)|"
+        r"cases?|steps?|reason(?:ing|s)?|requests?|formats?|instructions?|"
+        r"characters?|types?|statements?|validation|verify|verification|output|drafts?|checks?"
+        r")\b",
+        re.IGNORECASE,
+    )
 
-    # Fallback to the first non-empty line from the original content.
+    def _is_meta_line(cleaned: str) -> bool:
+        lowered = cleaned.lower()
+        if lowered.endswith(":"):
+            return True
+        if lowered.startswith("are ") or lowered.startswith("is "):
+            return True
+        return bool(meta_patterns.search(lowered))
+
+    def _pick_best(lines: list[str], *, skip_meta: bool = True) -> str | None:
+        candidates: list[tuple[int, str]] = []
+        for idx, ln in enumerate(lines):
+            cleaned = _cleanup(ln)
+            if cleaned:
+                if len(cleaned) > 64:
+                    continue
+                if skip_meta and _is_meta_line(cleaned):
+                    continue
+                candidates.append((idx, cleaned))
+        if not candidates:
+            if skip_meta:
+                return _pick_best(lines, skip_meta=False)
+            return None
+        # Prefer the shortest (fewest tokens) candidate; tie-break towards later lines.
+        _, best = min(candidates, key=lambda item: (len(item[1].split()), -item[0]))
+        return best
+
+    picked = _pick_best(non_empty)
+    if picked is not None:
+        return picked
+
+    # Fallback to the best candidate from the original content.
     orig_lines = [ln.strip() for ln in (raw.strip().splitlines() if raw else [])]
-    for ln in orig_lines:
-        if ln:
-            return _cleanup(ln)
-    return ""
+    picked = _pick_best([ln for ln in orig_lines if ln])
+    return picked or ""
 
 
 def _build_prompt(question: Question) -> str:
@@ -959,6 +1100,7 @@ def retry_qa_api_error_attempts(
                 max_tokens=max_tokens,
                 preferred_provider=provider,
                 reasoning_payload=level_reasoning,
+                model_supports_reasoning=model_supports_reasoning,
             )
         except APIError as exc:
             error_type = type(exc).__name__
@@ -1178,6 +1320,7 @@ def retry_qa_failed_attempts(
                 max_tokens=max_tokens,
                 preferred_provider=provider or original_attempt.get("provider"),
                 reasoning_payload=reasoning_payload,
+                model_supports_reasoning=model_supports_reasoning,
             )
         except APIError as exc:
             error_type = type(exc).__name__
@@ -1496,6 +1639,7 @@ def run_question_benchmark(
                                 if model_supports_reasoning and thinking_level and not sweep_thinking_levels
                                 else None
                             ),
+                            model_supports_reasoning=model_supports_reasoning,
                         )
                     except APIError as exc:
                         # API errors (rate limits, empty responses, provider failures) are transient
@@ -1524,25 +1668,16 @@ def run_question_benchmark(
                         store_text(level_dir / "response.txt", response_text)
                         store_text(level_dir / "response.json", json.dumps(response_meta, indent=2))
                         usage = response_meta.get("usage") if isinstance(response_meta, dict) else None
-                        # Extract the final single-token/word answer robustly (skip reasoning blocks)
-                        model_answer = _extract_single_line_answer(response_text)
-                        normalized_expected = _normalise_answer(question.answer)
-                        normalized_observed = _normalise_answer(model_answer)
-                        attempt.update(
-                            {
-                                "model_answer": model_answer,
-                                "normalized_expected": normalized_expected,
-                                "normalized_answer": normalized_observed,
-                            }
-                        )
-                        if normalized_expected and normalized_expected == normalized_observed:
-                            attempt["status"] = "passed"
-                        elif judge_enabled:
+                        # Store the raw response and extract model_answer for UI display
+                        attempt["raw_response"] = response_text
+                        attempt["model_answer"] = response_text.strip()
+                        # Always use judge LLM to evaluate the full response
+                        if judge_enabled:
                             judge_pass, judge_decision, judge_reason, judge_usage, judge_raw, judge_latency = (
                                 _judge_answer(
                                     question.prompt,
-                                    normalized_expected or question.answer,
-                                    normalized_observed or model_answer,
+                                    question.answer,
+                                    response_text,
                                 )
                             )
                             attempt["judge_model"] = JUDGE_MODEL
@@ -1569,7 +1704,21 @@ def run_question_benchmark(
                             else:
                                 attempt["status"] = "failed"
                         else:
-                            attempt["status"] = "failed"
+                            # Fallback: simple string comparison when judge is not available
+                            model_answer = _extract_single_line_answer(response_text)
+                            normalized_expected = _normalise_answer(question.answer)
+                            normalized_observed = _normalise_answer(model_answer)
+                            attempt.update(
+                                {
+                                    "model_answer": model_answer,
+                                    "normalized_expected": normalized_expected,
+                                    "normalized_answer": normalized_observed,
+                                }
+                            )
+                            if normalized_expected and normalized_expected == normalized_observed:
+                                attempt["status"] = "passed"
+                            else:
+                                attempt["status"] = "failed"
 
                     duration = time.perf_counter() - attempt_start
                     attempt["duration_seconds"] = duration

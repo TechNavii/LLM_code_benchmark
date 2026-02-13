@@ -1,5 +1,3 @@
-import math
-
 import pytest
 
 from prime import is_prime

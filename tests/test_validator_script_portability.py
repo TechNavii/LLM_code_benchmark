@@ -63,10 +63,9 @@ class TestValidatorScriptPortability:
             # If the script failed, it shouldn't be due to path resolution issues
             if result.returncode != 0:
                 for bad_error in bad_errors:
-                    assert bad_error not in error_output, (
-                        f"{script_name} failed with path resolution error when run from {tmpdir}: "
-                        f"{error_output[:500]}"
-                    )
+                    assert (
+                        bad_error not in error_output
+                    ), f"{script_name} failed with path resolution error when run from {tmpdir}: {error_output[:500]}"
 
     def test_lint_script_changes_to_repo_root(self) -> None:
         """lint.sh should change to repo root regardless of starting directory."""

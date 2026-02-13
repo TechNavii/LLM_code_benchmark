@@ -38,14 +38,7 @@ DEFAULT_SECURITY_HEADERS: dict[str, str] = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     # Disable browser features not needed
     "Permissions-Policy": (
-        "accelerometer=(), "
-        "camera=(), "
-        "geolocation=(), "
-        "gyroscope=(), "
-        "magnetometer=(), "
-        "microphone=(), "
-        "payment=(), "
-        "usb=()"
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
     ),
     # Prevent clickjacking
     "X-Frame-Options": "SAMEORIGIN",

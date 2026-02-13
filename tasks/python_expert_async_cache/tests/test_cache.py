@@ -17,9 +17,7 @@ async def test_loader_called_once_for_concurrent_requests():
         await asyncio.sleep(0.05)
         return "result"
 
-    results = await asyncio.gather(
-        *(cache.get("a", loader) for _ in range(10))
-    )
+    results = await asyncio.gather(*(cache.get("a", loader) for _ in range(10)))
     assert results == ["result"] * 10
     assert call_count == 1, "Loader should have been coalesced across concurrent callers"
 
