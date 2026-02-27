@@ -447,9 +447,13 @@ function formatRunId(runId) {
   return `${baseId.slice(0, 6)}…${baseId.slice(-4)}`;
 }
 
-function buildRunDetailHref(runId) {
-  if (!runId) return '/ui/run.html';
-  return `/ui/run.html?run_id=${encodeURIComponent(runId)}`;
+function buildRunDetailHref(runId, modelId = null, thinkingLevel = null) {
+  const params = new URLSearchParams();
+  if (runId) params.set('run_id', runId);
+  if (modelId) params.set('model', modelId);
+  if (thinkingLevel) params.set('thinking_level', thinkingLevel);
+  const query = params.toString();
+  return query ? `/ui/run.html?${query}` : '/ui/run.html';
 }
 
 function getInputArray(selector) {
@@ -825,9 +829,15 @@ async function refreshLeaderboard() {
       const bestDuration = model.duration_at_best != null ? Number(model.duration_at_best).toFixed(2) : '-';
       const rawLevel = model.thinking_level || 'base';
       const levelLabel = formatThinkingLevel(rawLevel);
+      const bestRunHref = model.best_run_id
+        ? buildRunDetailHref(model.best_run_id, model.model_id, rawLevel)
+        : null;
+      const modelCell = bestRunHref
+        ? `<a class="model-link" href="${bestRunHref}" title="Open best run for ${model.model_id}">${model.model_id}</a>`
+        : model.model_id;
 
       row.innerHTML = `
-        <td class="breakable">${model.model_id}</td>
+        <td class="breakable">${modelCell}</td>
         <td>${accuracyText}</td>
         <td>${bestCost}</td>
         <td>${bestDuration}</td>

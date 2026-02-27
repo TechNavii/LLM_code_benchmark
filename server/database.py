@@ -173,7 +173,7 @@ def _determine_model_level(attempts: list[dict[str, Any]], default_level: str | 
     return "base"
 
 
-def leaderboard() -> list[dict[str, float | None]]:
+def leaderboard() -> list[dict[str, Any]]:
     stmt = select(
         RunRecord.id,
         RunRecord.summary_json,
@@ -257,6 +257,7 @@ def leaderboard() -> list[dict[str, float | None]]:
                 "duration": sum(duration_values) if duration_values else None,
                 "runs": 1,
                 "timestamp": row.timestamp_utc,
+                "run_id": row.id,
             }
             key = (model_id, level)
             group = groups.setdefault(key, {"runs": 0, "best": None})
@@ -274,6 +275,7 @@ def leaderboard() -> list[dict[str, float | None]]:
                 "best_accuracy": best.get("accuracy"),
                 "cost_at_best": best.get("cost"),
                 "duration_at_best": best.get("duration"),
+                "best_run_id": best.get("run_id"),
                 "runs": info.get("runs", 0),
             }
         )

@@ -633,6 +633,16 @@ tbody tr:hover {
   word-break: break-all;
 }
 
+.model-link {
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.model-link:hover {
+  text-decoration: underline;
+}
+
 .status-pending { color: var(--pending); }
 
 .status-chip {

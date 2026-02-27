@@ -2200,6 +2200,136 @@ def load_api_error_attempts(run_dir: Path) -> list[dict]:
     return api_error_attempts
 
 
+def _load_run_summary_if_exists(run_dir: Path) -> dict[str, Any]:
+    summary_file = run_dir / "summary.json"
+    if not summary_file.exists():
+        return {}
+    with summary_file.open("r", encoding="utf-8") as f:
+        summary = json.load(f)
+    return summary if isinstance(summary, dict) else {}
+
+
+def _load_all_attempts_for_run(run_dir: Path, summary: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    attempts_file = run_dir / "attempts.json"
+    if attempts_file.exists():
+        with attempts_file.open("r", encoding="utf-8") as f:
+            attempts = json.load(f)
+        if isinstance(attempts, list):
+            return [a for a in attempts if isinstance(a, dict)]
+        return []
+
+    summary_data = summary if summary is not None else _load_run_summary_if_exists(run_dir)
+    attempts = summary_data.get("attempts", []) if isinstance(summary_data, dict) else []
+    if isinstance(attempts, list):
+        return [a for a in attempts if isinstance(a, dict)]
+    return []
+
+
+def _attempt_identity_key(attempt: dict[str, Any]) -> tuple[str | None, str | None, int, str]:
+    sample_index_raw = attempt.get("sample_index", 0)
+    try:
+        sample_index = int(sample_index_raw)
+    except (TypeError, ValueError):
+        sample_index = 0
+
+    level = (
+        attempt.get("thinking_level_applied")
+        or attempt.get("thinking_level_requested")
+        or attempt.get("thinking_level")
+        or "base"
+    )
+    return (attempt.get("task_id"), attempt.get("model"), sample_index, str(level))
+
+
+def _merge_attempt_retries(
+    original_attempts: list[dict[str, Any]],
+    replacement_pairs: Iterable[tuple[dict[str, Any], dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    merged_attempts = list(original_attempts)
+    index_by_key = {_attempt_identity_key(attempt): idx for idx, attempt in enumerate(merged_attempts)}
+
+    for original_attempt, retried_attempt in replacement_pairs:
+        original_key = _attempt_identity_key(original_attempt)
+        idx = index_by_key.get(original_key)
+        if idx is None:
+            retried_key = _attempt_identity_key(retried_attempt)
+            idx = index_by_key.get(retried_key)
+            if idx is None:
+                merged_attempts.append(retried_attempt)
+                index_by_key[retried_key] = len(merged_attempts) - 1
+                continue
+        merged_attempts[idx] = retried_attempt
+        index_by_key[_attempt_identity_key(retried_attempt)] = idx
+
+    return merged_attempts
+
+
+def _ordered_unique_strings(values: Iterable[Any]) -> list[str]:
+    ordered = dict.fromkeys(value for value in values if isinstance(value, str) and value)
+    return list(ordered)
+
+
+def _compute_attempt_totals(attempts: Iterable[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    total_duration = 0.0
+    total_api_latency = 0.0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_cost = 0.0
+
+    for attempt in attempts:
+        duration = attempt.get("duration_seconds")
+        if duration is not None:
+            try:
+                total_duration += float(duration)
+            except (TypeError, ValueError):
+                pass
+
+        api_latency = attempt.get("api_latency_seconds")
+        if api_latency is not None:
+            try:
+                total_api_latency += float(api_latency)
+            except (TypeError, ValueError):
+                pass
+
+        usage = attempt.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens")
+        if prompt_tokens is None:
+            prompt_tokens = usage.get("input_tokens")
+        completion_tokens = usage.get("completion_tokens")
+        if completion_tokens is None:
+            completion_tokens = usage.get("output_tokens")
+
+        if prompt_tokens is not None:
+            try:
+                total_prompt_tokens += int(prompt_tokens)
+            except (TypeError, ValueError):
+                pass
+        if completion_tokens is not None:
+            try:
+                total_completion_tokens += int(completion_tokens)
+            except (TypeError, ValueError):
+                pass
+
+        cost = attempt.get("cost_usd")
+        if cost is not None:
+            try:
+                total_cost += float(cost)
+            except (TypeError, ValueError):
+                pass
+
+    return {
+        "timing": {
+            "total_duration_seconds": total_duration,
+            "total_api_latency_seconds": total_api_latency,
+        },
+        "token_usage": {
+            "prompt_tokens": total_prompt_tokens,
+            "completion_tokens": total_completion_tokens,
+            "total_cost_usd": round(total_cost, 6),
+        },
+    }
+
+
 def retry_api_error_attempts(
     *,
     original_run_dir: Path,
@@ -2245,6 +2375,9 @@ def retry_api_error_attempts(
 
     logger.info("Found %d api_error attempts to retry", len(api_error_attempts))
 
+    original_summary = _load_run_summary_if_exists(original_run_dir)
+    original_attempts = _load_all_attempts_for_run(original_run_dir, original_summary)
+
     # Create new run directory (use provided run_id if given)
     output_dir = Path(output_dir)
     RUN_ARTIFACTS.mkdir(exist_ok=True)
@@ -2256,8 +2389,8 @@ def retry_api_error_attempts(
         run_id = run_dir.name
 
     # Collect unique models for metadata fetch
-    models = list({a["model"] for a in api_error_attempts})
-    model_metadata = fetch_model_metadata(models)
+    retry_models = list({a["model"] for a in api_error_attempts})
+    model_metadata = fetch_model_metadata(retry_models)
 
     if allow_incomplete_diffs is None:
         allow_incomplete_diffs = DEFAULT_ALLOW_INCOMPLETE_DIFFS
@@ -2265,6 +2398,7 @@ def retry_api_error_attempts(
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
 
     retried_attempts: list[dict] = []
+    replacement_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
     for i, original_attempt in enumerate(api_error_attempts, 1):
         task_id = original_attempt["task_id"]
@@ -2307,6 +2441,7 @@ def retry_api_error_attempts(
             run_dir=run_dir,
         )
         retried_attempts.append(attempt_summary)
+        replacement_pairs.append((original_attempt, attempt_summary))
         update_task_latest(task_id, attempt_summary)
 
         if progress_callback:
@@ -2315,9 +2450,19 @@ def retry_api_error_attempts(
         status = attempt_summary.get("status", "unknown")
         logger.info("Result: %s", status)
 
-    # Compute metrics for retried attempts
-    tasks = list({a["task_id"] for a in retried_attempts})
-    status_counts = Counter(a.get("status") for a in retried_attempts)
+    # Build merged view so accuracy reflects the full run with replacements.
+    all_attempts = (
+        _merge_attempt_retries(original_attempts, replacement_pairs) if original_attempts else list(retried_attempts)
+    )
+    summary_tasks = _ordered_unique_strings(original_summary.get("tasks", [])) or _ordered_unique_strings(
+        a.get("task_id") for a in all_attempts
+    )
+    summary_models = _ordered_unique_strings(original_summary.get("models", [])) or _ordered_unique_strings(
+        a.get("model") for a in all_attempts
+    )
+    samples = int(original_summary.get("samples", 1) or 1)
+    status_counts = Counter(a.get("status") for a in all_attempts)
+    totals = _compute_attempt_totals(all_attempts)
 
     summary = {
         "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
@@ -2327,22 +2472,49 @@ def retry_api_error_attempts(
         "retry_mode": True,
         "retried_count": len(retried_attempts),
         "original_api_errors": len(api_error_attempts),
-        "tasks": tasks,
-        "models": models,
-        "attempts": retried_attempts,
+        "tasks": summary_tasks,
+        "models": summary_models,
+        "samples": samples,
+        "attempts": all_attempts,
         "status_counts": dict(status_counts),
-        "metrics": compute_metrics(retried_attempts, models, tasks, 1),
+        "metrics": compute_metrics(all_attempts, summary_models, summary_tasks, samples),
+        "metrics_by_thinking_level": compute_metrics_by_thinking_level(
+            all_attempts,
+            summary_models,
+            summary_tasks,
+            samples,
+            original_summary.get("thinking_level"),
+        ),
+        "timing": totals["timing"],
+        "token_usage": totals["token_usage"],
     }
+
+    for key in [
+        "provider",
+        "temperature",
+        "max_tokens",
+        "include_tests",
+        "install_deps",
+        "allow_incomplete_diffs",
+        "allow_diff_rewrite_fallback",
+        "thinking_level",
+        "sweep_thinking_levels",
+        "include_thinking_variants",
+        "requested_models",
+    ]:
+        if key in original_summary:
+            summary[key] = original_summary[key]
 
     # Save results
     store_text(run_dir / "summary.json", json.dumps(summary, indent=2))
-    store_text(run_dir / "attempts.json", json.dumps(retried_attempts, indent=2))
+    store_text(run_dir / "attempts.json", json.dumps(all_attempts, indent=2))
 
     logger.info("Retry complete. Results saved to %s", run_dir)
     logger.info("Retried: %d attempts", len(retried_attempts))
+    logger.info("Merged total attempts: %d", len(all_attempts))
     logger.info("Status breakdown: %s", dict(status_counts))
 
-    if any(_is_lmstudio_model(model) for model in models):
+    if any(_is_lmstudio_model(model) for model in summary_models):
         unload_lmstudio_models()
 
     return summary
@@ -2367,7 +2539,7 @@ def retry_failed_attempts(
 ) -> dict:
     """
     Retry any failed attempts (error, fail, api_error) from a previous run.
-    Creates a new run directory with retried attempts.
+    Creates a new run directory with retried attempts merged into the original run.
     """
     failed_attempts = load_failed_attempts(original_run_dir)
     if not failed_attempts:
@@ -2388,6 +2560,9 @@ def retry_failed_attempts(
 
     logger.info("Found %d failed attempts to retry", len(failed_attempts))
 
+    original_summary = _load_run_summary_if_exists(original_run_dir)
+    original_attempts = _load_all_attempts_for_run(original_run_dir, original_summary)
+
     # Create new run directory (use provided run_id if given)
     output_dir = Path(output_dir)
     RUN_ARTIFACTS.mkdir(exist_ok=True)
@@ -2399,8 +2574,8 @@ def retry_failed_attempts(
         run_id = run_dir.name
 
     # Collect unique models for metadata fetch
-    models = list({a["model"] for a in failed_attempts})
-    model_metadata = fetch_model_metadata(models)
+    retry_models = list({a["model"] for a in failed_attempts})
+    model_metadata = fetch_model_metadata(retry_models)
 
     if allow_incomplete_diffs is None:
         allow_incomplete_diffs = DEFAULT_ALLOW_INCOMPLETE_DIFFS
@@ -2408,6 +2583,7 @@ def retry_failed_attempts(
         allow_diff_rewrite_fallback = DEFAULT_ALLOW_DIFF_REWRITE_FALLBACK
 
     retried_attempts: list[dict] = []
+    replacement_pairs: list[tuple[dict[str, Any], dict[str, Any]]] = []
 
     for i, original_attempt in enumerate(failed_attempts, 1):
         task_id = original_attempt["task_id"]
@@ -2450,6 +2626,7 @@ def retry_failed_attempts(
             run_dir=run_dir,
         )
         retried_attempts.append(attempt_summary)
+        replacement_pairs.append((original_attempt, attempt_summary))
         update_task_latest(task_id, attempt_summary)
 
         if progress_callback:
@@ -2458,9 +2635,19 @@ def retry_failed_attempts(
         status = attempt_summary.get("status", "unknown")
         logger.info("Result: %s", status)
 
-    # Compute metrics for retried attempts
-    tasks = list({a["task_id"] for a in retried_attempts})
-    status_counts = Counter(a.get("status") for a in retried_attempts)
+    # Build merged view so accuracy reflects the full run with replacements.
+    all_attempts = (
+        _merge_attempt_retries(original_attempts, replacement_pairs) if original_attempts else list(retried_attempts)
+    )
+    summary_tasks = _ordered_unique_strings(original_summary.get("tasks", [])) or _ordered_unique_strings(
+        a.get("task_id") for a in all_attempts
+    )
+    summary_models = _ordered_unique_strings(original_summary.get("models", [])) or _ordered_unique_strings(
+        a.get("model") for a in all_attempts
+    )
+    samples = int(original_summary.get("samples", 1) or 1)
+    status_counts = Counter(a.get("status") for a in all_attempts)
+    totals = _compute_attempt_totals(all_attempts)
 
     summary = {
         "timestamp_utc": dt.datetime.now(dt.UTC).isoformat(),
@@ -2470,22 +2657,49 @@ def retry_failed_attempts(
         "retry_mode": True,
         "retried_count": len(retried_attempts),
         "original_failed": len(failed_attempts),
-        "tasks": tasks,
-        "models": models,
-        "attempts": retried_attempts,
+        "tasks": summary_tasks,
+        "models": summary_models,
+        "samples": samples,
+        "attempts": all_attempts,
         "status_counts": dict(status_counts),
-        "metrics": compute_metrics(retried_attempts, models, tasks, 1),
+        "metrics": compute_metrics(all_attempts, summary_models, summary_tasks, samples),
+        "metrics_by_thinking_level": compute_metrics_by_thinking_level(
+            all_attempts,
+            summary_models,
+            summary_tasks,
+            samples,
+            original_summary.get("thinking_level"),
+        ),
+        "timing": totals["timing"],
+        "token_usage": totals["token_usage"],
     }
+
+    for key in [
+        "provider",
+        "temperature",
+        "max_tokens",
+        "include_tests",
+        "install_deps",
+        "allow_incomplete_diffs",
+        "allow_diff_rewrite_fallback",
+        "thinking_level",
+        "sweep_thinking_levels",
+        "include_thinking_variants",
+        "requested_models",
+    ]:
+        if key in original_summary:
+            summary[key] = original_summary[key]
 
     # Save results
     store_text(run_dir / "summary.json", json.dumps(summary, indent=2))
-    store_text(run_dir / "attempts.json", json.dumps(retried_attempts, indent=2))
+    store_text(run_dir / "attempts.json", json.dumps(all_attempts, indent=2))
 
     logger.info("Retry complete. Results saved to %s", run_dir)
     logger.info("Retried: %d attempts", len(retried_attempts))
+    logger.info("Merged total attempts: %d", len(all_attempts))
     logger.info("Status breakdown: %s", dict(status_counts))
 
-    if any(_is_lmstudio_model(model) for model in models):
+    if any(_is_lmstudio_model(model) for model in summary_models):
         unload_lmstudio_models()
 
     return summary

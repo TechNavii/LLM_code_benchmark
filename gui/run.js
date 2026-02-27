@@ -21,6 +21,8 @@ import {
 
 const params = new URLSearchParams(window.location.search);
 const runId = params.get('run_id');
+const selectedModelFilter = params.get('model');
+const selectedThinkingLevelFilter = params.get('thinking_level');
 const DEBUG = params.has('debug');
 const debugLog = (...args) => {
   if (DEBUG) console.log(...args);
@@ -162,6 +164,24 @@ function extractTokens(usage, type) {
     return usage.prompt_tokens ?? usage.input_tokens ?? '-';
   }
   return usage.completion_tokens ?? usage.output_tokens ?? '-';
+}
+
+function formatThinkingLevel(level) {
+  if (!level || level === 'base') return 'base';
+  if (String(level).startsWith('unsupported')) {
+    return String(level).replace('unsupported', 'unsupported');
+  }
+  return String(level);
+}
+
+function resolveAttemptThinkingLevel(attempt, defaultLevel) {
+  if (attempt?.thinking_level_applied) return String(attempt.thinking_level_applied);
+  if (attempt?.thinking_level_supported === false && attempt?.thinking_level_requested) {
+    return `unsupported (${attempt.thinking_level_requested})`;
+  }
+  if (attempt?.thinking_level_requested) return String(attempt.thinking_level_requested);
+  if (defaultLevel) return String(defaultLevel);
+  return 'base';
 }
 
 function buildRunApiPath(id) {
@@ -479,7 +499,14 @@ function renderRunSummary(summary) {
   const timestamp = summary.timestamp_utc
     ? new Date(summary.timestamp_utc).toLocaleString()
     : 'Unknown time';
-  runSubtitle.textContent = `Started ${timestamp}`;
+  const filters = [];
+  if (selectedModelFilter) {
+    filters.push(`Model: ${selectedModelFilter}`);
+  }
+  if (selectedThinkingLevelFilter) {
+    filters.push(`Thinking: ${formatThinkingLevel(selectedThinkingLevelFilter)}`);
+  }
+  runSubtitle.textContent = filters.length ? `Started ${timestamp} • ${filters.join(' • ')}` : `Started ${timestamp}`;
 
   runMetrics.innerHTML = '';
   const accuracy = summary.metrics?.overall?.macro_model_accuracy ?? null;
@@ -524,15 +551,31 @@ function renderRunSummary(summary) {
 }
 
 function renderAttempts(summary) {
-  attempts = summary.attempts || [];
+  const allAttempts = summary.attempts || [];
+  attempts = allAttempts.filter((attempt) => {
+    if (selectedModelFilter && attempt.model !== selectedModelFilter) {
+      return false;
+    }
+    if (selectedThinkingLevelFilter) {
+      const level = resolveAttemptThinkingLevel(attempt, summary.thinking_level);
+      if (level !== selectedThinkingLevelFilter) {
+        return false;
+      }
+    }
+    return true;
+  });
   attemptBody.innerHTML = '';
 
   if (!attempts.length) {
     attemptEmpty.hidden = false;
+    attemptEmpty.textContent = selectedModelFilter
+      ? 'No attempts found for the selected model/level in this run.'
+      : 'No attempts recorded for this run.';
     return;
   }
 
   attemptEmpty.hidden = true;
+  attemptEmpty.textContent = 'No attempts recorded for this run.';
 
   attempts.forEach((attempt, index) => {
     const row = document.createElement('tr');

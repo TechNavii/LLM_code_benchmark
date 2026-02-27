@@ -135,6 +135,7 @@ class TestLeaderboardEndpointContract:
             assert "best_accuracy" in model
             assert "cost_at_best" in model
             assert "duration_at_best" in model
+            assert "best_run_id" in model
             assert "runs" in model
 
 

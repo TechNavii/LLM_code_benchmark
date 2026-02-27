@@ -134,6 +134,7 @@ def get_leaderboard() -> dict[str, Any]:
                 "best_accuracy": row["best_accuracy"],
                 "cost_at_best": row["cost_at_best"],
                 "duration_at_best": row["duration_at_best"],
+                "best_run_id": row.get("best_run_id"),
                 "runs": row["runs"],
             }
             for row in rows

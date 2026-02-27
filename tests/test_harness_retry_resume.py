@@ -13,6 +13,8 @@ from harness.run_harness import (
     load_api_error_attempts,
     load_failed_attempts,
     load_incomplete_attempts,
+    retry_api_error_attempts,
+    retry_failed_attempts,
 )
 
 
@@ -476,3 +478,106 @@ class TestLoadIncompleteAttempts:
 
         assert len(result) == 1
         assert result[0]["sample_index"] == 0
+
+
+class TestRetryMetricsMerging:
+    """Tests ensuring retry summaries preserve full-run accuracy context."""
+
+    @staticmethod
+    def _write_original_run(run_dir: Path, attempts: list[dict]) -> None:
+        summary = {
+            "timestamp_utc": "2026-02-27T15:03:46.000000+00:00",
+            "run_id": run_dir.name,
+            "run_dir": str(run_dir),
+            "tasks": ["task1", "task2", "task3"],
+            "models": ["test/model"],
+            "samples": 1,
+            "thinking_level": "high",
+            "attempts": attempts,
+        }
+        (run_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        (run_dir / "attempts.json").write_text(json.dumps(attempts, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _stub_evaluate_attempt(task_id: str, model: str, sample_index: int, **_: dict) -> dict:
+        return {
+            "task_id": task_id,
+            "model": model,
+            "sample_index": sample_index,
+            "status": "passed",
+            "duration_seconds": 1.0,
+            "api_latency_seconds": 0.2,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            "cost_usd": 0.01,
+            "thinking_level_requested": "high",
+            "thinking_level_supported": True,
+            "thinking_level_applied": "high",
+            "attempt_dir": f"{task_id}__test_model__sample{sample_index}__lvl_high",
+        }
+
+    def test_retry_failed_attempts_recomputes_full_run_accuracy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        original_run = tmp_path / "run_original"
+        original_run.mkdir()
+        attempts = [
+            {"task_id": "task1", "model": "test/model", "sample_index": 0, "status": "passed"},
+            {"task_id": "task2", "model": "test/model", "sample_index": 0, "status": "failed"},
+            {"task_id": "task3", "model": "test/model", "sample_index": 0, "status": "failed"},
+        ]
+        self._write_original_run(original_run, attempts)
+
+        monkeypatch.setattr("harness.run_harness.RUN_ARTIFACTS", tmp_path)
+        monkeypatch.setattr("harness.run_harness.fetch_model_metadata", lambda models: {m: {} for m in models})
+        monkeypatch.setattr("harness.run_harness.load_metadata", lambda task_id: {})
+        monkeypatch.setattr("harness.run_harness.evaluate_attempt", self._stub_evaluate_attempt)
+        monkeypatch.setattr("harness.run_harness.update_task_latest", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("harness.run_harness._is_lmstudio_model", lambda _model: False)
+
+        summary = retry_failed_attempts(
+            original_run_dir=original_run,
+            output_dir=tmp_path,
+            run_id="run_retry_failed",
+            filter_task_id="task2",
+        )
+
+        assert summary["retried_count"] == 1
+        assert len(summary["attempts"]) == 3
+        status_by_task = {a["task_id"]: a["status"] for a in summary["attempts"]}
+        assert status_by_task == {"task1": "passed", "task2": "passed", "task3": "failed"}
+        assert summary["metrics"]["overall"]["macro_model_accuracy"] == pytest.approx(2 / 3)
+
+    def test_retry_api_error_attempts_recomputes_full_run_accuracy(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        original_run = tmp_path / "run_original_api"
+        original_run.mkdir()
+        attempts = [
+            {"task_id": "task1", "model": "test/model", "sample_index": 0, "status": "passed"},
+            {"task_id": "task2", "model": "test/model", "sample_index": 0, "status": "api_error"},
+            {"task_id": "task3", "model": "test/model", "sample_index": 0, "status": "failed"},
+        ]
+        self._write_original_run(original_run, attempts)
+
+        monkeypatch.setattr("harness.run_harness.RUN_ARTIFACTS", tmp_path)
+        monkeypatch.setattr("harness.run_harness.fetch_model_metadata", lambda models: {m: {} for m in models})
+        monkeypatch.setattr("harness.run_harness.load_metadata", lambda task_id: {})
+        monkeypatch.setattr("harness.run_harness.evaluate_attempt", self._stub_evaluate_attempt)
+        monkeypatch.setattr("harness.run_harness.update_task_latest", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr("harness.run_harness._is_lmstudio_model", lambda _model: False)
+
+        summary = retry_api_error_attempts(
+            original_run_dir=original_run,
+            output_dir=tmp_path,
+            run_id="run_retry_api",
+        )
+
+        assert summary["retried_count"] == 1
+        assert len(summary["attempts"]) == 3
+        status_by_task = {a["task_id"]: a["status"] for a in summary["attempts"]}
+        assert status_by_task == {"task1": "passed", "task2": "passed", "task3": "failed"}
+        assert summary["metrics"]["overall"]["macro_model_accuracy"] == pytest.approx(2 / 3)
